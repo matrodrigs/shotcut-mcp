@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shotcut": {
+      "command": "python",
+      "args": ["./scripts/shotcut_mcp_server.py"],
+      "cwd": "."
+    }
+  }
+}

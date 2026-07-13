@@ -1,0 +1,33 @@
+{
+  "name": "shotcut-mcp",
+  "version": "0.1.0",
+  "description": "Integra o Codex ao editor de video Shotcut por MCP local.",
+  "author": {
+    "name": "Local developer"
+  },
+  "license": "MIT",
+  "keywords": [
+    "shotcut",
+    "video",
+    "mlt",
+    "mcp"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Shotcut MCP",
+    "shortDescription": "Crie, inspecione, abra e renderize projetos Shotcut.",
+    "longDescription": "Integração local com Shotcut e MLT para consultar mídia, criar projetos de timeline, abrir arquivos no editor e executar exportações monitoráveis.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Verifique se o Shotcut está pronto para uso.",
+      "Crie um projeto Shotcut com estes vídeos.",
+      "Inspecione e renderize este projeto Shotcut."
+    ]
+  }
+}
