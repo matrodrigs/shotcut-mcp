@@ -477,7 +477,8 @@ class ProjectEditingTests(unittest.TestCase):
                             "track": "V1",
                             "generator": "color",
                             "duration_frames": 250,
-                        }
+                        },
+                        {"op": "add_marker", "start_frame": 200},
                     ],
                 }
             )
@@ -505,6 +506,7 @@ class ProjectEditingTests(unittest.TestCase):
             )
             item = changed["project"]["tracks"][0]["items"][0]
             self.assertEqual(item["duration_frames"], 250)
+            self.assertEqual(changed["project"]["markers"][0]["start_frame"], 200)
 
     def test_unknown_xml_is_preserved_by_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

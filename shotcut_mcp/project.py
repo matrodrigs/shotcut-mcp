@@ -1541,6 +1541,14 @@ class ProjectDocument:
             requested_den, "frame_rate_den", 1
         )
         if not math.isclose(old_fps, new_fps):
+            markers = self.markers_container()
+            if markers is not None:
+                for marker in markers.findall("properties"):
+                    for prop in marker.findall("property"):
+                        if prop.get("name") in {"start", "end"} and prop.text:
+                            frames = _clock_to_frames(prop.text, old_fps)
+                            if frames is not None:
+                                prop.text = str(frames)
             for element in self.root.iter():
                 for attribute in ("in", "out", "length"):
                     value = element.get(attribute)
