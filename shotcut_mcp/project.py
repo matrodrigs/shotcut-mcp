@@ -86,6 +86,12 @@ def _number(value: Any, label: str, minimum: float | None = None) -> float:
     return result
 
 
+def _boolean(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ToolError(f"{label} deve ser booleano.")
+    return value
+
+
 def _clock_to_frames(value: str | None, fps: float) -> int | None:
     if value is None:
         return None
@@ -917,7 +923,10 @@ class ProjectDocument:
                 "halign": "center",
                 "valign": "middle",
             }
-            defaults.update(operation.get("properties") or {})
+            properties = operation.get("properties", {})
+            if not isinstance(properties, dict):
+                raise ToolError("properties do gerador de texto deve ser um objeto.")
+            defaults.update(properties)
             for name, value in defaults.items():
                 _set_property(filter_element, name, value)
         entry = ET.Element(
@@ -1026,7 +1035,7 @@ class ProjectDocument:
         ):
             raise ToolError("Remova a transição adjacente antes de mover este clipe.")
         duration = self.item_duration(item)
-        ripple_source = operation.get("ripple_source", False)
+        ripple_source = _boolean(operation.get("ripple_source", False), "ripple_source")
         sequence[index : index + 1] = (
             [] if ripple_source else [ET.Element("blank", {"length": str(duration)})]
         )
@@ -1149,10 +1158,16 @@ class ProjectDocument:
             raise ToolError("service de transição inválido.")
         video = self._transition(video_service, 0, 1)
         video.set("out", str(duration - 1))
-        for name, value in (operation.get("properties") or {}).items():
+        properties = operation.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ToolError("properties da transição deve ser um objeto.")
+        for name, value in properties.items():
             _set_property(video, name, value)
         tractor.append(video)
-        if operation.get("audio_crossfade", True):
+        audio_crossfade = _boolean(
+            operation.get("audio_crossfade", True), "audio_crossfade"
+        )
+        if audio_crossfade:
             audio = self._transition("mix", 0, 1, start=-2, accepts_blanks=1)
             audio.set("out", str(duration - 1))
             tractor.append(audio)
@@ -1177,7 +1192,29 @@ class ProjectDocument:
         tractor = self.id_map().get(entry.get("producer", ""))
         assert tractor is not None
         nested_tracks = tractor.findall("track")
-        if len(nested_tracks) < 2:
+        nested_transitions = tractor.findall("transition")
+        allowed_tags = {"property", "track", "transition"}
+        duration = self.item_duration(entry)
+        nested_durations = []
+        for item in nested_tracks:
+            nested_in = _clock_to_frames(item.get("in"), self.fps)
+            nested_out = _clock_to_frames(item.get("out"), self.fps)
+            nested_durations.append(
+                nested_out - (nested_in or 0) + 1 if nested_out is not None else None
+            )
+        signature_is_known = (
+            len(nested_tracks) == 2
+            and 1 <= len(nested_transitions) <= 2
+            and all(child.tag in allowed_tags for child in tractor)
+            and nested_tracks[0].get("producer") == sequence[index - 1].get("producer")
+            and nested_tracks[1].get("producer") == sequence[index + 1].get("producer")
+            and all(
+                _property(item, "a_track") == "0" and _property(item, "b_track") == "1"
+                for item in nested_transitions
+            )
+            and all(item_duration == duration for item_duration in nested_durations)
+        )
+        if not signature_is_known:
             raise ToolError("Estrutura da transição não é reconhecida.")
         left, right = (
             copy.deepcopy(sequence[index - 1]),
@@ -1391,7 +1428,8 @@ class ProjectDocument:
         _set_property(feed, "feed", name)
         _set_property(feed, "lang", lang)
         _set_property(feed, "text", _srt(items))
-        if operation.get("burn_in", False):
+        burn_in = _boolean(operation.get("burn_in", False), "burn_in")
+        if burn_in:
             burn = next(
                 (
                     child
@@ -1418,9 +1456,19 @@ class ProjectDocument:
                 "valign": "bottom",
                 "halign": "center",
             }
-            defaults.update(operation.get("style") or {})
+            style = operation.get("style", {})
+            if not isinstance(style, dict):
+                raise ToolError("style deve ser um objeto.")
+            defaults.update(style)
             for key, value in defaults.items():
                 _set_property(burn, key, value)
+        else:
+            for child in list(main.findall("filter")):
+                if (
+                    _property(child, "mlt_service") == "subtitle"
+                    and _property(child, "feed") == name
+                ):
+                    main.remove(child)
         return {"subtitle_track": name, "language": lang, "item_count": len(items)}
 
     def remove_subtitle_track(self, operation: dict[str, Any]) -> dict[str, Any]:
@@ -1449,26 +1497,62 @@ class ProjectDocument:
         new_path = Path(os.path.expandvars(new)).expanduser().resolve()
         if not new_path.exists():
             raise ToolError(f"Novo recurso não encontrado: {new_path}")
-        count = 0
+        match_basename = _boolean(
+            operation.get("match_basename", False), "match_basename"
+        )
+        allow_multiple = _boolean(
+            operation.get("allow_multiple", False), "allow_multiple"
+        )
+        matches: list[ET.Element] = []
         for element in [*self.root.findall("producer"), *self.root.findall("chain")]:
             resource = _property(element, "resource")
             if resource == old or (
-                resource
-                and Path(resource).name == old
-                and operation.get("match_basename")
+                resource and Path(resource).name == old and match_basename
             ):
-                _set_property(element, "resource", str(new_path).replace("\\", "/"))
-                count += 1
-        if not count:
+                matches.append(element)
+        if not matches:
             raise ToolError(f"Nenhum recurso corresponde a {old!r}.")
-        return {"relinked": count, "to": str(new_path)}
+        if match_basename and len(matches) > 1 and not allow_multiple:
+            raise ToolError(
+                f"O basename {old!r} corresponde a {len(matches)} recursos; "
+                "use o caminho completo ou allow_multiple=true."
+            )
+        for element in matches:
+            _set_property(element, "resource", str(new_path).replace("\\", "/"))
+        return {"relinked": len(matches), "to": str(new_path)}
 
     def set_profile(self, operation: dict[str, Any]) -> dict[str, Any]:
-        if not operation.get("preserve_frame_numbers", False):
+        if not _boolean(
+            operation.get("preserve_frame_numbers", False),
+            "preserve_frame_numbers",
+        ):
             raise ToolError(
                 "set_profile exige preserve_frame_numbers=true para confirmar a mudança temporal."
             )
         profile = self.profile()
+        old_fps = self.fps
+        requested_num = operation.get(
+            "frame_rate_num", int(profile.get("frame_rate_num", "25"))
+        )
+        requested_den = operation.get(
+            "frame_rate_den", int(profile.get("frame_rate_den", "1"))
+        )
+        new_fps = _int(requested_num, "frame_rate_num", 1) / _int(
+            requested_den, "frame_rate_den", 1
+        )
+        if not math.isclose(old_fps, new_fps):
+            for element in self.root.iter():
+                for attribute in ("in", "out", "length"):
+                    value = element.get(attribute)
+                    if value is not None and not value.isdigit():
+                        frames = _clock_to_frames(value, old_fps)
+                        if frames is not None:
+                            element.set(attribute, str(frames))
+                for prop in element.findall("property"):
+                    if prop.get("name") == "length" and prop.text:
+                        frames = _clock_to_frames(prop.text, old_fps)
+                        if frames is not None:
+                            prop.text = str(frames)
         for key in (
             "width",
             "height",
@@ -1798,9 +1882,7 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     path = expand_path(arguments.get("project_path", ""))
     if path.suffix.lower() not in {".mlt", ".xml"}:
         raise ToolError("O projeto deve usar a extensão .mlt ou .xml.")
-    overwrite = arguments.get("overwrite", False)
-    if not isinstance(overwrite, bool):
-        raise ToolError("overwrite deve ser booleano.")
+    overwrite = _boolean(arguments.get("overwrite", False), "overwrite")
     if path.exists() and not overwrite:
         raise ToolError(f"O projeto já existe: {path}")
     width = _int(arguments.get("width", 1920), "width", 16)
@@ -1834,7 +1916,7 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
         document,
         expected_revision=_sha256(path.read_bytes()) if path.exists() else None,
         force=overwrite,
-        validate=arguments.get("validate", True),
+        validate=True,
         timeout=_int(arguments.get("timeout_seconds", 60), "timeout_seconds", 1),
         create_backup=path.exists(),
     )
@@ -1856,6 +1938,10 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("operations deve ser uma lista não vazia.")
     if len(operations) > MAX_OPERATIONS:
         raise ToolError(f"Uma transação aceita no máximo {MAX_OPERATIONS} operações.")
+    force = _boolean(arguments.get("force", False), "force")
+    expected_revision = arguments.get("expected_revision")
+    if expected_revision is not None and not isinstance(expected_revision, str):
+        raise ToolError("expected_revision deve ser uma string SHA-256.")
     document = ProjectDocument.load(path)
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
@@ -1867,9 +1953,9 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
     document.update_main_duration()
     saved = _write_validated(
         document,
-        expected_revision=arguments.get("expected_revision"),
-        force=arguments.get("force", False),
-        validate=arguments.get("validate", True),
+        expected_revision=expected_revision,
+        force=force,
+        validate=True,
         timeout=_int(arguments.get("timeout_seconds", 60), "timeout_seconds", 1),
         create_backup=True,
     )
@@ -1909,6 +1995,10 @@ def restore_backup(arguments: dict[str, Any]) -> dict[str, Any]:
 
     project_path = expand_path(arguments.get("project_path", ""))
     backup_path = expand_path(arguments.get("backup_path", ""))
+    force = _boolean(arguments.get("force", False), "force")
+    expected_revision = arguments.get("expected_revision")
+    if expected_revision is not None and not isinstance(expected_revision, str):
+        raise ToolError("expected_revision deve ser uma string SHA-256.")
     allowed_dir = (project_path.parent / ".shotcut-mcp" / "backups").resolve()
     if backup_path.parent.resolve() != allowed_dir or not backup_path.is_file():
         raise ToolError("backup_path não pertence aos backups deste projeto.")
@@ -1918,8 +2008,8 @@ def restore_backup(arguments: dict[str, Any]) -> dict[str, Any]:
         "restored": True,
         **_write_validated(
             document,
-            expected_revision=arguments.get("expected_revision"),
-            force=arguments.get("force", False),
+            expected_revision=expected_revision,
+            force=force,
             validate=True,
             timeout=60,
             create_backup=True,

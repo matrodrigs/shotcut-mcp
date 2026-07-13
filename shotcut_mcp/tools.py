@@ -121,7 +121,8 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "remove_subtitle_track": {"required": ["name"]},
     "relink_media": {
         "required": ["from", "to"],
-        "optional": ["match_basename"],
+        "optional": ["match_basename", "allow_multiple"],
+        "notes": "match_basename exige alvo único, salvo allow_multiple=true.",
     },
     "set_profile": {
         "required": ["preserve_frame_numbers"],
@@ -193,12 +194,22 @@ def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     frame = arguments.get("frame", 0)
     if isinstance(frame, bool) or not isinstance(frame, int):
         raise ToolError("frame deve ser um inteiro.")
+    overwrite = arguments.get("overwrite", False)
+    if not isinstance(overwrite, bool):
+        raise ToolError("overwrite deve ser booleano.")
     return render_preview(
         expand_path(arguments.get("project_path", "")),
         expand_path(arguments.get("output_path", "")),
         frame,
-        arguments.get("overwrite", False),
+        overwrite,
     )
+
+
+def open_in_shotcut_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    fullscreen = arguments.get("fullscreen", False)
+    if not isinstance(fullscreen, bool):
+        raise ToolError("fullscreen deve ser booleano.")
+    return open_in_shotcut(expand_path(arguments.get("path", "")), fullscreen)
 
 
 def list_backups_tool(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -285,7 +296,6 @@ TOOLS: list[dict[str, Any]] = [
                 "tracks": {"type": "array", "items": {"type": "object"}},
                 "clips": {"type": "array", "items": {"type": "object"}},
                 "overwrite": {"type": "boolean", "default": False},
-                "validate": {"type": "boolean", "default": True},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
             },
             ["project_path"],
@@ -320,7 +330,6 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "force": {"type": "boolean", "default": False},
-                "validate": {"type": "boolean", "default": True},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
             },
             ["project_path", "operations"],
@@ -525,9 +534,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     ),
     "validate_project": validate_project,
     "render_preview": render_preview_tool,
-    "open_in_shotcut": lambda arguments: open_in_shotcut(
-        expand_path(arguments.get("path", "")), arguments.get("fullscreen", False)
-    ),
+    "open_in_shotcut": open_in_shotcut_tool,
     "start_render": start_render,
     "render_status": lambda arguments: render_status(arguments.get("job_id", "")),
     "cancel_render": lambda arguments: cancel_render(arguments.get("job_id", "")),

@@ -136,12 +136,11 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
         raise ToolError("overwrite deve ser booleano.")
-    if output_path.exists() and not overwrite:
-        raise ToolError(f"A saída já existe: {output_path}")
     if output_path.exists():
         if not output_path.is_file():
             raise ToolError(f"A saída existente não é um arquivo: {output_path}")
-        output_path.unlink()
+        if not overwrite:
+            raise ToolError(f"A saída já existe: {output_path}")
 
     preset = arguments.get("preset", "h264-high")
     if preset not in RENDER_PRESETS:
@@ -151,13 +150,16 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex
+    temporary_output = output_path.with_name(
+        f".{output_path.stem}.{job_id}.shotcut-mcp{output_path.suffix}"
+    )
     log_path = JOB_DIR / f"{job_id}.log"
     command = [
         str(melt),
         str(project_path),
         "-progress",
         "-consumer",
-        f"avformat:{output_path}",
+        f"avformat:{temporary_output}",
         "real_time=-1",
         "terminate_on_pause=1",
         *[f"{key}={value}" for key, value in properties.items()],
@@ -183,6 +185,8 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "return_code": None,
         "project_path": str(project_path),
         "output_path": str(output_path),
+        "temporary_output_path": str(temporary_output),
+        "overwrite": overwrite,
         "preset": preset,
         "consumer_properties": properties,
         "log_path": str(log_path),
@@ -191,6 +195,32 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     }
     _write_job(metadata)
     return metadata
+
+
+def _finish_render(metadata: dict[str, Any], return_code: int) -> None:
+    temporary = Path(metadata["temporary_output_path"])
+    output = Path(metadata["output_path"])
+    metadata["return_code"] = return_code
+    metadata["finished_at"] = time.time()
+    if return_code != 0 or not temporary.is_file():
+        metadata["status"] = "failed"
+        temporary.unlink(missing_ok=True)
+        return
+    if output.exists() and not metadata.get("overwrite", False):
+        metadata["status"] = "failed"
+        metadata["status_note"] = (
+            "A saída apareceu durante o render; o arquivo novo foi preservado para evitar sobrescrita."
+        )
+        return
+    try:
+        os.replace(temporary, output)
+    except OSError as exc:
+        metadata["status"] = "failed"
+        metadata["status_note"] = (
+            f"Render concluído, mas a promoção atômica falhou: {exc}"
+        )
+        return
+    metadata["status"] = "completed"
 
 
 def _progress(log_path: Path) -> tuple[int | None, str | None]:
@@ -213,9 +243,7 @@ def render_status(job_id: str) -> dict[str, Any]:
     if process is not None:
         return_code = process.poll()
         if return_code is not None and metadata.get("status") == "running":
-            metadata["return_code"] = return_code
-            metadata["status"] = "completed" if return_code == 0 else "failed"
-            metadata["finished_at"] = time.time()
+            _finish_render(metadata, return_code)
             _write_job(metadata)
             RUNNING_JOBS.pop(job_id, None)
     elif metadata.get("status") == "running":
@@ -252,6 +280,9 @@ def cancel_render(job_id: str) -> dict[str, Any]:
     metadata.update(
         status="cancelled", return_code=process.returncode, finished_at=time.time()
     )
+    temporary = Path(metadata.get("temporary_output_path", ""))
+    if temporary.name:
+        temporary.unlink(missing_ok=True)
     _write_job(metadata)
     RUNNING_JOBS.pop(job_id, None)
     return metadata

@@ -7,14 +7,16 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest.mock import patch
 
-from shotcut_mcp.errors import ConflictError
+from shotcut_mcp.errors import ConflictError, ToolError
 from shotcut_mcp.project import (
     ProjectDocument,
     create_project,
     edit_project,
     list_backups,
 )
+from shotcut_mcp.render import start_render
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 SERVER_PATH = PLUGIN_ROOT / "scripts" / "shotcut_mcp_server.py"
@@ -60,7 +62,35 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("restore_project_backup", names)
 
 
+class RenderSafetyTests(unittest.TestCase):
+    def test_invalid_overwrite_render_preserves_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project.mlt"
+            output = root / "important.mp4"
+            project.write_text("<mlt/>", encoding="utf-8")
+            output.write_bytes(b"existing-output")
+            with self.assertRaises(ToolError):
+                start_render(
+                    {
+                        "project_path": str(project),
+                        "output_path": str(output),
+                        "preset": "does-not-exist",
+                        "overwrite": True,
+                    }
+                )
+            self.assertEqual(output.read_bytes(), b"existing-output")
+
+
 class ProjectEditingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        validation = patch(
+            "shotcut_mcp.project.validate_project_file",
+            return_value={"valid": True, "validator": "test"},
+        )
+        self.validate_mock = validation.start()
+        self.addCleanup(validation.stop)
+
     def create_empty(self, root: Path) -> dict:
         return create_project(
             {
@@ -233,6 +263,248 @@ class ProjectEditingTests(unittest.TestCase):
             items = edited["project"]["tracks"][0]["items"]
             self.assertEqual([item["type"] for item in items], ["clip"])
             self.assertEqual(edited["project"]["duration_frames"], 30)
+
+    def test_validation_cannot_be_disabled_by_tool_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            created = create_project(
+                {
+                    "project_path": str(Path(directory) / "always-validates.mlt"),
+                    "validate": False,
+                }
+            )
+            edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "validate": False,
+                    "operations": [{"op": "set_notes", "notes": "validated"}],
+                }
+            )
+            self.assertEqual(self.validate_mock.call_count, 2)
+
+    def test_string_force_cannot_bypass_revision_control(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_empty(Path(directory))
+            with self.assertRaisesRegex(ToolError, "force deve ser booleano"):
+                edit_project(
+                    {
+                        "project_path": created["path"],
+                        "force": "false",
+                        "operations": [{"op": "set_notes", "notes": "unsafe"}],
+                    }
+                )
+            self.assertEqual(
+                ProjectDocument.load(Path(created["path"])).snapshot()["notes"], ""
+            )
+
+    def test_disabling_subtitle_burn_removes_the_render_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_empty(Path(directory))
+            burned = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "set_subtitle_track",
+                            "name": "Português",
+                            "burn_in": True,
+                            "items": [{"start_ms": 0, "end_ms": 1000, "text": "Olá"}],
+                        }
+                    ],
+                }
+            )
+            unburned = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": burned["revision"],
+                    "operations": [
+                        {
+                            "op": "set_subtitle_track",
+                            "name": "Português",
+                            "burn_in": False,
+                            "items": [{"start_ms": 0, "end_ms": 1000, "text": "Olá"}],
+                        }
+                    ],
+                }
+            )
+            document = ProjectDocument.load(Path(unburned["path"]))
+            services = [
+                next(
+                    (
+                        prop.text
+                        for prop in item.findall("property")
+                        if prop.get("name") == "mlt_service"
+                    ),
+                    None,
+                )
+                for item in document.main_tractor().findall("filter")
+            ]
+            self.assertIn("subtitle_feed", services)
+            self.assertNotIn("subtitle", services)
+
+    def test_unknown_transition_layout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            created = self.create_empty(root)
+            edited = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 30,
+                        },
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 30,
+                        },
+                        {
+                            "op": "add_transition",
+                            "track": "V1",
+                            "left_item_index": 0,
+                            "duration_frames": 10,
+                        },
+                    ],
+                }
+            )
+            path = Path(edited["path"])
+            tree = ET.parse(path)
+            transition = next(
+                item
+                for item in tree.getroot().findall("tractor")
+                if any(
+                    prop.get("name") == "shotcut:transition"
+                    for prop in item.findall("property")
+                )
+            )
+            ET.SubElement(transition, "track", {"producer": "unexpected"})
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+            current = ProjectDocument.load(path)
+            with self.assertRaisesRegex(ToolError, "não é reconhecida"):
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": current.revision,
+                        "operations": [
+                            {
+                                "op": "remove_transition",
+                                "track": "V1",
+                                "item_index": 1,
+                            }
+                        ],
+                    }
+                )
+
+    def test_basename_relink_requires_unambiguous_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            created = self.create_empty(root)
+            edited = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 10,
+                        },
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 10,
+                        },
+                    ],
+                }
+            )
+            path = Path(edited["path"])
+            tree = ET.parse(path)
+            producers = [
+                producer
+                for producer in tree.getroot().findall("producer")
+                if producer.get("id", "").startswith("producer_")
+            ]
+            for producer, resource in zip(
+                producers, ("C:/one/clip.mp4", "D:/two/clip.mp4"), strict=True
+            ):
+                prop = next(
+                    item
+                    for item in producer.findall("property")
+                    if item.get("name") == "resource"
+                )
+                prop.text = resource
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+            target = root / "replacement.mp4"
+            target.write_bytes(b"target")
+            current = ProjectDocument.load(path)
+            with self.assertRaisesRegex(ToolError, "corresponde a 2 recursos"):
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": current.revision,
+                        "operations": [
+                            {
+                                "op": "relink_media",
+                                "from": "clip.mp4",
+                                "to": str(target),
+                                "match_basename": True,
+                            }
+                        ],
+                    }
+                )
+
+    def test_profile_change_preserves_clock_encoded_frame_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            created = create_project(
+                {"project_path": str(root / "fps.mlt"), "fps_num": 25}
+            )
+            edited = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 250,
+                        }
+                    ],
+                }
+            )
+            path = Path(edited["path"])
+            tree = ET.parse(path)
+            entry = tree.getroot().find("playlist[@id='playlist_v1']/entry")
+            assert entry is not None
+            entry.set("in", "00:00:00.000")
+            entry.set("out", "00:00:09.960")
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+            current = ProjectDocument.load(path)
+            changed = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": current.revision,
+                    "operations": [
+                        {
+                            "op": "set_profile",
+                            "frame_rate_num": 30,
+                            "frame_rate_den": 1,
+                            "preserve_frame_numbers": True,
+                        }
+                    ],
+                }
+            )
+            item = changed["project"]["tracks"][0]["items"][0]
+            self.assertEqual(item["duration_frames"], 250)
 
     def test_unknown_xml_is_preserved_by_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
