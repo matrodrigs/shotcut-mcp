@@ -1,7 +1,7 @@
 {
   "name": "shotcut-mcp",
-  "version": "1.0.0+codex.20260713220826",
-  "description": "Editor transacional completo de projetos Shotcut por MCP local.",
+  "version": "1.0.0+codex.20260714010128",
+  "description": "Full transactional editor for Shotcut projects through a local MCP server.",
   "author": {
     "name": "matrodrigs"
   },
@@ -17,8 +17,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Shotcut MCP",
-    "shortDescription": "Edite timelines Shotcut completas com seguran\u00e7a transacional.",
-    "longDescription": "Integra\u00e7\u00e3o local com Shotcut e MLT para edi\u00e7\u00e3o multifaixa, clipes, transi\u00e7\u00f5es, filtros, texto, marcadores, legendas, previews, backups e renderiza\u00e7\u00e3o monitor\u00e1vel.",
+    "shortDescription": "Edit complete Shotcut timelines with transactional safety.",
+    "longDescription": "Local Shotcut and MLT integration for multitrack editing, clips, transitions, filters, text, markers, subtitles, previews, backups, and monitored rendering.",
     "developerName": "matrodrigs",
     "category": "Productivity",
     "capabilities": [
@@ -27,9 +27,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Verifique se o Shotcut est\u00e1 pronto para uso.",
-      "Monte um projeto Shotcut completo com estas m\u00eddias.",
-      "Edite esta timeline e gere um preview para revis\u00e3o."
+      "Check whether Shotcut is ready to use.",
+      "Build a complete Shotcut project from these media files.",
+      "Edit this timeline and generate a preview for review."
     ]
   }
 }

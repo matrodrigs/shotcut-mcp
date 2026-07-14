@@ -49,7 +49,7 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
             "caption",
             "image_duration_seconds",
         ],
-        "notes": "mode: insert|overwrite; omitir position_frame adiciona no fim",
+        "notes": "mode: insert|overwrite; omitting position_frame appends to the end",
     },
     "add_generator": {
         "required": ["track", "generator", "duration_frames"],
@@ -77,7 +77,7 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "insert_gap": {
         "required": ["position_frame", "duration_frames"],
         "optional": ["tracks"],
-        "notes": "tracks: lista de nomes/ids ou 'all'",
+        "notes": "tracks: list of names/ids or 'all'",
     },
     "remove_range": {
         "required": ["position_frame", "duration_frames"],
@@ -86,7 +86,7 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "add_transition": {
         "required": ["track", "left_item_index", "duration_frames"],
         "optional": ["service", "properties", "audio_crossfade", "name"],
-        "notes": "Cria um tractor Shotcut aninhado entre dois clipes adjacentes.",
+        "notes": "Creates a nested Shotcut tractor between two adjacent clips.",
     },
     "remove_transition": {"required": ["track", "item_index"]},
     "add_filter": {
@@ -99,12 +99,12 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
             "out_frame",
             "properties",
         ],
-        "notes": "target: project|track|clip; animações/keyframes são strings de propriedade MLT.",
+        "notes": "target: project|track|clip; animations/keyframes use MLT property strings.",
     },
     "update_filter": {
         "required": ["filter_id"],
         "optional": ["enabled", "in_frame", "out_frame", "properties"],
-        "notes": "Use null numa propriedade para removê-la.",
+        "notes": "Set a property to null to remove it.",
     },
     "remove_filter": {"required": ["filter_id"]},
     "set_notes": {"required": ["notes"]},
@@ -116,13 +116,13 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "set_subtitle_track": {
         "required": ["name", "items"],
         "optional": ["language", "burn_in", "style"],
-        "notes": "Cada item exige start_ms, end_ms e text.",
+        "notes": "Each item requires start_ms, end_ms, and text.",
     },
     "remove_subtitle_track": {"required": ["name"]},
     "relink_media": {
         "required": ["from", "to"],
         "optional": ["match_basename", "allow_multiple"],
-        "notes": "match_basename exige alvo único, salvo allow_multiple=true.",
+        "notes": "match_basename requires a unique target unless allow_multiple=true.",
     },
     "set_profile": {
         "required": ["preserve_frame_numbers"],
@@ -138,7 +138,7 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
             "display_aspect_den",
             "colorspace",
         ],
-        "notes": "Exige preserve_frame_numbers=true; não reamostra posições existentes.",
+        "notes": "Requires preserve_frame_numbers=true; existing positions are not resampled.",
     },
 }
 
@@ -183,7 +183,7 @@ def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(timeout, int)
         or not 1 <= timeout <= 300
     ):
-        raise ToolError("timeout_seconds deve ser um inteiro entre 1 e 300.")
+        raise ToolError("timeout_seconds must be an integer between 1 and 300.")
     return {
         "project": ProjectDocument.load(path).snapshot(),
         **validate_project_file(path, timeout),
@@ -193,10 +193,10 @@ def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
 def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     frame = arguments.get("frame", 0)
     if isinstance(frame, bool) or not isinstance(frame, int):
-        raise ToolError("frame deve ser um inteiro.")
+        raise ToolError("frame must be an integer.")
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
-        raise ToolError("overwrite deve ser booleano.")
+        raise ToolError("overwrite must be a boolean.")
     return render_preview(
         expand_path(arguments.get("project_path", "")),
         expand_path(arguments.get("output_path", "")),
@@ -208,7 +208,7 @@ def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
 def open_in_shotcut_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     fullscreen = arguments.get("fullscreen", False)
     if not isinstance(fullscreen, bool):
-        raise ToolError("fullscreen deve ser booleano.")
+        raise ToolError("fullscreen must be a boolean.")
     return open_in_shotcut(expand_path(arguments.get("path", "")), fullscreen)
 
 
@@ -229,18 +229,18 @@ def _object_schema(
     return result
 
 
-PATH = {"type": "string", "description": "Caminho local absoluto ou relativo."}
+PATH = {"type": "string", "description": "Absolute or relative local path."}
 TRACK = {
     "type": "string",
-    "description": "Nome ou id de faixa retornado por inspect_project.",
+    "description": "Track name or id returned by inspect_project.",
 }
 OP_NAMES = list(OPERATION_CATALOG)
 
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "shotcut_status",
-        "title": "Verificar Shotcut",
-        "description": "Localiza Shotcut, Melt, ffprobe e ffmpeg e informa suas versões.",
+        "title": "Check Shotcut status",
+        "description": "Locates Shotcut, Melt, ffprobe, and ffmpeg and reports their versions.",
         "inputSchema": _object_schema({}),
         "annotations": {
             "readOnlyHint": True,
@@ -250,8 +250,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "shotcut_capabilities",
-        "title": "Consultar operações de edição",
-        "description": "Retorna o catálogo completo de operações, parâmetros e garantias transacionais.",
+        "title": "Get editing capabilities",
+        "description": "Returns the complete catalog of operations, parameters, and transactional guarantees.",
         "inputSchema": _object_schema({}),
         "annotations": {
             "readOnlyHint": True,
@@ -261,8 +261,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "probe_media",
-        "title": "Analisar mídia",
-        "description": "Lê duração, codecs, resolução, frame rate e áudio com cache por arquivo.",
+        "title": "Probe media",
+        "description": "Reads duration, codecs, resolution, frame rate, and audio with per-file caching.",
         "inputSchema": _object_schema({"path": PATH}, ["path"]),
         "annotations": {
             "readOnlyHint": True,
@@ -272,8 +272,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "inspect_project",
-        "title": "Inspecionar projeto completo",
-        "description": "Retorna revision SHA-256, perfil, faixas, itens, filtros, marcadores, legendas e recursos.",
+        "title": "Inspect complete project",
+        "description": "Returns the SHA-256 revision, profile, tracks, items, filters, markers, subtitles, and resources.",
         "inputSchema": _object_schema({"path": PATH}, ["path"]),
         "annotations": {
             "readOnlyHint": True,
@@ -283,8 +283,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "create_project",
-        "title": "Criar projeto Shotcut multifaixa",
-        "description": "Cria MLT XML Shotcut 26.2 com background, V1, faixas adicionais e clipes opcionais.",
+        "title": "Create multitrack Shotcut project",
+        "description": "Creates Shotcut 26.2 MLT XML with a background, V1, additional tracks, and optional clips.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
@@ -309,10 +309,10 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "edit_project",
-        "title": "Editar projeto em transação",
+        "title": "Edit project transactionally",
         "description": (
-            "Aplica até 500 operações em uma gravação atômica. Obtenha revision em inspect_project e "
-            "consulte shotcut_capabilities para os parâmetros de cada op."
+            "Applies up to 500 operations in one atomic write. Obtain the revision from inspect_project "
+            "and consult shotcut_capabilities for each operation's parameters."
         ),
         "inputSchema": _object_schema(
             {
@@ -343,8 +343,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "list_mlt_services",
-        "title": "Listar serviços MLT",
-        "description": "Lista filtros, transições, producers ou consumers realmente instalados no Shotcut.",
+        "title": "List MLT services",
+        "description": "Lists filters, transitions, producers, or consumers installed with Shotcut.",
         "inputSchema": _object_schema(
             {
                 "kind": {
@@ -362,8 +362,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "describe_mlt_service",
-        "title": "Descrever serviço MLT",
-        "description": "Consulta propriedades e metadados oficiais expostos pela instalação local do MLT.",
+        "title": "Describe MLT service",
+        "description": "Queries the official properties and metadata exposed by the local MLT installation.",
         "inputSchema": _object_schema(
             {
                 "kind": {
@@ -382,8 +382,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "validate_project",
-        "title": "Validar projeto no MLT",
-        "description": "Analisa o XML e processa o primeiro quadro com a instalação local do Melt.",
+        "title": "Validate project with MLT",
+        "description": "Parses the XML and processes the first frame with the local Melt installation.",
         "inputSchema": _object_schema(
             {
                 "path": PATH,
@@ -404,8 +404,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "render_preview",
-        "title": "Renderizar quadro de preview",
-        "description": "Renderiza um único frame PNG para verificar visualmente uma edição.",
+        "title": "Render preview frame",
+        "description": "Renders one PNG frame to visually verify an edit.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
@@ -424,8 +424,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "open_in_shotcut",
-        "title": "Abrir no Shotcut",
-        "description": "Abre projeto, mídia ou pasta na interface do Shotcut.",
+        "title": "Open in Shotcut",
+        "description": "Opens a project, media file, or folder in the Shotcut interface.",
         "inputSchema": _object_schema(
             {"path": PATH, "fullscreen": {"type": "boolean", "default": False}},
             ["path"],
@@ -439,8 +439,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "start_render",
-        "title": "Iniciar render",
-        "description": "Exporta em segundo plano e retorna job_id monitorável.",
+        "title": "Start render",
+        "description": "Exports in the background and returns a monitorable job_id.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
@@ -464,8 +464,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "render_status",
-        "title": "Consultar render",
-        "description": "Retorna estado, progresso, log e tamanho da saída.",
+        "title": "Get render status",
+        "description": "Returns the status, progress, log, and output size.",
         "inputSchema": _object_schema({"job_id": {"type": "string"}}, ["job_id"]),
         "annotations": {
             "readOnlyHint": True,
@@ -475,8 +475,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "cancel_render",
-        "title": "Cancelar render",
-        "description": "Interrompe um render ativo iniciado nesta sessão MCP.",
+        "title": "Cancel render",
+        "description": "Stops an active render started in this MCP session.",
         "inputSchema": _object_schema({"job_id": {"type": "string"}}, ["job_id"]),
         "annotations": {
             "readOnlyHint": False,
@@ -487,8 +487,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "list_project_backups",
-        "title": "Listar backups do projeto",
-        "description": "Lista revisões automáticas disponíveis para recuperação.",
+        "title": "List project backups",
+        "description": "Lists automatic revisions available for recovery.",
         "inputSchema": _object_schema({"project_path": PATH}, ["project_path"]),
         "annotations": {
             "readOnlyHint": True,
@@ -498,8 +498,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "restore_project_backup",
-        "title": "Restaurar backup do projeto",
-        "description": "Valida e restaura um backup, salvando antes uma cópia da versão atual.",
+        "title": "Restore project backup",
+        "description": "Validates and restores a backup after first saving a copy of the current version.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,

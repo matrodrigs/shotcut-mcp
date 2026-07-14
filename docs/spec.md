@@ -19,7 +19,8 @@ preview and render saved Shotcut 26.2 projects without requiring a network servi
 - Expose MLT service discovery so callers can use filters and transitions installed with
   the user's Shotcut build instead of relying on a hard-coded catalog.
 - Keep project inspection and render-job management from the original MCP.
-- Return stable, structured JSON from every tool and Portuguese descriptions in the UI.
+- Return stable, structured JSON from every tool and use English for public tool descriptions,
+  server instructions and error messages.
 
 ## Compatibility boundary
 

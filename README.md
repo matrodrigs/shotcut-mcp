@@ -307,15 +307,6 @@ use [GitHub Issues](https://github.com/matrodrigs/shotcut-mcp/issues).
 - A render detached by an MCP server restart can continue at the OS level, but it can no longer be
   cancelled safely by the restarted server.
 
-## Resumo em português
-
-O Shotcut MCP permite criar e editar projetos `.mlt` completos sem operar a interface do Shotcut.
-Ele trabalha com faixas, clipes, transições, filtros, textos, legendas, marcadores, previews,
-backups e renderização. Cada lote é validado pelo MLT antes de substituir o projeto original.
-
-O Shotcut precisa estar instalado, mas a interface gráfica só é necessária para revisão ou ajustes
-manuais. Evite salvar o mesmo projeto simultaneamente no Shotcut e no MCP.
-
 ## License
 
 Released under the [MIT License](LICENSE).

@@ -285,7 +285,7 @@ class ProjectEditingTests(unittest.TestCase):
     def test_string_force_cannot_bypass_revision_control(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             created = self.create_empty(Path(directory))
-            with self.assertRaisesRegex(ToolError, "force deve ser booleano"):
+            with self.assertRaisesRegex(ToolError, "force must be a boolean"):
                 edit_project(
                     {
                         "project_path": created["path"],
@@ -386,7 +386,7 @@ class ProjectEditingTests(unittest.TestCase):
             ET.SubElement(transition, "track", {"producer": "unexpected"})
             tree.write(path, encoding="utf-8", xml_declaration=True)
             current = ProjectDocument.load(path)
-            with self.assertRaisesRegex(ToolError, "não é reconhecida"):
+            with self.assertRaisesRegex(ToolError, "not recognized"):
                 edit_project(
                     {
                         "project_path": str(path),
@@ -445,7 +445,7 @@ class ProjectEditingTests(unittest.TestCase):
             target = root / "replacement.mp4"
             target.write_bytes(b"target")
             current = ProjectDocument.load(path)
-            with self.assertRaisesRegex(ToolError, "corresponde a 2 recursos"):
+            with self.assertRaisesRegex(ToolError, "matches 2 resources"):
                 edit_project(
                     {
                         "project_path": str(path),

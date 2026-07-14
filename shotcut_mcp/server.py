@@ -53,9 +53,9 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": SERVER_NAME, "version": __version__},
                 "instructions": (
-                    "Use inspect_project antes de editar; passe revision como expected_revision. "
-                    "Consulte shotcut_capabilities para o catálogo de operações. Agrupe alterações "
-                    "em uma única chamada edit_project e não use force sem autorização explícita."
+                    "Use inspect_project before editing and pass its revision as expected_revision. "
+                    "Consult shotcut_capabilities for the operation catalog. Group related changes "
+                    "in one edit_project call and do not use force without explicit authorization."
                 ),
             },
         }
@@ -69,7 +69,7 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "error": {"code": -32602, "message": "Parâmetros inválidos."},
+                "error": {"code": -32602, "message": "Invalid parameters."},
             }
         name = call_params.get("name")
         handler = HANDLERS.get(name) if isinstance(name, str) else None
@@ -79,7 +79,7 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
                 "id": request_id,
                 "error": {
                     "code": -32602,
-                    "message": f"Ferramenta desconhecida: {name}",
+                    "message": f"Unknown tool: {name}",
                 },
             }
         arguments = call_params.get("arguments", {})
@@ -94,14 +94,14 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
         except Exception as exc:  # Keep the long-running stdio server alive.
             print(f"Unexpected error in {name}: {exc!r}", file=sys.stderr, flush=True)
             result = _tool_result(
-                {"error": f"Falha interna inesperada: {type(exc).__name__}: {exc}"},
+                {"error": f"Unexpected internal failure: {type(exc).__name__}: {exc}"},
                 True,
             )
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
     return {
         "jsonrpc": "2.0",
         "id": request_id,
-        "error": {"code": -32601, "message": f"Método não encontrado: {method}"},
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
     }
 
 
@@ -120,13 +120,13 @@ def main() -> int:
         try:
             message = json.loads(raw_line.decode("utf-8"))
             if not isinstance(message, dict):
-                raise ValueError("A mensagem não é um objeto JSON.")
+                raise ValueError("The message is not a JSON object.")
             response = handle_request(message)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             response = {
                 "jsonrpc": "2.0",
                 "id": None,
-                "error": {"code": -32700, "message": f"JSON inválido: {exc}"},
+                "error": {"code": -32700, "message": f"Invalid JSON: {exc}"},
             }
         if response is not None:
             write_message(response)

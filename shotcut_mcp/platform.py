@@ -31,7 +31,7 @@ class Executables:
 
 def expand_path(value: str) -> Path:
     if not isinstance(value, str) or not value.strip():
-        raise ToolError("O caminho deve ser uma string não vazia.")
+        raise ToolError("The path must be a non-empty string.")
     return Path(os.path.expandvars(value)).expanduser().resolve()
 
 
@@ -120,9 +120,7 @@ def creation_flags() -> int:
 
 def require_executable(path: Path | None, label: str, env_name: str) -> Path:
     if path is None:
-        raise ToolError(
-            f"{label} não foi encontrado. Instale o Shotcut ou defina {env_name}."
-        )
+        raise ToolError(f"{label} was not found. Install Shotcut or set {env_name}.")
     return path
 
 
@@ -143,9 +141,9 @@ def run_capture(
             creationflags=creation_flags(),
         )
     except subprocess.TimeoutExpired as exc:
-        raise ToolError(f"O comando excedeu o limite de {timeout} segundos.") from exc
+        raise ToolError(f"The command timed out after {timeout} seconds.") from exc
     except OSError as exc:
-        raise ToolError(f"Não foi possível executar {command[0]}: {exc}") from exc
+        raise ToolError(f"Could not run {command[0]}: {exc}") from exc
 
 
 def version_line(executable: Path | None, args: list[str]) -> str | None:
@@ -221,7 +219,7 @@ def media_duration(payload: dict[str, Any]) -> float | None:
 
 def probe_media_raw(media_path: Path) -> dict[str, Any]:
     if not media_path.is_file():
-        raise ToolError(f"Arquivo de mídia não encontrado: {media_path}")
+        raise ToolError(f"Media file not found: {media_path}")
     stat = media_path.stat()
     key = (str(media_path), stat.st_mtime_ns, stat.st_size)
     with _PROBE_LOCK:
@@ -246,14 +244,14 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
     )
     if result.returncode:
         raise ToolError(
-            f"Falha ao analisar {media_path}: {(result.stderr.strip() or 'erro desconhecido')[-1200:]}"
+            f"Failed to probe {media_path}: {(result.stderr.strip() or 'unknown error')[-1200:]}"
         )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise ToolError("ffprobe retornou JSON inválido.") from exc
+        raise ToolError("ffprobe returned invalid JSON.") from exc
     if not isinstance(payload, dict):
-        raise ToolError("ffprobe retornou um resultado inesperado.")
+        raise ToolError("ffprobe returned an unexpected result.")
     with _PROBE_LOCK:
         _PROBE_CACHE.clear() if len(_PROBE_CACHE) > 256 else None
         _PROBE_CACHE[key] = payload
@@ -325,7 +323,7 @@ def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, An
 
 def list_services(kind: str) -> dict[str, Any]:
     if kind not in {"filter", "transition", "producer", "consumer"}:
-        raise ToolError("kind deve ser filter, transition, producer ou consumer.")
+        raise ToolError("kind must be filter, transition, producer, or consumer.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     cache_key = (str(melt), kind)
     if cache_key in _SERVICE_CACHE:
@@ -341,9 +339,9 @@ def list_services(kind: str) -> dict[str, Any]:
 
 def describe_service(kind: str, name: str) -> dict[str, Any]:
     if kind not in {"filter", "transition", "producer", "consumer"}:
-        raise ToolError("kind deve ser filter, transition, producer ou consumer.")
+        raise ToolError("kind must be filter, transition, producer, or consumer.")
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:+-]+", name):
-        raise ToolError("Nome de serviço MLT inválido.")
+        raise ToolError("Invalid MLT service name.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     result = run_capture([str(melt), "-query", f"{kind}={name}"], timeout=30)
     text = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
@@ -357,7 +355,7 @@ def describe_service(kind: str, name: str) -> dict[str, Any]:
 
 def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
     if not path.exists():
-        raise ToolError(f"Arquivo ou diretório não encontrado: {path}")
+        raise ToolError(f"File or directory not found: {path}")
     shotcut = require_executable(
         discover_executables().shotcut, "Shotcut", "SHOTCUT_PATH"
     )
@@ -372,7 +370,7 @@ def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
             start_new_session=os.name != "nt",
         )
     except OSError as exc:
-        raise ToolError(f"Não foi possível abrir o Shotcut: {exc}") from exc
+        raise ToolError(f"Could not open Shotcut: {exc}") from exc
     return {"opened": True, "path": str(path), "pid": process.pid}
 
 
@@ -380,11 +378,11 @@ def render_preview(
     project_path: Path, output_path: Path, frame: int, overwrite: bool
 ) -> dict[str, Any]:
     if not project_path.is_file():
-        raise ToolError(f"Projeto não encontrado: {project_path}")
+        raise ToolError(f"Project not found: {project_path}")
     if frame < 0:
-        raise ToolError("frame deve ser zero ou positivo.")
+        raise ToolError("frame must be zero or positive.")
     if output_path.exists() and not overwrite:
-        raise ToolError(f"A imagem já existe: {output_path}")
+        raise ToolError(f"The image already exists: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     result = run_capture(
@@ -408,7 +406,7 @@ def render_preview(
             part for part in (result.stdout, result.stderr) if part
         ).strip()
         raise ToolError(
-            f"Falha ao gerar preview: {detail[-2000:] or 'saída não criada'}"
+            f"Failed to generate preview: {detail[-2000:] or 'output was not created'}"
         )
     return {
         "created": True,

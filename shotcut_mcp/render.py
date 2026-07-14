@@ -71,7 +71,7 @@ RENDER_PRESETS: dict[str, dict[str, str]] = {
 
 def _metadata_path(job_id: str) -> Path:
     if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise ToolError("job_id inválido.")
+        raise ToolError("Invalid job_id.")
     return JOB_DIR / f"{job_id}.json"
 
 
@@ -87,13 +87,13 @@ def _write_job(metadata: dict[str, Any]) -> None:
 def _read_job(job_id: str) -> dict[str, Any]:
     path = _metadata_path(job_id)
     if not path.is_file():
-        raise ToolError(f"Render não encontrado: {job_id}")
+        raise ToolError(f"Render job not found: {job_id}")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ToolError(f"Metadados de render inválidos: {exc}") from exc
+        raise ToolError(f"Invalid render metadata: {exc}") from exc
     if not isinstance(payload, dict):
-        raise ToolError("Metadados de render inválidos.")
+        raise ToolError("Invalid render metadata.")
     return payload
 
 
@@ -102,24 +102,24 @@ def _consumer_properties(value: Any) -> dict[str, str]:
         return {}
     if not isinstance(value, dict) or len(value) > 50:
         raise ToolError(
-            "consumer_properties deve ser um objeto com no máximo 50 opções."
+            "consumer_properties must be an object with at most 50 options."
         )
     result: dict[str, str] = {}
     for key, raw in value.items():
         if not isinstance(key, str) or not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_.:-]*", key
         ):
-            raise ToolError(f"Nome de propriedade MLT inválido: {key!r}")
+            raise ToolError(f"Invalid MLT property name: {key!r}")
         if key in {"target", "resource"}:
-            raise ToolError(f"A propriedade {key} é controlada pelo servidor.")
+            raise ToolError(f"The {key} property is controlled by the server.")
         if isinstance(raw, bool):
             text = "1" if raw else "0"
         elif isinstance(raw, (str, int, float)):
             text = str(raw)
         else:
-            raise ToolError(f"Valor inválido para consumer_properties.{key}.")
+            raise ToolError(f"Invalid value for consumer_properties.{key}.")
         if len(text) > 500:
-            raise ToolError(f"consumer_properties.{key} excede 500 caracteres.")
+            raise ToolError(f"consumer_properties.{key} exceeds 500 characters.")
         result[key] = text
     return result
 
@@ -130,21 +130,21 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     project_path = expand_path(arguments.get("project_path", ""))
     output_path = expand_path(arguments.get("output_path", ""))
     if not project_path.is_file():
-        raise ToolError(f"Projeto não encontrado: {project_path}")
+        raise ToolError(f"Project not found: {project_path}")
     if project_path == output_path:
-        raise ToolError("Projeto e saída não podem ser o mesmo arquivo.")
+        raise ToolError("Project and output cannot be the same file.")
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
-        raise ToolError("overwrite deve ser booleano.")
+        raise ToolError("overwrite must be a boolean.")
     if output_path.exists():
         if not output_path.is_file():
-            raise ToolError(f"A saída existente não é um arquivo: {output_path}")
+            raise ToolError(f"The existing output is not a file: {output_path}")
         if not overwrite:
-            raise ToolError(f"A saída já existe: {output_path}")
+            raise ToolError(f"The output already exists: {output_path}")
 
     preset = arguments.get("preset", "h264-high")
     if preset not in RENDER_PRESETS:
-        raise ToolError(f"Preset inválido. Opções: {', '.join(RENDER_PRESETS)}")
+        raise ToolError(f"Invalid preset. Options: {', '.join(RENDER_PRESETS)}")
     properties = dict(RENDER_PRESETS[preset])
     properties.update(_consumer_properties(arguments.get("consumer_properties")))
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
@@ -176,7 +176,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
                 start_new_session=os.name != "nt",
             )
     except OSError as exc:
-        raise ToolError(f"Não foi possível iniciar o render: {exc}") from exc
+        raise ToolError(f"Could not start the render: {exc}") from exc
     RUNNING_JOBS[job_id] = process
     metadata = {
         "job_id": job_id,
@@ -209,7 +209,7 @@ def _finish_render(metadata: dict[str, Any], return_code: int) -> None:
     if output.exists() and not metadata.get("overwrite", False):
         metadata["status"] = "failed"
         metadata["status_note"] = (
-            "A saída apareceu durante o render; o arquivo novo foi preservado para evitar sobrescrita."
+            "The output appeared during rendering; the new file was preserved to avoid overwriting it."
         )
         return
     try:
@@ -217,7 +217,7 @@ def _finish_render(metadata: dict[str, Any], return_code: int) -> None:
     except OSError as exc:
         metadata["status"] = "failed"
         metadata["status_note"] = (
-            f"Render concluído, mas a promoção atômica falhou: {exc}"
+            f"The render completed, but atomic promotion failed: {exc}"
         )
         return
     metadata["status"] = "completed"
@@ -249,7 +249,7 @@ def render_status(job_id: str) -> dict[str, Any]:
     elif metadata.get("status") == "running":
         metadata["status"] = "detached"
         metadata["status_note"] = (
-            "O servidor MCP foi reiniciado; o processo pode continuar, mas não pode mais ser cancelado com segurança."
+            "The MCP server restarted; the process may continue, but it can no longer be cancelled safely."
         )
     output_path = Path(metadata["output_path"])
     progress, log_tail = _progress(Path(metadata["log_path"]))
@@ -268,7 +268,7 @@ def cancel_render(job_id: str) -> dict[str, Any]:
     metadata = _read_job(job_id)
     process = RUNNING_JOBS.get(job_id)
     if process is None:
-        raise ToolError("Este render não está ativo na sessão MCP atual.")
+        raise ToolError("This render is not active in the current MCP session.")
     if process.poll() is not None:
         return render_status(job_id)
     process.terminate()

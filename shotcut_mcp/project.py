@@ -68,27 +68,27 @@ def _properties(element: ET.Element) -> dict[str, str]:
 
 def _int(value: Any, label: str, minimum: int | None = None) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ToolError(f"{label} deve ser um número inteiro.")
+        raise ToolError(f"{label} must be an integer.")
     if minimum is not None and value < minimum:
-        raise ToolError(f"{label} deve ser no mínimo {minimum}.")
+        raise ToolError(f"{label} must be at least {minimum}.")
     return value
 
 
 def _number(value: Any, label: str, minimum: float | None = None) -> float:
     if isinstance(value, bool):
-        raise ToolError(f"{label} deve ser numérico.")
+        raise ToolError(f"{label} must be numeric.")
     try:
         result = float(value)
     except (TypeError, ValueError) as exc:
-        raise ToolError(f"{label} deve ser numérico.") from exc
+        raise ToolError(f"{label} must be numeric.") from exc
     if not math.isfinite(result) or (minimum is not None and result < minimum):
-        raise ToolError(f"{label} deve ser no mínimo {minimum}.")
+        raise ToolError(f"{label} must be at least {minimum}.")
     return result
 
 
 def _boolean(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
-        raise ToolError(f"{label} deve ser booleano.")
+        raise ToolError(f"{label} must be a boolean.")
     return value
 
 
@@ -133,11 +133,11 @@ def _srt(items: list[dict[str, Any]]) -> str:
         end = _int(item.get("end_ms"), f"items[{index - 1}].end_ms", 1)
         text = item.get("text")
         if not isinstance(text, str) or not text.strip():
-            raise ToolError(f"items[{index - 1}].text deve ser uma string não vazia.")
+            raise ToolError(f"items[{index - 1}].text must be a non-empty string.")
         if end <= start:
-            raise ToolError(f"items[{index - 1}].end_ms deve ser maior que start_ms.")
+            raise ToolError(f"items[{index - 1}].end_ms must be greater than start_ms.")
         if start < previous_end:
-            raise ToolError("Itens de legenda da mesma faixa não podem se sobrepor.")
+            raise ToolError("Subtitle items on the same track cannot overlap.")
         previous_end = end
         lines.extend([str(index), f"{_srt_time(start)} --> {_srt_time(end)}", text, ""])
     return "\n".join(lines)
@@ -162,10 +162,10 @@ class ProjectDocument:
         self.tree = tree
         root = tree.getroot()
         if root is None:
-            raise ToolError("Projeto MLT XML sem elemento raiz.")
+            raise ToolError("The MLT XML project has no root element.")
         self.root: ET.Element = root
         if root.tag != "mlt":
-            raise ToolError(f"Raiz XML inesperada: <{root.tag}>; esperado <mlt>.")
+            raise ToolError(f"Unexpected XML root: <{root.tag}>; expected <mlt>.")
         self.source = source
         self.revision = _sha256(source)
         self._id_cache: dict[str, ET.Element] | None = None
@@ -173,13 +173,13 @@ class ProjectDocument:
     @classmethod
     def load(cls, path: Path) -> "ProjectDocument":
         if not path.is_file():
-            raise ToolError(f"Projeto não encontrado: {path}")
+            raise ToolError(f"Project not found: {path}")
         source = path.read_bytes()
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         try:
             root = ET.fromstring(source, parser=parser)
         except ET.ParseError as exc:
-            raise ToolError(f"MLT XML inválido: {exc}") from exc
+            raise ToolError(f"Invalid MLT XML: {exc}") from exc
         return cls(path, ET.ElementTree(root), source)
 
     @classmethod
@@ -267,7 +267,7 @@ class ProjectDocument:
     def profile(self) -> ET.Element:
         profile = self.root.find("profile")
         if profile is None:
-            raise ToolError("O projeto não contém um perfil MLT.")
+            raise ToolError("The project does not contain an MLT profile.")
         return profile
 
     @property
@@ -290,7 +290,7 @@ class ProjectDocument:
             return shotcut[-1]
         if tractors:
             return tractors[-1]
-        raise ToolError("O projeto não contém uma timeline tractor.")
+        raise ToolError("The project does not contain a timeline tractor.")
 
     def track_container(self) -> ET.Element:
         tractor = self.main_tractor()
@@ -325,13 +325,13 @@ class ProjectDocument:
 
     def find_track(self, selector: Any) -> TrackRef:
         if not isinstance(selector, str) or not selector.strip():
-            raise ToolError("track deve ser o nome ou id de uma faixa.")
+            raise ToolError("track must be a track name or id.")
         matches = [
             track for track in self.tracks() if selector in {track.id, track.name}
         ]
         if len(matches) != 1:
             raise ToolError(
-                f"Faixa {selector!r} não encontrada de forma única. Opções: "
+                f"Track {selector!r} was not found uniquely. Options: "
                 + ", ".join(f"{track.name} ({track.id})" for track in self.tracks())
             )
         return matches[0]
@@ -342,7 +342,7 @@ class ProjectDocument:
             candidate = f"{prefix}_{uuid.uuid4().hex[:12]}"
             if candidate not in existing:
                 return candidate
-        raise ToolError("Não foi possível gerar um id XML único.")
+        raise ToolError("Could not generate a unique XML id.")
 
     def insert_root_before_main(self, element: ET.Element) -> None:
         main = self.main_tractor()
@@ -409,7 +409,7 @@ class ProjectDocument:
 
     def split_sequence_at(self, sequence: list[ET.Element], frame: int) -> int:
         if frame < 0:
-            raise ToolError("A posição deve ser zero ou positiva.")
+            raise ToolError("The position must be zero or positive.")
         cursor = 0
         for index, item in enumerate(sequence):
             duration = self.item_duration(item)
@@ -417,9 +417,7 @@ class ProjectDocument:
                 return index
             if cursor < frame < cursor + duration:
                 if self.is_transition(item):
-                    raise ToolError(
-                        "Não é possível dividir o interior de uma transição."
-                    )
+                    raise ToolError("Cannot split inside a transition.")
                 offset = frame - cursor
                 left = copy.deepcopy(item)
                 right = copy.deepcopy(item)
@@ -456,7 +454,7 @@ class ProjectDocument:
         total = sum(self.item_duration(node) for node in sequence)
         frame = total if position is None else position
         if mode not in {"insert", "overwrite"}:
-            raise ToolError("mode deve ser insert ou overwrite.")
+            raise ToolError("mode must be insert or overwrite.")
         start_index = self.split_sequence_at(sequence, frame)
         if mode == "insert":
             sequence.insert(start_index, item)
@@ -650,14 +648,14 @@ class ProjectDocument:
     def add_track(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = operation.get("kind")
         if kind not in {"video", "audio"}:
-            raise ToolError("kind deve ser video ou audio.")
+            raise ToolError("kind must be video or audio.")
         current = self.tracks()
         number = 1 + sum(track.kind == kind for track in current)
         name = operation.get("name") or ("V" if kind == "video" else "A") + str(number)
         if not isinstance(name, str) or not name.strip():
-            raise ToolError("name deve ser uma string não vazia.")
+            raise ToolError("name must be a non-empty string.")
         if any(track.name == name for track in current):
-            raise ToolError(f"Já existe uma faixa chamada {name!r}.")
+            raise ToolError(f"A track named {name!r} already exists.")
         playlist_id = self.new_id("playlist")
         playlist = ET.Element("playlist", {"id": playlist_id})
         _set_property(playlist, f"shotcut:{kind}", 1)
@@ -733,33 +731,33 @@ class ProjectDocument:
         if "name" in operation:
             name = operation["name"]
             if not isinstance(name, str) or not name.strip():
-                raise ToolError("name deve ser uma string não vazia.")
+                raise ToolError("name must be a non-empty string.")
             if any(item is not track and item.name == name for item in self.tracks()):
-                raise ToolError(f"Já existe uma faixa chamada {name!r}.")
+                raise ToolError(f"A track named {name!r} already exists.")
             _set_property(track.playlist, "shotcut:name", name)
             track.name = name
         if "locked" in operation:
             value = operation["locked"]
             if not isinstance(value, bool):
-                raise ToolError("locked deve ser booleano.")
+                raise ToolError("locked must be a boolean.")
             _set_property(track.playlist, "shotcut:lock", 1 if value else 0)
         hide = int(_property(track.playlist, "hide") or 0)
         if "hidden" in operation:
             value = operation["hidden"]
             if not isinstance(value, bool):
-                raise ToolError("hidden deve ser booleano.")
+                raise ToolError("hidden must be a boolean.")
             hide = (hide | 1) if value else (hide & ~1)
         if "muted" in operation:
             value = operation["muted"]
             if not isinstance(value, bool):
-                raise ToolError("muted deve ser booleano.")
+                raise ToolError("muted must be a boolean.")
             hide = (hide | 2) if value else (hide & ~2)
         _set_property(track.playlist, "hide", hide)
         if "composite" in operation:
             composite = operation["composite"]
             if not isinstance(composite, bool) or track.kind != "video":
                 raise ToolError(
-                    "composite deve ser booleano e só se aplica a faixa de vídeo."
+                    "composite must be a boolean and applies only to video tracks."
                 )
             transition = next(
                 (
@@ -808,10 +806,10 @@ class ProjectDocument:
     ) -> tuple[ET.Element, ET.Element]:
         raw_path = operation.get("path")
         if not isinstance(raw_path, str):
-            raise ToolError("path deve ser uma string.")
+            raise ToolError("path must be a string.")
         media_path = Path(os.path.expandvars(raw_path)).expanduser().resolve()
         if not media_path.is_file():
-            raise ToolError(f"Mídia não encontrada: {media_path}")
+            raise ToolError(f"Media not found: {media_path}")
         probe = probe_media_raw(media_path)
         duration_seconds = media_duration(probe)
         image_duration = _number(
@@ -835,7 +833,7 @@ class ProjectDocument:
             frame_out = math.ceil(out_seconds * self.fps) - 1
         if frame_out < frame_in or frame_out >= full_frames:
             raise ToolError(
-                f"Intervalo inválido: in={frame_in}, out={frame_out}, mídia={full_frames} frames."
+                f"Invalid range: in={frame_in}, out={frame_out}, media={full_frames} frames."
             )
         producer_id = self.new_id("producer")
         producer = ET.Element(
@@ -877,7 +875,7 @@ class ProjectDocument:
         track = self.find_track(operation.get("track"))
         generator = operation.get("generator")
         if generator not in {"color", "text", "tone", "noise"}:
-            raise ToolError("generator deve ser color, text, tone ou noise.")
+            raise ToolError("generator must be color, text, tone, or noise.")
         duration = _int(operation.get("duration_frames"), "duration_frames", 1)
         producer_id = self.new_id("producer")
         producer = ET.Element(
@@ -903,7 +901,7 @@ class ProjectDocument:
         if generator == "text":
             text = operation.get("text")
             if not isinstance(text, str) or not text:
-                raise ToolError("text deve ser uma string não vazia.")
+                raise ToolError("text must be a non-empty string.")
             filter_element = ET.SubElement(
                 producer,
                 "filter",
@@ -925,7 +923,7 @@ class ProjectDocument:
             }
             properties = operation.get("properties", {})
             if not isinstance(properties, dict):
-                raise ToolError("properties do gerador de texto deve ser um objeto.")
+                raise ToolError("Text generator properties must be an object.")
             defaults.update(properties)
             for name, value in defaults.items():
                 _set_property(filter_element, name, value)
@@ -952,18 +950,20 @@ class ProjectDocument:
         item_index = _int(index, "item_index", 0)
         sequence = self.sequence(track.playlist)
         if item_index >= len(sequence):
-            raise ToolError(f"item_index {item_index} fora da faixa {track.name}.")
+            raise ToolError(
+                f"item_index {item_index} is out of range for track {track.name}."
+            )
         return sequence, item_index, sequence[item_index]
 
     def remove_item(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
         sequence, index, item = self._item(track, operation.get("item_index"))
         if self.is_transition(item):
-            raise ToolError("Use remove_transition para remover uma transição.")
+            raise ToolError("Use remove_transition to remove a transition.")
         duration = self.item_duration(item)
         ripple = operation.get("ripple", False)
         if not isinstance(ripple, bool):
-            raise ToolError("ripple deve ser booleano.")
+            raise ToolError("ripple must be a boolean.")
         sequence[index : index + 1] = (
             [] if ripple else [ET.Element("blank", {"length": str(duration)})]
         )
@@ -975,7 +975,7 @@ class ProjectDocument:
         track = self.find_track(operation.get("track"))
         _, _, item = self._item(track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
-            raise ToolError("Apenas clipes comuns podem ser recortados.")
+            raise ToolError("Only regular clips can be trimmed.")
         frame_in = _clock_to_frames(item.get("in"), self.fps) or 0
         frame_out = _clock_to_frames(item.get("out"), self.fps)
         if frame_out is None:
@@ -983,7 +983,7 @@ class ProjectDocument:
         new_in = _int(operation.get("in_frame", frame_in), "in_frame", 0)
         new_out = _int(operation.get("out_frame", frame_out), "out_frame", 0)
         if new_out < new_in:
-            raise ToolError("out_frame deve ser maior ou igual a in_frame.")
+            raise ToolError("out_frame must be greater than or equal to in_frame.")
         producer = self.id_map().get(item.get("producer", ""))
         producer_out = (
             _clock_to_frames(producer.get("out"), self.fps)
@@ -991,7 +991,7 @@ class ProjectDocument:
             else None
         )
         if producer_out is not None and new_out > producer_out:
-            raise ToolError(f"out_frame excede o fim da mídia ({producer_out}).")
+            raise ToolError(f"out_frame exceeds the end of the media ({producer_out}).")
         item.set("in", str(new_in))
         item.set("out", str(new_out))
         self.update_main_duration()
@@ -1001,11 +1001,13 @@ class ProjectDocument:
         track = self.find_track(operation.get("track"))
         sequence, index, item = self._item(track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
-            raise ToolError("Apenas clipes comuns podem ser divididos.")
+            raise ToolError("Only regular clips can be split.")
         offset = _int(operation.get("offset_frame"), "offset_frame", 1)
         duration = self.item_duration(item)
         if offset >= duration:
-            raise ToolError(f"offset_frame deve ser menor que a duração ({duration}).")
+            raise ToolError(
+                f"offset_frame must be less than the duration ({duration})."
+            )
         frame_in = _clock_to_frames(item.get("in"), self.fps) or 0
         left = copy.deepcopy(item)
         right = copy.deepcopy(item)
@@ -1029,11 +1031,11 @@ class ProjectDocument:
         )
         sequence, index, item = self._item(source_track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
-            raise ToolError("Apenas clipes comuns podem ser movidos.")
+            raise ToolError("Only regular clips can be moved.")
         if (index > 0 and self.is_transition(sequence[index - 1])) or (
             index + 1 < len(sequence) and self.is_transition(sequence[index + 1])
         ):
-            raise ToolError("Remova a transição adjacente antes de mover este clipe.")
+            raise ToolError("Remove the adjacent transition before moving this clip.")
         duration = self.item_duration(item)
         ripple_source = _boolean(operation.get("ripple_source", False), "ripple_source")
         sequence[index : index + 1] = (
@@ -1073,7 +1075,7 @@ class ProjectDocument:
         duration = _int(operation.get("duration_frames"), "duration_frames", 1)
         ripple = operation.get("ripple", True)
         if not isinstance(ripple, bool):
-            raise ToolError("ripple deve ser booleano.")
+            raise ToolError("ripple must be a boolean.")
         selectors = operation.get("tracks")
         tracks = (
             self.tracks()
@@ -1085,7 +1087,7 @@ class ProjectDocument:
             left = self.split_sequence_at(sequence, start)
             right = self.split_sequence_at(sequence, start + duration)
             if any(self.is_transition(item) for item in sequence[left:right]):
-                raise ToolError("A região contém uma transição; remova-a antes.")
+                raise ToolError("The range contains a transition; remove it first.")
             replacement = (
                 [] if ripple else [ET.Element("blank", {"length": str(duration)})]
             )
@@ -1102,7 +1104,9 @@ class ProjectDocument:
         track = self.find_track(operation.get("track"))
         sequence, left_index, left = self._item(track, operation.get("left_item_index"))
         if left_index + 1 >= len(sequence):
-            raise ToolError("Não há clipe à direita para criar a transição.")
+            raise ToolError(
+                "There is no clip to the right for creating the transition."
+            )
         right = sequence[left_index + 1]
         if (
             left.tag != "entry"
@@ -1110,14 +1114,14 @@ class ProjectDocument:
             or self.is_transition(left)
             or self.is_transition(right)
         ):
-            raise ToolError("A transição exige dois clipes comuns adjacentes.")
+            raise ToolError("A transition requires two adjacent regular clips.")
         duration = _int(operation.get("duration_frames"), "duration_frames", 1)
         left_duration, right_duration = (
             self.item_duration(left),
             self.item_duration(right),
         )
         if duration >= left_duration or duration >= right_duration:
-            raise ToolError("A transição deve ser menor que os dois clipes.")
+            raise ToolError("The transition must be shorter than both clips.")
         left_in = _clock_to_frames(left.get("in"), self.fps) or 0
         left_out = (
             _clock_to_frames(left.get("out"), self.fps) or left_in + left_duration - 1
@@ -1155,12 +1159,12 @@ class ProjectDocument:
         if not isinstance(video_service, str) or not re.fullmatch(
             r"[A-Za-z0-9_.:+-]+", video_service
         ):
-            raise ToolError("service de transição inválido.")
+            raise ToolError("Invalid transition service.")
         video = self._transition(video_service, 0, 1)
         video.set("out", str(duration - 1))
         properties = operation.get("properties", {})
         if not isinstance(properties, dict):
-            raise ToolError("properties da transição deve ser um objeto.")
+            raise ToolError("Transition properties must be an object.")
         for name, value in properties.items():
             _set_property(video, name, value)
         tractor.append(video)
@@ -1188,7 +1192,7 @@ class ProjectDocument:
         track = self.find_track(operation.get("track"))
         sequence, index, entry = self._item(track, operation.get("item_index"))
         if not self.is_transition(entry) or index == 0 or index + 1 >= len(sequence):
-            raise ToolError("item_index não aponta para uma transição removível.")
+            raise ToolError("item_index does not point to a removable transition.")
         tractor = self.id_map().get(entry.get("producer", ""))
         assert tractor is not None
         nested_tracks = tractor.findall("track")
@@ -1215,13 +1219,13 @@ class ProjectDocument:
             and all(item_duration == duration for item_duration in nested_durations)
         )
         if not signature_is_known:
-            raise ToolError("Estrutura da transição não é reconhecida.")
+            raise ToolError("The transition structure is not recognized.")
         left, right = (
             copy.deepcopy(sequence[index - 1]),
             copy.deepcopy(sequence[index + 1]),
         )
         if left.tag != "entry" or right.tag != "entry":
-            raise ToolError("A transição não possui clipes adjacentes reconhecíveis.")
+            raise ToolError("The transition does not have recognizable adjacent clips.")
         left.set("out", nested_tracks[0].get("out", left.get("out", "0")))
         right.set("in", nested_tracks[1].get("in", right.get("in", "0")))
         sequence[index - 1 : index + 2] = [left, right]
@@ -1241,12 +1245,12 @@ class ProjectDocument:
         if target == "clip":
             _, _, entry = self._item(track, operation.get("item_index"))
             if entry.tag != "entry":
-                raise ToolError("O item selecionado não é um clipe.")
+                raise ToolError("The selected item is not a clip.")
             producer = self.id_map().get(entry.get("producer", ""))
             if producer is None:
-                raise ToolError("Producer do clipe não encontrado.")
+                raise ToolError("The clip producer was not found.")
             return producer
-        raise ToolError("target deve ser project, track ou clip.")
+        raise ToolError("target must be project, track, or clip.")
 
     def add_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
         host = self._filter_host(operation)
@@ -1254,7 +1258,7 @@ class ProjectDocument:
         if not isinstance(service, str) or not re.fullmatch(
             r"[A-Za-z0-9_.:+-]+", service
         ):
-            raise ToolError("service de filtro inválido.")
+            raise ToolError("Invalid filter service.")
         filter_id = self.new_id("filter")
         attrs = {"id": filter_id}
         if "in_frame" in operation:
@@ -1268,15 +1272,13 @@ class ProjectDocument:
             _set_property(element, "shotcut:filter", shotcut_filter)
         properties = operation.get("properties", {})
         if not isinstance(properties, dict) or len(properties) > 200:
-            raise ToolError(
-                "properties deve ser um objeto com no máximo 200 propriedades."
-            )
+            raise ToolError("properties must be an object with at most 200 properties.")
         for name, value in properties.items():
             if not isinstance(name, str) or not name:
-                raise ToolError("Nome de propriedade de filtro inválido.")
+                raise ToolError("Invalid filter property name.")
             if isinstance(value, (dict, list)):
                 raise ToolError(
-                    f"properties.{name} deve ser escalar; animações usam strings MLT."
+                    f"properties.{name} must be a scalar; animations use MLT strings."
                 )
             _set_property(element, name, value)
         host.append(element)
@@ -1291,18 +1293,18 @@ class ProjectDocument:
         filter_id = operation.get("filter_id")
         element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
         if element is None or element.tag != "filter":
-            raise ToolError(f"Filtro não encontrado: {filter_id}")
+            raise ToolError(f"Filter not found: {filter_id}")
         if "enabled" in operation:
             enabled = operation["enabled"]
             if not isinstance(enabled, bool):
-                raise ToolError("enabled deve ser booleano.")
+                raise ToolError("enabled must be a boolean.")
             _set_property(element, "disable", 0 if enabled else 1)
         for attr, label in (("in_frame", "in"), ("out_frame", "out")):
             if attr in operation:
                 element.set(label, str(_int(operation[attr], attr, 0)))
         properties = operation.get("properties", {})
         if not isinstance(properties, dict):
-            raise ToolError("properties deve ser um objeto.")
+            raise ToolError("properties must be an object.")
         for name, value in properties.items():
             if value is None:
                 _remove_property(element, name)
@@ -1313,19 +1315,19 @@ class ProjectDocument:
                     1 if value is True else 0 if value is False else value,
                 )
             else:
-                raise ToolError(f"properties.{name} deve ser escalar ou null.")
+                raise ToolError(f"properties.{name} must be a scalar or null.")
         return {"filter_id": filter_id, "updated": True}
 
     def remove_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
         filter_id = operation.get("filter_id")
         element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
         if element is None or element.tag != "filter":
-            raise ToolError(f"Filtro não encontrado: {filter_id}")
+            raise ToolError(f"Filter not found: {filter_id}")
         parent = next(
             (node for node in self.root.iter() if element in list(node)), None
         )
         if parent is None:
-            raise ToolError("Pai XML do filtro não encontrado.")
+            raise ToolError("The filter's XML parent was not found.")
         parent.remove(element)
         self.invalidate()
         return {"filter_id": filter_id, "removed": True}
@@ -1333,7 +1335,7 @@ class ProjectDocument:
     def set_notes(self, operation: dict[str, Any]) -> dict[str, Any]:
         notes = operation.get("notes", "")
         if not isinstance(notes, str):
-            raise ToolError("notes deve ser uma string.")
+            raise ToolError("notes must be a string.")
         if notes:
             _set_property(self.main_tractor(), "shotcut:projectNote", notes)
         else:
@@ -1374,7 +1376,7 @@ class ProjectDocument:
         text = operation.get("text", f"Marker {key + 1}")
         color = operation.get("color", "#00A0FF")
         if not isinstance(text, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
-            raise ToolError("Texto ou cor de marcador inválido.")
+            raise ToolError("Invalid marker text or color.")
         _set_property(marker, "text", text)
         _set_property(marker, "start", _frames_to_clock(start, self.fps))
         _set_property(marker, "end", _frames_to_clock(end, self.fps))
@@ -1397,7 +1399,7 @@ class ProjectDocument:
             else None
         )
         if marker is None:
-            raise ToolError(f"Marcador não encontrado: {marker_id}")
+            raise ToolError(f"Marker not found: {marker_id}")
         assert container is not None
         container.remove(marker)
         return {"marker_id": marker_id, "removed": True}
@@ -1407,9 +1409,9 @@ class ProjectDocument:
         lang = operation.get("language", "por")
         items = operation.get("items")
         if not isinstance(name, str) or not name.strip() or not isinstance(lang, str):
-            raise ToolError("name e language devem ser strings não vazias.")
+            raise ToolError("name and language must be non-empty strings.")
         if not isinstance(items, list):
-            raise ToolError("items deve ser uma lista.")
+            raise ToolError("items must be a list.")
         main = self.main_tractor()
         feed = next(
             (
@@ -1458,7 +1460,7 @@ class ProjectDocument:
             }
             style = operation.get("style", {})
             if not isinstance(style, dict):
-                raise ToolError("style deve ser um objeto.")
+                raise ToolError("style must be an object.")
             defaults.update(style)
             for key, value in defaults.items():
                 _set_property(burn, key, value)
@@ -1474,7 +1476,7 @@ class ProjectDocument:
     def remove_subtitle_track(self, operation: dict[str, Any]) -> dict[str, Any]:
         name = operation.get("name")
         if not isinstance(name, str):
-            raise ToolError("name deve ser uma string.")
+            raise ToolError("name must be a string.")
         main = self.main_tractor()
         removed = 0
         for child in list(main.findall("filter")):
@@ -1485,7 +1487,7 @@ class ProjectDocument:
                 main.remove(child)
                 removed += 1
         if not removed:
-            raise ToolError(f"Faixa de legendas não encontrada: {name}")
+            raise ToolError(f"Subtitle track not found: {name}")
         self.invalidate()
         return {"subtitle_track": name, "removed_filters": removed}
 
@@ -1493,10 +1495,10 @@ class ProjectDocument:
         old = operation.get("from")
         new = operation.get("to")
         if not isinstance(old, str) or not isinstance(new, str):
-            raise ToolError("from e to devem ser strings.")
+            raise ToolError("from and to must be strings.")
         new_path = Path(os.path.expandvars(new)).expanduser().resolve()
         if not new_path.exists():
-            raise ToolError(f"Novo recurso não encontrado: {new_path}")
+            raise ToolError(f"New resource not found: {new_path}")
         match_basename = _boolean(
             operation.get("match_basename", False), "match_basename"
         )
@@ -1511,11 +1513,11 @@ class ProjectDocument:
             ):
                 matches.append(element)
         if not matches:
-            raise ToolError(f"Nenhum recurso corresponde a {old!r}.")
+            raise ToolError(f"No resource matches {old!r}.")
         if match_basename and len(matches) > 1 and not allow_multiple:
             raise ToolError(
-                f"O basename {old!r} corresponde a {len(matches)} recursos; "
-                "use o caminho completo ou allow_multiple=true."
+                f"The basename {old!r} matches {len(matches)} resources; "
+                "use the full path or allow_multiple=true."
             )
         for element in matches:
             _set_property(element, "resource", str(new_path).replace("\\", "/"))
@@ -1527,7 +1529,7 @@ class ProjectDocument:
             "preserve_frame_numbers",
         ):
             raise ToolError(
-                "set_profile exige preserve_frame_numbers=true para confirmar a mudança temporal."
+                "set_profile requires preserve_frame_numbers=true to confirm the timing change."
             )
         profile = self.profile()
         old_fps = self.fps
@@ -1592,7 +1594,7 @@ class ProjectDocument:
 
     def apply_operation(self, operation: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(operation, dict):
-            raise ToolError("Cada operação deve ser um objeto.")
+            raise ToolError("Each operation must be an object.")
         name = operation.get("op")
         handlers = {
             "add_track": self.add_track,
@@ -1621,11 +1623,11 @@ class ProjectDocument:
             "set_profile": self.set_profile,
         }
         if not isinstance(name, str):
-            raise ToolError("Toda operação precisa de um campo op textual.")
+            raise ToolError("Every operation requires a textual op field.")
         handler = handlers.get(name)
         if handler is None:
             raise ToolError(
-                f"Operação desconhecida: {name}. Opções: {', '.join(handlers)}"
+                f"Unknown operation: {name}. Options: {', '.join(handlers)}"
             )
         result = handler(operation)
         return {"op": name, **result}
@@ -1804,7 +1806,7 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
                 lock_path.unlink(missing_ok=True)
                 continue
             raise ConflictError(
-                f"Outro processo MCP está editando o projeto: {lock_path}"
+                f"Another MCP process is editing the project: {lock_path}"
             )
     try:
         yield
@@ -1848,11 +1850,11 @@ def _write_validated(
         if current is not None and not force:
             if not expected_revision:
                 raise ConflictError(
-                    "expected_revision é obrigatório para editar um projeto existente."
+                    "expected_revision is required to edit an existing project."
                 )
             if expected_revision != current_revision:
                 raise ConflictError(
-                    f"O projeto mudou. Esperado {expected_revision}, atual {current_revision}."
+                    f"The project changed. Expected {expected_revision}, current {current_revision}."
                 )
         temporary.write_bytes(data)
         try:
@@ -1863,7 +1865,7 @@ def _write_validated(
             )
             if not validation.get("valid"):
                 raise ToolError(
-                    "A edição foi rejeitada pelo MLT antes de substituir o projeto: "
+                    "MLT rejected the edit before the project was replaced: "
                     + str(validation.get("diagnostic") or validation.get("return_code"))
                 )
             backup_path = (
@@ -1889,10 +1891,10 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
 
     path = expand_path(arguments.get("project_path", ""))
     if path.suffix.lower() not in {".mlt", ".xml"}:
-        raise ToolError("O projeto deve usar a extensão .mlt ou .xml.")
+        raise ToolError("The project must use the .mlt or .xml extension.")
     overwrite = _boolean(arguments.get("overwrite", False), "overwrite")
     if path.exists() and not overwrite:
-        raise ToolError(f"O projeto já existe: {path}")
+        raise ToolError(f"The project already exists: {path}")
     width = _int(arguments.get("width", 1920), "width", 16)
     height = _int(arguments.get("height", 1080), "height", 16)
     fps_num = _int(arguments.get("fps_num", 30), "fps_num", 1)
@@ -1910,12 +1912,12 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     tracks = arguments.get("tracks", [])
     if not isinstance(tracks, list):
-        raise ToolError("tracks deve ser uma lista.")
+        raise ToolError("tracks must be a list.")
     for track in tracks:
         results.append(document.add_track({"op": "add_track", **track}))
     clips = arguments.get("clips", [])
     if not isinstance(clips, list):
-        raise ToolError("clips deve ser uma lista.")
+        raise ToolError("clips must be a list.")
     for clip in clips:
         operation = {"op": "add_clip", "track": "V1", **clip}
         results.append(document.add_clip(operation))
@@ -1943,13 +1945,13 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
     path = expand_path(arguments.get("project_path", ""))
     operations = arguments.get("operations")
     if not isinstance(operations, list) or not operations:
-        raise ToolError("operations deve ser uma lista não vazia.")
+        raise ToolError("operations must be a non-empty list.")
     if len(operations) > MAX_OPERATIONS:
-        raise ToolError(f"Uma transação aceita no máximo {MAX_OPERATIONS} operações.")
+        raise ToolError(f"A transaction accepts at most {MAX_OPERATIONS} operations.")
     force = _boolean(arguments.get("force", False), "force")
     expected_revision = arguments.get("expected_revision")
     if expected_revision is not None and not isinstance(expected_revision, str):
-        raise ToolError("expected_revision deve ser uma string SHA-256.")
+        raise ToolError("expected_revision must be a SHA-256 string.")
     document = ProjectDocument.load(path)
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
@@ -1957,7 +1959,7 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             results.append(document.apply_operation(operation))
         except ToolError as exc:
-            raise ToolError(f"Operação {index} falhou: {exc}") from exc
+            raise ToolError(f"Operation {index} failed: {exc}") from exc
     document.update_main_duration()
     saved = _write_validated(
         document,
@@ -2006,10 +2008,10 @@ def restore_backup(arguments: dict[str, Any]) -> dict[str, Any]:
     force = _boolean(arguments.get("force", False), "force")
     expected_revision = arguments.get("expected_revision")
     if expected_revision is not None and not isinstance(expected_revision, str):
-        raise ToolError("expected_revision deve ser uma string SHA-256.")
+        raise ToolError("expected_revision must be a SHA-256 string.")
     allowed_dir = (project_path.parent / ".shotcut-mcp" / "backups").resolve()
     if backup_path.parent.resolve() != allowed_dir or not backup_path.is_file():
-        raise ToolError("backup_path não pertence aos backups deste projeto.")
+        raise ToolError("backup_path is not one of this project's backups.")
     document = ProjectDocument.load(backup_path)
     document.path = project_path
     return {
