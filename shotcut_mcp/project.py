@@ -346,9 +346,49 @@ class ProjectDocument:
 
     def insert_root_before_main(self, element: ET.Element) -> None:
         main = self.main_tractor()
-        index = list(self.root).index(main)
+        children = list(self.root)
+        index = children.index(main)
+        if element.tag in {"producer", "chain", "tractor"}:
+            # Shotcut's UI resolves timeline entries while reading each playlist.
+            # Keep services referenced by editable tracks before those playlists;
+            # MLT itself accepts forward references, but Shotcut drops them when
+            # it converts the XML into its timeline model.
+            for track in self.track_container().findall("track"):
+                playlist = self.id_map().get(track.get("producer", ""))
+                if playlist is not None and playlist.tag == "playlist":
+                    try:
+                        index = min(index, children.index(playlist))
+                    except ValueError:
+                        pass
         self.root.insert(index, element)
         self.invalidate()
+
+    def normalize_root_service_order(self) -> None:
+        """Place existing timeline services before editable track playlists."""
+        main = self.main_tractor()
+        editable_playlists = [track.playlist for track in self.tracks()]
+        children = list(self.root)
+        anchors = [
+            playlist
+            for playlist in editable_playlists
+            if playlist in children
+        ]
+        if not anchors:
+            return
+        anchor = min(anchors, key=children.index)
+        services = [
+            child
+            for child in children
+            if child is not main
+            and child.tag in {"producer", "chain", "tractor"}
+            and child.get("id") != "black"
+            and children.index(child) > children.index(anchor)
+        ]
+        for service in services:
+            self.root.remove(service)
+            self.root.insert(list(self.root).index(anchor), service)
+        if services:
+            self.invalidate()
 
     def item_duration(self, element: ET.Element) -> int:
         if element.tag == "blank":
@@ -491,6 +531,7 @@ class ProjectDocument:
         """Upgrade minimal/legacy MLT timelines to Shotcut's expected background layout."""
         main = self.main_tractor()
         _set_property(main, "shotcut", 1)
+        self.normalize_root_service_order()
         if _property(main, "shotcut:projectNote") is None:
             legacy_notes = _property(main, "shotcut:projectNotes")
             if legacy_notes is not None:

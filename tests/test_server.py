@@ -264,6 +264,80 @@ class ProjectEditingTests(unittest.TestCase):
             self.assertEqual([item["type"] for item in items], ["clip"])
             self.assertEqual(edited["project"]["duration_frames"], 30)
 
+    def test_generated_service_precedes_referencing_track_playlist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            created = self.create_empty(root)
+            edited = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "validate": False,
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "color": "#3366CC",
+                            "duration_frames": 30,
+                            "position_frame": 0,
+                            "mode": "overwrite",
+                        }
+                    ],
+                }
+            )
+            document = ProjectDocument.load(Path(edited["path"]))
+            children = list(document.root)
+            playlist = document.find_track("V1").playlist
+            entry = playlist.find("entry")
+            self.assertIsNotNone(entry)
+            producer = document.id_map()[entry.get("producer", "")]
+            self.assertLess(children.index(producer), children.index(playlist))
+
+    def test_edit_repairs_forward_referenced_timeline_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            created = self.create_empty(root)
+            edited = edit_project(
+                {
+                    "project_path": created["path"],
+                    "expected_revision": created["revision"],
+                    "validate": False,
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 30,
+                            "position_frame": 0,
+                            "mode": "overwrite",
+                        }
+                    ],
+                }
+            )
+            document = ProjectDocument.load(Path(edited["path"]))
+            playlist = document.find_track("V1").playlist
+            entry = playlist.find("entry")
+            self.assertIsNotNone(entry)
+            producer = document.id_map()[entry.get("producer", "")]
+            document.root.remove(producer)
+            document.root.insert(list(document.root).index(document.main_tractor()), producer)
+            Path(edited["path"]).write_bytes(document.to_bytes())
+            broken = ProjectDocument.load(Path(edited["path"]))
+            repaired = edit_project(
+                {
+                    "project_path": edited["path"],
+                    "expected_revision": broken.revision,
+                    "validate": False,
+                    "operations": [{"op": "set_notes", "notes": "repair"}],
+                }
+            )
+            fixed = ProjectDocument.load(Path(repaired["path"]))
+            children = list(fixed.root)
+            playlist = fixed.find_track("V1").playlist
+            producer = fixed.id_map()[playlist.find("entry").get("producer", "")]
+            self.assertLess(children.index(producer), children.index(playlist))
+
     def test_validation_cannot_be_disabled_by_tool_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             created = create_project(
