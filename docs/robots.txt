@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://matrodrigs.github.io/shotcut-mcp/sitemap.xml

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shotcut MCP — AI Video Editing with Shotcut</title>
+  <meta name="description" content="Shotcut MCP is an open-source Model Context Protocol server for creating, editing, validating, previewing, and rendering Shotcut video projects with AI.">
+  <meta name="author" content="Matheus Rodrigues">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="theme-color" content="#07131c">
+  <link rel="canonical" href="https://matrodrigs.github.io/shotcut-mcp/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Shotcut MCP">
+  <meta property="og:title" content="Shotcut MCP — AI Video Editing with Shotcut">
+  <meta property="og:description" content="A local, open-source MCP server for safe and transactional Shotcut video editing.">
+  <meta property="og:url" content="https://matrodrigs.github.io/shotcut-mcp/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Shotcut MCP — AI Video Editing with Shotcut">
+  <meta name="twitter:description" content="Create, edit, validate, preview, and render Shotcut projects with AI.">
+
+  <link rel="stylesheet" href="./styles.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "Shotcut MCP",
+    "alternateName": "Shotcut Model Context Protocol Server",
+    "description": "An open-source Model Context Protocol server for creating, editing, validating, previewing, and rendering Shotcut video projects with AI.",
+    "codeRepository": "https://github.com/matrodrigs/shotcut-mcp",
+    "url": "https://matrodrigs.github.io/shotcut-mcp/",
+    "programmingLanguage": "Python",
+    "runtimePlatform": "Python 3.10 or newer",
+    "license": "https://opensource.org/license/mit",
+    "keywords": [
+      "Shotcut",
+      "MCP server",
+      "Model Context Protocol",
+      "AI video editing",
+      "MLT XML",
+      "video automation"
+    ],
+    "author": {
+      "@type": "Person",
+      "name": "Matheus Rodrigues",
+      "url": "https://github.com/matrodrigs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Shotcut MCP home">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span>Shotcut MCP</span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="#features">Features</a>
+      <a href="#quick-start">Quick start</a>
+      <a href="#faq">FAQ</a>
+      <a class="nav-cta" href="https://github.com/matrodrigs/shotcut-mcp">View on GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-copy">
+        <p class="eyebrow"><span></span> Open source · Local first · MIT licensed</p>
+        <h1>Edit Shotcut projects<br><em>with AI.</em></h1>
+        <p class="hero-summary">
+          Shotcut MCP is a local Model Context Protocol server that gives AI clients structured,
+          transactional tools to create, edit, validate, preview, and render saved Shotcut projects.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="https://github.com/matrodrigs/shotcut-mcp#quick-start">Get started on GitHub <span aria-hidden="true">↗</span></a>
+          <a class="button secondary" href="#features">Explore features</a>
+        </div>
+        <dl class="hero-stats" aria-label="Project highlights">
+          <div><dt>500</dt><dd>edits per transaction</dd></div>
+          <div><dt>16</dt><dd>MCP tools</dd></div>
+          <div><dt>0</dt><dd>runtime dependencies</dd></div>
+        </dl>
+      </div>
+
+      <div class="timeline-card" aria-label="Illustration of an AI-edited video timeline">
+        <div class="window-bar">
+          <span></span><span></span><span></span>
+          <p>documentary.mlt</p>
+        </div>
+        <div class="preview-pane">
+          <div class="preview-frame">
+            <div class="mountain mountain-back"></div>
+            <div class="mountain mountain-front"></div>
+            <div class="playhead-dot"></div>
+          </div>
+          <div class="prompt-chip"><span>✦</span> Add title and crossfades</div>
+        </div>
+        <div class="timeline-ruler"><span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span></div>
+        <div class="track"><b>V2</b><i class="clip title-clip">OPENING TITLE</i></div>
+        <div class="track"><b>V1</b><i class="clip video-a"></i><i class="transition"></i><i class="clip video-b"></i></div>
+        <div class="track"><b>A1</b><i class="clip audio"><span></span></i></div>
+        <div class="timeline-playhead" aria-hidden="true"></div>
+        <div class="status-row"><span class="status-ok">✓ Validated with Melt</span><span>revision 7c92…</span></div>
+      </div>
+    </section>
+
+    <section class="trust-strip" aria-label="Technology compatibility">
+      <span>Built for</span>
+      <strong>Shotcut</strong>
+      <span class="divider"></span>
+      <strong>Model Context Protocol</strong>
+      <span class="divider"></span>
+      <strong>MLT</strong>
+      <span class="divider"></span>
+      <strong>Python</strong>
+    </section>
+
+    <section class="section" id="features">
+      <div class="section-heading">
+        <p class="eyebrow"><span></span> Capabilities</p>
+        <h2>Real timeline editing.<br>Not fragile GUI automation.</h2>
+        <p>Work directly with editable MLT project files while Shotcut supplies the render engine, codecs, filters, and effects.</p>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card accent">
+          <span class="feature-number">01</span>
+          <h3>Transactional editing</h3>
+          <p>Apply up to 500 related timeline operations as one validated transaction with revision checks, locks, backups, and atomic replacement.</p>
+          <div class="mini-flow"><span>Inspect</span><b>→</b><span>Edit</span><b>→</b><span>Validate</span><b>→</b><span>Save</span></div>
+        </article>
+
+        <article class="feature-card">
+          <span class="feature-number">02</span>
+          <h3>Complete timelines</h3>
+          <p>Add and arrange tracks, media, generators, gaps, transitions, effects, markers, notes, and subtitles through structured MCP tools.</p>
+          <div class="stacked-clips"><i></i><i></i><i></i></div>
+        </article>
+
+        <article class="feature-card">
+          <span class="feature-number">03</span>
+          <h3>Frame-accurate review</h3>
+          <p>Inspect the project structure, validate it with Melt, and render selected frames to PNG before committing to a full export.</p>
+          <div class="frame-grid"><i></i><i></i><i></i></div>
+        </article>
+
+        <article class="feature-card wide">
+          <span class="feature-number">04</span>
+          <div>
+            <h3>Local and recoverable by design</h3>
+            <p>Your video files and projects stay on your machine. Timestamped backups, optimistic concurrency, validation, and atomic output promotion protect every edit and render.</p>
+          </div>
+          <ul class="check-list">
+            <li>Local stdio server</li>
+            <li>No hosted service</li>
+            <li>No runtime packages</li>
+            <li>Editable .mlt output</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section workflow-section">
+      <div class="section-heading compact">
+        <p class="eyebrow"><span></span> How it works</p>
+        <h2>From prompt to editable project.</h2>
+      </div>
+      <ol class="workflow">
+        <li><span>1</span><div><h3>Describe the edit</h3><p>Tell Codex or another MCP client what you want changed.</p></div></li>
+        <li><span>2</span><div><h3>Review structured changes</h3><p>The server edits MLT XML through safe, explicit operations.</p></div></li>
+        <li><span>3</span><div><h3>Preview and render</h3><p>Validate, generate frames, and export using your local Shotcut toolchain.</p></div></li>
+        <li><span>4</span><div><h3>Keep editing in Shotcut</h3><p>Open the native project and make any final visual adjustments.</p></div></li>
+      </ol>
+    </section>
+
+    <section class="section quick-start" id="quick-start">
+      <div class="quick-copy">
+        <p class="eyebrow"><span></span> Quick start</p>
+        <h2>Running in three commands.</h2>
+        <p>Requires Python 3.10 or newer, a compatible Shotcut installation, and an MCP client that supports local stdio servers.</p>
+        <a class="text-link" href="https://github.com/matrodrigs/shotcut-mcp#quick-start">Read the complete installation guide <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="terminal" aria-label="Shotcut MCP installation commands">
+        <div class="terminal-bar"><span></span><span></span><span></span><b>PowerShell</b></div>
+        <pre><code><span class="muted"># Clone the project</span>
+<span class="prompt">›</span> git clone https://github.com/matrodrigs/shotcut-mcp.git
+
+<span class="muted"># Register it with Codex</span>
+<span class="prompt">›</span> codex mcp add shotcut -- python <span class="string">"C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"</span></code></pre>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="section-heading compact">
+        <p class="eyebrow"><span></span> FAQ</p>
+        <h2>Common questions.</h2>
+      </div>
+      <div class="faq-list">
+        <details open>
+          <summary>What is Shotcut MCP?</summary>
+          <p>Shotcut MCP is an independent, open-source Model Context Protocol server for AI-assisted video editing. It exposes structured tools that create and modify Shotcut-compatible MLT project files.</p>
+        </details>
+        <details>
+          <summary>Does it control the Shotcut interface?</summary>
+          <p>No. It edits saved project files directly and uses the local Shotcut, Melt, FFmpeg, and FFprobe executables for validation, previews, and rendering.</p>
+        </details>
+        <details>
+          <summary>Does it upload my videos?</summary>
+          <p>No. The MCP server runs locally over stdio. Media and project files remain on your computer unless your chosen AI client has separate upload behavior.</p>
+        </details>
+        <details>
+          <summary>Is Shotcut MCP free?</summary>
+          <p>Yes. The project is released under the MIT License. Shotcut and the MLT framework are separate open-source projects.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <p class="eyebrow"><span></span> Ready to cut?</p>
+      <h2>Give your AI an actual timeline.</h2>
+      <p>Explore the tools, read the specification, and start editing Shotcut projects locally.</p>
+      <a class="button light" href="https://github.com/matrodrigs/shotcut-mcp">Open Shotcut MCP on GitHub <span aria-hidden="true">↗</span></a>
+    </section>
+  </main>
+
+  <footer>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">S</span><span>Shotcut MCP</span></div>
+    <p>Independent community project. Not affiliated with or endorsed by Shotcut or the MLT project.</p>
+    <div><a href="https://github.com/matrodrigs/shotcut-mcp">GitHub</a><a href="https://github.com/matrodrigs/shotcut-mcp/blob/main/LICENSE">MIT License</a></div>
+  </footer>
+</body>
+</html>
