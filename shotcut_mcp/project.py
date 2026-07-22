@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import unquote, urlparse
 
 from .errors import ConflictError, ToolError
 from .platform import media_duration, probe_media_raw, validate_project_file
@@ -260,11 +261,15 @@ class ProjectDocument:
 
     def id_map(self) -> dict[str, ET.Element]:
         if self._id_cache is None:
-            self._id_cache = {
-                element.get("id", ""): element
-                for element in self.root.iter()
-                if element.get("id")
-            }
+            mapping: dict[str, ET.Element] = {}
+            for element in self.root.iter():
+                element_id = element.get("id")
+                if not element_id:
+                    continue
+                if element_id in mapping:
+                    raise ToolError(f"Duplicate XML id: {element_id}")
+                mapping[element_id] = element
+            self._id_cache = mapping
         return self._id_cache
 
     def profile(self) -> ET.Element:
@@ -290,9 +295,17 @@ class ProjectDocument:
             tractor for tractor in tractors if _property(tractor, "shotcut") == "1"
         ]
         if shotcut:
-            return shotcut[-1]
+            if len(shotcut) == 1:
+                return shotcut[0]
+            raise ToolError(
+                "The project contains multiple tractors marked as the Shotcut timeline."
+            )
+        if len(tractors) == 1:
+            return tractors[0]
         if tractors:
-            return tractors[-1]
+            raise ToolError(
+                "The project contains multiple tractors and does not identify the main one."
+            )
         raise ToolError("The project does not contain a timeline tractor.")
 
     def track_container(self) -> ET.Element:
@@ -346,6 +359,45 @@ class ProjectDocument:
             if candidate not in existing:
                 return candidate
         raise ToolError("Could not generate a unique XML id.")
+
+    def clone_service(self, original: ET.Element) -> ET.Element:
+        clone = copy.deepcopy(original)
+        existing = set(self.id_map())
+        replacements: dict[str, str] = {}
+        for element in clone.iter():
+            old_id = element.get("id")
+            if not old_id:
+                continue
+            prefix = re.sub(r"[^A-Za-z0-9_]+", "_", element.tag) or "service"
+            for _ in range(10000):
+                candidate = f"{prefix}_{uuid.uuid4().hex[:12]}"
+                if candidate not in existing:
+                    break
+            else:
+                raise ToolError("Could not clone the service with unique XML ids.")
+            replacements[old_id] = candidate
+            existing.add(candidate)
+            element.set("id", candidate)
+        for element in clone.iter():
+            for name, value in list(element.attrib.items()):
+                if value in replacements:
+                    element.set(name, replacements[value])
+        return clone
+
+    def isolate_entry_service(self, entry: ET.Element) -> ET.Element:
+        service_id = entry.get("producer", "")
+        original = self.id_map().get(service_id)
+        if original is None:
+            raise ToolError("The clip producer was not found.")
+        references = sum(
+            1 for element in self.root.iter() if element.get("producer") == service_id
+        )
+        if references <= 1:
+            return original
+        clone = self.clone_service(original)
+        self.insert_root_before_main(clone)
+        entry.set("producer", clone.get("id", ""))
+        return clone
 
     def insert_root_before_main(self, element: ET.Element) -> None:
         main = self.main_tractor()
@@ -428,6 +480,25 @@ class ProjectDocument:
         for offset, child in enumerate(sequence):
             playlist.insert(insertion_index + offset, child)
 
+    def remove_unreferenced_services(self, service_ids: set[str]) -> None:
+        removed = False
+        for service_id in service_ids:
+            if not service_id or self.root.get("producer") == service_id:
+                continue
+            if any(
+                element.get("producer") == service_id for element in self.root.iter()
+            ):
+                continue
+            service = self.id_map().get(service_id)
+            if service is None or service not in list(self.root):
+                continue
+            if service.tag not in {"producer", "chain", "tractor"}:
+                continue
+            self.root.remove(service)
+            removed = True
+        if removed:
+            self.invalidate()
+
     def consolidate_blanks(self, sequence: list[ET.Element]) -> list[ET.Element]:
         result: list[ET.Element] = []
         for item in sequence:
@@ -505,8 +576,15 @@ class ProjectDocument:
             end_index = self.split_sequence_at(
                 sequence, frame + self.item_duration(item)
             )
+            removed_service_ids = {
+                node.get("producer", "")
+                for node in sequence[start_index:end_index]
+                if node.tag == "entry"
+            }
             sequence[start_index:end_index] = [item]
         self.replace_sequence(playlist, self.consolidate_blanks(sequence))
+        if mode == "overwrite":
+            self.remove_unreferenced_services(removed_service_ids)
         self.update_main_duration()
 
     def update_main_duration(self) -> None:
@@ -747,6 +825,11 @@ class ProjectDocument:
 
     def remove_track(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
+        removed_service_ids = {
+            item.get("producer", "")
+            for item in self.sequence(track.playlist)
+            if item.tag == "entry"
+        }
         container = self.track_container()
         old_count = len(container.findall("track"))
         container.remove(track.element)
@@ -766,6 +849,7 @@ class ProjectDocument:
         ):
             self.root.remove(track.playlist)
         self.invalidate()
+        self.remove_unreferenced_services(removed_service_ids)
         self.ensure_default_track_transitions()
         self.update_main_duration()
         return {"removed_track": track.name, "track_id": track.id}
@@ -1005,6 +1089,7 @@ class ProjectDocument:
         if self.is_transition(item):
             raise ToolError("Use remove_transition to remove a transition.")
         duration = self.item_duration(item)
+        removed_service_id = item.get("producer", "") if item.tag == "entry" else ""
         ripple = operation.get("ripple", False)
         if not isinstance(ripple, bool):
             raise ToolError("ripple must be a boolean.")
@@ -1012,6 +1097,7 @@ class ProjectDocument:
             [] if ripple else [ET.Element("blank", {"length": str(duration)})]
         )
         self.replace_sequence(track.playlist, self.consolidate_blanks(sequence))
+        self.remove_unreferenced_services({removed_service_id})
         self.update_main_duration()
         return {"removed": True, "duration_frames": duration, "ripple": ripple}
 
@@ -1059,10 +1145,8 @@ class ProjectDocument:
         right.set("in", str(frame_in + offset))
         original = self.id_map().get(item.get("producer", ""))
         if original is not None and original.tag in {"producer", "chain"}:
-            clone = copy.deepcopy(original)
-            clone_id = self.new_id(original.tag)
-            clone.set("id", clone_id)
-            right.set("producer", clone_id)
+            clone = self.clone_service(original)
+            right.set("producer", clone.get("id", ""))
             self.insert_root_before_main(clone)
         sequence[index : index + 1] = [left, right]
         self.replace_sequence(track.playlist, sequence)
@@ -1290,10 +1374,7 @@ class ProjectDocument:
             _, _, entry = self._item(track, operation.get("item_index"))
             if entry.tag != "entry":
                 raise ToolError("The selected item is not a clip.")
-            producer = self.id_map().get(entry.get("producer", ""))
-            if producer is None:
-                raise ToolError("The clip producer was not found.")
-            return producer
+            return self.isolate_entry_service(entry)
         raise ToolError("target must be project, track, or clip.")
 
     def add_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
@@ -1685,7 +1766,16 @@ class ProjectDocument:
             r"^[A-Za-z][A-Za-z0-9+.-]*://", resource
         ) and not resource.startswith("file://"):
             return None
-        cleaned = resource[7:] if resource.startswith("file://") else resource
+        if resource.startswith("file://"):
+            parsed = urlparse(resource)
+            if parsed.netloc:
+                cleaned = f"//{parsed.netloc}{unquote(parsed.path)}"
+            else:
+                cleaned = unquote(parsed.path)
+                if os.name == "nt" and re.match(r"^/[A-Za-z]:/", cleaned):
+                    cleaned = cleaned[1:]
+        else:
+            cleaned = resource
         candidate = Path(cleaned)
         if candidate.is_absolute():
             return candidate.resolve()
@@ -1695,12 +1785,29 @@ class ProjectDocument:
             base = self.path.parent / base
         return (base / candidate).resolve()
 
+    def filter_summaries(self, host: ET.Element) -> list[dict[str, Any]]:
+        return [
+            {
+                "filter_id": child.get("id"),
+                "service": _property(child, "mlt_service"),
+                "shotcut_filter": _property(child, "shotcut:filter"),
+                "enabled": _property(child, "disable") != "1",
+                "properties": _properties(child),
+            }
+            for child in host.findall("filter")
+        ]
+
     def snapshot(self) -> dict[str, Any]:
         resources: list[dict[str, Any]] = []
         seen: set[str] = set()
         for element in [*self.root.findall("producer"), *self.root.findall("chain")]:
             resource = _property(element, "resource")
-            if not resource or resource in seen:
+            service = _property(element, "mlt_service")
+            if (
+                not resource
+                or resource in seen
+                or service in {"color", "colour", "noise", "tone"}
+            ):
                 continue
             seen.add(resource)
             path = self._resource_path(resource)
@@ -1741,15 +1848,7 @@ class ProjectDocument:
                         caption=_property(producer, "shotcut:caption")
                         if producer is not None
                         else None,
-                        filters=[
-                            {
-                                "filter_id": child.get("id"),
-                                "service": _property(child, "mlt_service"),
-                                "shotcut_filter": _property(child, "shotcut:filter"),
-                                "enabled": _property(child, "disable") != "1",
-                            }
-                            for child in producer.findall("filter")
-                        ]
+                        filters=self.filter_summaries(producer)
                         if producer is not None
                         else [],
                     )
@@ -1763,15 +1862,7 @@ class ProjectDocument:
                     "xml_index": track.xml_index,
                     "duration_frames": cursor,
                     "properties": _properties(track.playlist),
-                    "filters": [
-                        {
-                            "filter_id": child.get("id"),
-                            "service": _property(child, "mlt_service"),
-                            "shotcut_filter": _property(child, "shotcut:filter"),
-                            "enabled": _property(child, "disable") != "1",
-                        }
-                        for child in track.playlist.findall("filter")
-                    ],
+                    "filters": self.filter_summaries(track.playlist),
                     "items": items,
                 }
             )
@@ -1811,6 +1902,15 @@ class ProjectDocument:
                 (track["duration_frames"] for track in tracks), default=0
             ),
             "tracks": tracks,
+            "filters": self.filter_summaries(main),
+            "links": [
+                {
+                    "link_id": link.get("id"),
+                    "service": _property(link, "mlt_service"),
+                    "properties": _properties(link),
+                }
+                for link in self.root.findall(".//link")
+            ],
             "markers": markers,
             "subtitles": subtitles,
             "resources": resources,
@@ -1826,6 +1926,7 @@ class ProjectDocument:
                     "tractor",
                     "filter",
                     "transition",
+                    "link",
                 )
             },
         }
