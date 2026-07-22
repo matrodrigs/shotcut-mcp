@@ -38,7 +38,7 @@ provides Melt, FFmpeg, FFprobe, codecs, filters, and render services.
 - **Native project output:** the result remains an editable `.mlt` project that opens in Shotcut.
 - **Local by default:** the stdio server has no hosted service and uses only Python's standard
   library at runtime.
-- **Discoverable effects:** filters, transitions, and consumers come from the user's installed MLT
+- **Discoverable effects:** filters, transitions, consumers, and links come from the user's installed MLT
   build instead of a fixed cloud catalog.
 
 ## Features
@@ -51,9 +51,9 @@ provides Melt, FFmpeg, FFprobe, codecs, filters, and render services.
 | Effects | Add, update, and remove MLT filters on a clip, track, or project; native keyframe property strings are supported |
 | Generators | Color, dynamic text, tone, and noise |
 | Project data | Profiles, notes, markers, subtitles, media relinking, and unknown XML preservation |
-| Review | Project inspection, MLT validation, and frame-accurate PNG previews |
-| Export | Monitored background renders for H.264, HEVC, AV1, ProRes, DNxHD, FLAC, and MP3 |
-| Recovery | Timestamped backups, revision conflict detection, backup listing, and validated restore |
+| Review | Compatibility doctor, inspection, read-only edit plans/diffs, MLT validation, and atomic PNG previews |
+| Export | Restart-resilient supervised renders for H.264, HEVC, AV1, ProRes, DNxHD, FLAC, and MP3 |
+| Recovery | Per-project isolated backups, revision conflict detection, backup listing, and validated restore |
 
 ## Quick start
 
@@ -67,9 +67,16 @@ The current compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The
 is exercised on Windows; executable discovery also supports binaries available on `PATH` and common
 macOS locations.
 
+The stdio server negotiates MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`.
+Legacy clients receive only fields defined by their negotiated schema; structured tool output is
+included from `2025-06-18` onward.
+
 The MCP performs a short, cached MLT repository preflight before validation, preview and render
 operations. This absorbs one-time cold module loading after a Windows install or portable
 extraction without disabling any MLT services or changing the Shotcut environment.
+`shotcut_doctor` separately verifies Shotcut/MLT versions and both RNNoise service forms because a
+successful repository preflight alone does not prove that RNNoise loaded. On MLT 7.40, the `link`
+form is preferred because it avoids the audio delay documented by MLT.
 
 ### 1. Clone the repository
 
@@ -105,7 +112,8 @@ Ask your MCP client:
 > Check whether Shotcut MCP is ready and report the detected Shotcut, Melt, FFmpeg, and FFprobe
 > versions.
 
-The client should call `shotcut_status` and return the discovered executable paths and versions.
+The client should call `shotcut_status`, then `shotcut_doctor`, and return the discovered paths,
+versions, repository state, RNNoise state, and active path policy.
 
 ## Example prompts
 
@@ -126,13 +134,16 @@ then render an H.264 web export. Monitor the job until it completes.
 
 ## Recommended workflow
 
-1. Call `shotcut_status` to verify the local toolchain.
+1. Call `shotcut_status` and `shotcut_doctor` to verify the local toolchain and compatibility.
 2. Create a project or call `inspect_project` to obtain its SHA-256 `revision`.
 3. Read `shotcut_capabilities` for operation parameters.
-4. Submit related changes together through `edit_project`, passing the revision as
+4. Optionally call `plan_project_edit` to validate the candidate and review its snapshot/XML diff
+   without changing the project.
+5. Submit related changes together through `edit_project`, passing the revision as
    `expected_revision`.
-5. Generate one or more previews and review the structured project snapshot.
-6. Start a render and poll `render_status` until completion.
+6. Generate one or more previews and review the structured project snapshot.
+7. Start a render. The supervisor promotes it without polling; use `render_status` only to monitor
+   progress/logs or `cancel_render` to stop it, including after the MCP server restarts.
 
 Do not save the same project from the Shotcut GUI while the MCP is editing it. For manual visual
 adjustments, let the MCP finish a batch, save in Shotcut, and inspect the new revision before
@@ -146,8 +157,9 @@ flowchart LR
     B --> C["Apply batch in memory"]
     C --> D["Write temporary MLT XML"]
     D --> E["Validate with Melt"]
-    E --> F["Create timestamped backup"]
-    F --> G["Atomic replace"]
+    E --> F["Recheck on-disk revision"]
+    F --> G["Create isolated backup"]
+    G --> H["Atomic replace"]
 ```
 
 Every project edit uses the following safeguards:
@@ -155,33 +167,36 @@ Every project edit uses the following safeguards:
 - Optimistic concurrency with a SHA-256 project revision
 - A per-project `.shotcut-mcp.lock` file
 - MLT validation of the temporary project before replacement
-- Timestamped backups in `.shotcut-mcp/backups`
+- Per-project backup namespaces below `.shotcut-mcp/backups`
 - Atomic replacement only after validation succeeds
 - Retention of the 20 most recent backups per project
 - Preservation of unknown XML elements, attributes, and properties
 - Rejection of ambiguous third-party transition layouts and ambiguous basename relinks
 
-Existing render outputs are also protected: a new render is written to a temporary sibling file
-and promoted atomically only after Melt finishes successfully.
+Existing preview and render outputs are also protected: output is written to a temporary sibling,
+the target is checked again for concurrent changes, and promotion is atomic. A dedicated render
+supervisor owns completion and cancellation independently of the MCP stdio process.
 
 ## MCP tools
 
 | Tool | Purpose |
 | --- | --- |
 | `shotcut_status` | Discover Shotcut, Melt, FFmpeg, and FFprobe and report versions |
+| `shotcut_doctor` | Verify Shotcut 26.6.25, MLT 7.40.x, repository startup, RNNoise, and path policy |
 | `shotcut_capabilities` | Return edit operations, render presets, compatibility, and workflow guidance |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `inspect_project` | Return revision, profile, tracks, items, filters, markers, subtitles, and resources |
+| `plan_project_edit` | Validate operations and preview their snapshot/XML diff without changing the project |
 | `create_project` | Create a Shotcut-compatible multitrack MLT project |
 | `edit_project` | Apply up to 500 timeline operations in one validated transaction |
-| `list_mlt_services` | List locally available MLT filters, transitions, producers, or consumers |
+| `list_mlt_services` | List locally available MLT filters, transitions, producers, consumers, or links |
 | `describe_mlt_service` | Return metadata for one installed MLT service |
 | `validate_project` | Parse the project and validate it with Melt |
 | `render_preview` | Render a selected frame to PNG |
 | `open_in_shotcut` | Open a project or media path in the Shotcut GUI |
 | `start_render` | Start a monitored background render |
 | `render_status` | Return render state, progress, output information, and log tail |
-| `cancel_render` | Stop a render started in the current MCP session |
+| `cancel_render` | Cancel a supervised render, including after an MCP server restart |
 | `list_project_backups` | List retained project backups and revisions |
 | `restore_project_backup` | Validate and atomically restore a selected backup |
 
@@ -243,34 +258,49 @@ Built-in presets are provided for common delivery and intermediate formats:
 - `audio-flac`
 - `audio-mp3`
 
-Advanced callers can supply validated native `avformat` consumer properties. Codec and hardware
-availability still depend on the local Shotcut/FFmpeg build.
+Advanced callers can supply native `avformat` consumer properties from a safe single-file
+allowlist. Arbitrary properties, sidecar formats, and path-bearing options are rejected unless an
+administrator explicitly enables them. Codec and hardware availability still depend on the local
+Shotcut/FFmpeg build.
 
 ## Configuration
 
 Common Shotcut installations are detected automatically. Override discovery when necessary:
 
-| Environment variable | Executable |
+| Environment variable | Purpose |
 | --- | --- |
 | `SHOTCUT_PATH` | Shotcut application |
 | `SHOTCUT_MELT_PATH` | Melt executable |
 | `SHOTCUT_FFMPEG_PATH` | FFmpeg executable |
 | `SHOTCUT_FFPROBE_PATH` | FFprobe executable |
+| `SHOTCUT_MCP_ALLOWED_ROOTS` | Optional `PATH`-separator list of canonical roots available to MCP tools |
+| `SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS` | Set to `1` to reject relative tool paths |
+| `SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES` | Set to `1` to allow HTTP/RTSP/etc. resources embedded in projects |
+| `SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES` | Set to `1` to allow arbitrary consumer properties and sidecar formats |
+| `SHOTCUT_MCP_MAX_WORKERS` | Concurrent MCP tool requests, clamped to 1–8 (default 4) |
+
+Network resources and unsafe consumer properties are denied by default. These variables are
+administrator policies: tools cannot override them per request. `shotcut_status` and
+`shotcut_doctor` report the active policy.
 
 ## Project structure
 
 ```text
 shotcut-mcp/
 ├── .codex-plugin/plugin.json   # Codex plugin manifest
-├── .mcp.json                   # Bundled MCP server configuration
-├── scripts/                    # Dependency-free stdio entry point
+├── .github/workflows/          # Cross-platform CI and verified registry publishing
+├── scripts/                    # Stdio entry point and release metadata checks
 ├── shotcut_mcp/
-│   ├── platform.py             # Executable discovery and MLT integration
-│   ├── project.py              # Transactional MLT project model
-│   ├── render.py               # Background render jobs
-│   ├── server.py               # JSON-RPC/MCP stdio transport
+│   ├── platform.py             # Executable discovery, policies, MLT integration
+│   ├── project.py              # Structure-preserving MLT project model
+│   ├── protocol.py             # Input-schema validation and cancellation context
+│   ├── render.py               # Public render-job interface
+│   ├── render_jobs.py          # Durable private job store
+│   ├── render_worker.py        # Restart-resilient render supervisor
+│   ├── server.py               # Concurrent JSON-RPC/MCP stdio transport
+│   ├── storage.py              # Locks, backups, and atomic output transactions
 │   └── tools.py                # Tool schemas and handlers
-├── tests/                      # Unit and real Shotcut integration tests
+├── tests/                      # Focused unit and real Shotcut integration tests
 └── docs/spec.md                # Behavioral and compatibility specification
 ```
 
@@ -279,9 +309,9 @@ shotcut-mcp/
 Runtime code uses only the Python standard library. Development checks use Ruff and Mypy.
 
 ```bash
-python -m ruff format --check shotcut_mcp scripts tests
-python -m ruff check shotcut_mcp scripts tests
-python -m mypy shotcut_mcp scripts tests
+python -m ruff format --check .
+python -m ruff check .
+python -m mypy
 python -m unittest discover -s tests -v
 ```
 
@@ -303,8 +333,10 @@ SHOTCUT_MCP_INTEGRATION=1 python -m unittest discover -s tests -v
 The integration test creates media, builds a two-clip timeline with a crossfade and title track,
 validates it through Melt, renders a PNG preview, and exports H.264 video.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. For bugs or feature requests,
-use [GitHub Issues](https://github.com/matrodrigs/shotcut-mcp/issues).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [CHANGELOG.md](CHANGELOG.md)
+for release changes. For bugs or feature requests, use
+[GitHub Issues](https://github.com/matrodrigs/shotcut-mcp/issues); report vulnerabilities through
+the private process in [SECURITY.md](SECURITY.md).
 
 ## Limitations
 
@@ -313,8 +345,8 @@ use [GitHub Issues](https://github.com/matrodrigs/shotcut-mcp/issues).
 - Third-party filters, GPU/OpenGL services, codecs, and fonts vary by Shotcut installation.
 - Changing project FPS preserves recognized timeline and marker frame numbers; it does not
   automatically retime the creative edit.
-- A render detached by an MCP server restart can continue at the OS level, but it can no longer be
-  cancelled safely by the restarted server.
+- If the dedicated render supervisor itself is forcibly killed while Melt survives, the job is
+  reported as `orphaned` and its temporary output is retained rather than guessed at or promoted.
 
 ## License
 

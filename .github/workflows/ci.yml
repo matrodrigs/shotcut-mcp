@@ -50,4 +50,3 @@ jobs:
         run: ruff format --check .
       - name: Mypy
         run: mypy
-

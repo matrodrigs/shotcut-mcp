@@ -145,7 +145,7 @@
     <div class="compatibility-bar" aria-label="Technology compatibility">
       <div class="shell">
         <span>Works with saved Shotcut projects</span>
-        <span>MLT 7.37</span>
+        <span>MLT 7.40</span>
         <span>Python 3.10+</span>
         <span>Windows, macOS, and Linux</span>
       </div>
@@ -169,12 +169,12 @@
           </li>
           <li>
             <span class="step-number">02</span>
-            <div><h3>Apply one explicit transaction</h3><p>Group related timeline operations together and reject the edit if the project changed underneath it.</p></div>
+            <div><h3>Plan, then apply one transaction</h3><p>Preview a validated XML diff when useful, group related operations, and reject the edit if the project changed underneath it.</p></div>
             <code>edit_project × 1…500</code>
           </li>
           <li>
             <span class="step-number">03</span>
-            <div><h3>Validate before promotion</h3><p>Write to a temporary project, validate with Melt, create a backup, then atomically replace the original.</p></div>
+            <div><h3>Validate and recheck</h3><p>Validate the temporary project with Melt, recheck the on-disk revision, create an isolated backup, then atomically replace the original.</p></div>
             <code>validate → backup → save</code>
           </li>
           <li>
@@ -230,6 +230,7 @@
             <h3>Inspect and recover</h3>
             <ul>
               <li>Structured project snapshots</li>
+              <li>Validated read-only edit plans and XML diffs</li>
               <li>Frame-accurate PNG previews</li>
               <li>Revision history and validated restore</li>
             </ul>
@@ -239,13 +240,14 @@
             <h3>Validate and render</h3>
             <ul>
               <li>Installed MLT service discovery</li>
-              <li>Monitored background renders</li>
+              <li>Compatibility and RNNoise doctor</li>
+              <li>Restart-resilient supervised renders</li>
               <li>H.264, HEVC, AV1, ProRes, and more</li>
             </ul>
           </article>
         </div>
 
-        <a class="text-link tools-link" href="https://github.com/matrodrigs/shotcut-mcp#mcp-tools">See all 16 MCP tools <span aria-hidden="true">→</span></a>
+        <a class="text-link tools-link" href="https://github.com/matrodrigs/shotcut-mcp#mcp-tools">See all 18 MCP tools <span aria-hidden="true">→</span></a>
       </div>
     </section>
 
@@ -294,7 +296,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
         </div>
 
         <div class="compatibility-note">
-          <p><strong>Current compatibility target:</strong> Shotcut 26.2.26 with MLT 7.37.0.</p>
+          <p><strong>Current compatibility target:</strong> Shotcut 26.6.25 with MLT 7.40.0.</p>
           <p>Saved <code>.mlt</code> projects only. Unsaved GUI state remains outside the server boundary.</p>
         </div>
       </div>
@@ -313,7 +315,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
           </details>
           <details>
             <summary>Are my videos uploaded anywhere?</summary>
-            <p>No. The server runs locally over stdio. Media and project files stay on your computer unless your chosen AI client has separate upload behavior.</p>
+            <p>No. The server runs locally over stdio. Media and project files stay on your computer unless your chosen AI client has separate upload behavior. Network resources embedded in projects are denied by default.</p>
           </details>
           <details>
             <summary>Can I keep editing the result in Shotcut?</summary>
