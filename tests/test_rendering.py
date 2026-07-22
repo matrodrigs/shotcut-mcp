@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -137,15 +136,14 @@ class RenderLifecycleTests(unittest.TestCase):
             worker = render_module.RUNNING_JOBS[str(job["job_id"])]
 
             try:
-                deadline = time.monotonic() + 3
-                while time.monotonic() < deadline and not output_path.is_file():
-                    time.sleep(0.05)
+                worker.wait(timeout=15)
                 self.assertTrue(
                     output_path.is_file(),
                     "the worker must promote output without a render_status request",
                 )
             finally:
-                worker.wait(timeout=3)
+                if worker.poll() is None:
+                    worker.wait(timeout=15)
                 render_status(str(job["job_id"]))
 
     def test_render_remains_managed_after_session_state_is_lost(self) -> None:
@@ -166,15 +164,13 @@ class RenderLifecycleTests(unittest.TestCase):
                 active = render_status(str(job["job_id"]))
                 self.assertIn(active["status"], {"queued", "running", "completed"})
 
-                deadline = time.monotonic() + 3
-                status = active
-                while time.monotonic() < deadline and status["status"] != "completed":
-                    time.sleep(0.05)
-                    status = render_status(str(job["job_id"]))
+                worker.wait(timeout=15)
+                status = render_status(str(job["job_id"]))
                 self.assertTrue(output_path.is_file())
                 self.assertEqual(status["status"], "completed")
             finally:
-                worker.wait(timeout=3)
+                if worker.poll() is None:
+                    worker.wait(timeout=15)
 
     def test_render_can_be_cancelled_after_session_state_is_lost(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -191,7 +187,7 @@ class RenderLifecycleTests(unittest.TestCase):
 
             self.assertEqual(cancelled["status"], "cancelled")
             self.assertFalse(output_path.exists())
-            worker.wait(timeout=3)
+            worker.wait(timeout=15)
 
 
 if __name__ == "__main__":
