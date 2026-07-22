@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import render_preview
+from shotcut_mcp.render import start_render
 
 
 class PreviewSafetyTests(unittest.TestCase):
@@ -72,6 +73,27 @@ class PreviewSafetyTests(unittest.TestCase):
 
             self.assertEqual(output_path.read_bytes(), b"existing")
             self.assertEqual(list(Path(directory).glob("*.tmp.png")), [])
+
+
+class RenderPropertySafetyTests(unittest.TestCase):
+    def test_sidecar_consumer_properties_are_rejected_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "project.mlt"
+            output_path = Path(directory) / "output.mp4"
+            escaped_path = Path(directory) / "escaped-%03d.ts"
+            project_path.write_text("<mlt/>\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ToolError, "safe allowlist"):
+                start_render(
+                    {
+                        "project_path": str(project_path),
+                        "output_path": str(output_path),
+                        "consumer_properties": {
+                            "f": "hls",
+                            "hls_segment_filename": str(escaped_path),
+                        },
+                    }
+                )
 
 
 if __name__ == "__main__":

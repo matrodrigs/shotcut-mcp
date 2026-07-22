@@ -73,6 +73,51 @@ RENDER_PRESETS: dict[str, dict[str, str]] = {
     "audio-mp3": {"f": "mp3", "vn": "1", "acodec": "libmp3lame", "ab": "192k"},
 }
 
+SAFE_CONSUMER_PROPERTIES = {
+    "ab",
+    "acodec",
+    "an",
+    "ar",
+    "aspect",
+    "bf",
+    "channels",
+    "color_primaries",
+    "color_range",
+    "color_trc",
+    "colorspace",
+    "crf",
+    "f",
+    "g",
+    "height",
+    "movflags",
+    "pix_fmt",
+    "preset",
+    "progressive",
+    "r",
+    "rescale",
+    "strict",
+    "threads",
+    "top_field_first",
+    "vb",
+    "vcodec",
+    "video_track_timescale",
+    "vn",
+    "width",
+}
+SAFE_SINGLE_FILE_FORMATS = {
+    "avi",
+    "flac",
+    "matroska",
+    "mov",
+    "mp3",
+    "mp4",
+    "mpegts",
+    "mxf",
+    "ogg",
+    "wav",
+    "webm",
+}
+
 
 def _metadata_path(job_id: str) -> Path:
     if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
@@ -110,6 +155,9 @@ def _consumer_properties(value: Any) -> dict[str, str]:
             "consumer_properties must be an object with at most 50 options."
         )
     result: dict[str, str] = {}
+    unsafe_allowed = os.environ.get(
+        "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES", ""
+    ).lower() in {"1", "true", "yes"}
     for key, raw in value.items():
         if not isinstance(key, str) or not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_.:-]*", key
@@ -117,6 +165,12 @@ def _consumer_properties(value: Any) -> dict[str, str]:
             raise ToolError(f"Invalid MLT property name: {key!r}")
         if key in {"target", "resource"}:
             raise ToolError(f"The {key} property is controlled by the server.")
+        if not unsafe_allowed and key not in SAFE_CONSUMER_PROPERTIES:
+            raise ToolError(
+                f"consumer_properties.{key} is not in the safe allowlist. "
+                "An administrator can opt into arbitrary MLT properties with "
+                "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES=1."
+            )
         if isinstance(raw, bool):
             text = "1" if raw else "0"
         elif isinstance(raw, (str, int, float)):
@@ -125,6 +179,15 @@ def _consumer_properties(value: Any) -> dict[str, str]:
             raise ToolError(f"Invalid value for consumer_properties.{key}.")
         if len(text) > 500:
             raise ToolError(f"consumer_properties.{key} exceeds 500 characters.")
+        if (
+            not unsafe_allowed
+            and key == "f"
+            and text.lower() not in SAFE_SINGLE_FILE_FORMATS
+        ):
+            raise ToolError(
+                f"consumer_properties.f={text!r} may create sidecar files and is "
+                "not in the safe allowlist."
+            )
         result[key] = text
     return result
 
