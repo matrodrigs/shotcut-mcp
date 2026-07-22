@@ -19,9 +19,17 @@ from .storage import OutputTransaction
 
 _PROBE_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _PROBE_LOCK = threading.Lock()
-_SERVICE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
-_MELT_READY_CACHE: set[tuple[str, int, int]] = set()
+_SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
+_SERVICE_LOCK = threading.Lock()
+_MELT_READY_CACHE: set[tuple[object, ...]] = set()
 _MELT_READY_LOCK = threading.Lock()
+MLT_ENVIRONMENT_KEYS = (
+    "MLT_DATA",
+    "MLT_PRESETS_PATH",
+    "MLT_PROFILES_PATH",
+    "MLT_REPOSITORY",
+    "MLT_REPOSITORY_DENY",
+)
 
 
 @dataclass(frozen=True)
@@ -35,7 +43,54 @@ class Executables:
 def expand_path(value: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ToolError("The path must be a non-empty string.")
-    return Path(os.path.expandvars(value)).expanduser().resolve()
+    expanded = Path(os.path.expandvars(value)).expanduser()
+    if (
+        os.environ.get("SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS", "").lower()
+        in {"1", "true", "yes"}
+        and not expanded.is_absolute()
+    ):
+        raise ToolError("Relative paths are disabled by SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS.")
+    resolved = expanded.resolve()
+    configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
+    if configured_roots:
+        roots = [
+            Path(os.path.expandvars(item)).expanduser().resolve()
+            for item in configured_roots.split(os.pathsep)
+            if item.strip()
+        ]
+        candidate = os.path.normcase(str(resolved))
+        allowed = False
+        for root in roots:
+            try:
+                allowed = os.path.commonpath(
+                    [candidate, os.path.normcase(str(root))]
+                ) == os.path.normcase(str(root))
+            except ValueError:
+                allowed = False
+            if allowed:
+                break
+        if not allowed:
+            raise ToolError(
+                f"Path is outside SHOTCUT_MCP_ALLOWED_ROOTS allowed roots: {resolved}"
+            )
+    return resolved
+
+
+def path_policy() -> dict[str, Any]:
+    configured = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
+    return {
+        "allowed_roots": [item for item in configured.split(os.pathsep) if item]
+        if configured
+        else None,
+        "require_absolute_paths": os.environ.get(
+            "SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS", ""
+        ).lower()
+        in {"1", "true", "yes"},
+        "unsafe_consumer_properties": os.environ.get(
+            "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES", ""
+        ).lower()
+        in {"1", "true", "yes"},
+    }
 
 
 def _which(name: str) -> Path | None:
@@ -127,6 +182,15 @@ def require_executable(path: Path | None, label: str, env_name: str) -> Path:
     return path
 
 
+def _runtime_identity(executable: Path) -> tuple[object, ...]:
+    try:
+        stat = executable.stat()
+    except OSError as exc:
+        raise ToolError(f"Could not inspect executable {executable}: {exc}") from exc
+    environment = tuple((key, os.environ.get(key)) for key in MLT_ENVIRONMENT_KEYS)
+    return (str(executable), stat.st_mtime_ns, stat.st_size, environment)
+
+
 def run_capture(
     command: list[str], timeout: int = 30
 ) -> subprocess.CompletedProcess[str]:
@@ -159,8 +223,7 @@ def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> Non
     executable identity so normal operations pay no repeated startup probe.
     """
 
-    stat = melt.stat()
-    cache_key = (str(melt), stat.st_mtime_ns, stat.st_size)
+    cache_key = _runtime_identity(melt)
     with _MELT_READY_LOCK:
         if cache_key in _MELT_READY_CACHE:
             return
@@ -198,8 +261,27 @@ def version_line(executable: Path | None, args: list[str]) -> str | None:
     return output.splitlines()[0] if output else None
 
 
+def _safe_version(
+    executable: Path | None, args: list[str]
+) -> tuple[str | None, str | None]:
+    try:
+        return version_line(executable, args), None
+    except ToolError as exc:
+        return None, str(exc)
+
+
 def status() -> dict[str, Any]:
     executables = discover_executables()
+    shotcut_version, shotcut_version_error = _safe_version(
+        executables.shotcut, ["--version"]
+    )
+    melt_version, melt_version_error = _safe_version(executables.melt, ["--version"])
+    ffprobe_version, ffprobe_version_error = _safe_version(
+        executables.ffprobe, ["-version"]
+    )
+    ffmpeg_version, ffmpeg_version_error = _safe_version(
+        executables.ffmpeg, ["-version"]
+    )
     repository_ready = False
     repository_error = None
     if executables.melt is not None:
@@ -214,23 +296,28 @@ def status() -> dict[str, Any]:
         "shotcut": {
             "found": executables.shotcut is not None,
             "path": str(executables.shotcut) if executables.shotcut else None,
+            "version": shotcut_version,
+            "version_error": shotcut_version_error,
         },
         "melt": {
             "found": executables.melt is not None,
             "path": str(executables.melt) if executables.melt else None,
-            "version": version_line(executables.melt, ["--version"]),
+            "version": melt_version,
+            "version_error": melt_version_error,
             "repository_ready": repository_ready,
             "repository_error": repository_error,
         },
         "ffprobe": {
             "found": executables.ffprobe is not None,
             "path": str(executables.ffprobe) if executables.ffprobe else None,
-            "version": version_line(executables.ffprobe, ["-version"]),
+            "version": ffprobe_version,
+            "version_error": ffprobe_version_error,
         },
         "ffmpeg": {
             "found": executables.ffmpeg is not None,
             "path": str(executables.ffmpeg) if executables.ffmpeg else None,
-            "version": version_line(executables.ffmpeg, ["-version"]),
+            "version": ffmpeg_version,
+            "version_error": ffmpeg_version_error,
         },
         "environment_overrides": {
             key: os.environ.get(key)
@@ -239,8 +326,13 @@ def status() -> dict[str, Any]:
                 "SHOTCUT_MELT_PATH",
                 "SHOTCUT_FFPROBE_PATH",
                 "SHOTCUT_FFMPEG_PATH",
+                "SHOTCUT_MCP_ALLOWED_ROOTS",
+                "SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS",
+                "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES",
+                *MLT_ENVIRONMENT_KEYS,
             )
         },
+        "path_policy": path_policy(),
     }
 
 
@@ -378,36 +470,117 @@ def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, An
 
 
 def list_services(kind: str) -> dict[str, Any]:
-    if kind not in {"filter", "transition", "producer", "consumer"}:
-        raise ToolError("kind must be filter, transition, producer, or consumer.")
+    if kind not in {"filter", "transition", "producer", "consumer", "link"}:
+        raise ToolError("kind must be filter, transition, producer, consumer, or link.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
-    cache_key = (str(melt), kind)
-    if cache_key in _SERVICE_CACHE:
-        return _SERVICE_CACHE[cache_key]
+    cache_key = (*_runtime_identity(melt), kind)
+    with _SERVICE_LOCK:
+        cached = _SERVICE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     result = run_capture([str(melt), "-query", f"{kind}s"], timeout=30)
+    if result.returncode:
+        detail = (result.stderr.strip() or result.stdout.strip())[-1200:]
+        raise ToolError(f"MLT service query failed: {detail or result.returncode}")
     names = sorted(
         set(re.findall(r"^\s*-\s+([^\s#]+)\s*$", result.stdout, re.MULTILINE))
     )
     payload = {"kind": kind, "count": len(names), "services": names}
-    _SERVICE_CACHE[cache_key] = payload
+    with _SERVICE_LOCK:
+        if len(_SERVICE_CACHE) > 64:
+            _SERVICE_CACHE.clear()
+        _SERVICE_CACHE[cache_key] = payload
     return payload
 
 
 def describe_service(kind: str, name: str) -> dict[str, Any]:
-    if kind not in {"filter", "transition", "producer", "consumer"}:
-        raise ToolError("kind must be filter, transition, producer, or consumer.")
+    if kind not in {"filter", "transition", "producer", "consumer", "link"}:
+        raise ToolError("kind must be filter, transition, producer, consumer, or link.")
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:+-]+", name):
         raise ToolError("Invalid MLT service name.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
     result = run_capture([str(melt), "-query", f"{kind}={name}"], timeout=30)
     text = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    missing = bool(re.search(r"\bNo metadata for\b", text, re.I))
     return {
         "kind": kind,
         "name": name,
-        "available": result.returncode == 0 and bool(text),
+        "available": result.returncode == 0 and bool(text) and not missing,
         "metadata": text[-20000:] or None,
+    }
+
+
+def _extract_version(value: str | None) -> tuple[int, ...] | None:
+    if not value:
+        return None
+    match = re.search(r"\b(\d+)\.(\d+)(?:\.(\d+))?\b", value)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups() if part is not None)
+
+
+def compatibility_doctor() -> dict[str, Any]:
+    executables = discover_executables()
+    repository_error: str | None = None
+    repository_ready = False
+    if executables.melt is not None:
+        try:
+            ensure_melt_ready(executables.melt, attempts=3, timeout=5)
+            repository_ready = True
+        except ToolError as exc:
+            repository_error = str(exc)
+
+    shotcut_version, shotcut_error = _safe_version(
+        executables.shotcut, ["--version"]
+    )
+    mlt_version, mlt_error = _safe_version(executables.melt, ["--version"])
+    shotcut_number = _extract_version(shotcut_version)
+    mlt_number = _extract_version(mlt_version)
+
+    rnnoise: dict[str, Any] = {}
+    for kind in ("link", "filter"):
+        try:
+            rnnoise[kind] = describe_service(kind, "rnnoise")
+        except ToolError as exc:
+            rnnoise[kind] = {"available": False, "error": str(exc)}
+    rnnoise_available = any(
+        bool(item.get("available")) for item in rnnoise.values()
+    )
+
+    checks = {
+        "shotcut": {
+            "passed": shotcut_number == (26, 6, 25),
+            "expected": "26.6.25",
+            "detected": shotcut_version,
+            "error": shotcut_error,
+        },
+        "mlt": {
+            "passed": mlt_number is not None and mlt_number[:2] == (7, 40),
+            "expected": "7.40.x",
+            "detected": mlt_version,
+            "error": mlt_error,
+        },
+        "repository": {
+            "passed": repository_ready,
+            "error": repository_error,
+        },
+        "rnnoise": {
+            "passed": rnnoise_available,
+            "preferred_service": "link",
+            "services": rnnoise,
+            "note": (
+                "RNNoise is checked independently because a successful consumers "
+                "preflight does not prove that the RNNoise module loaded."
+            ),
+        },
+    }
+    return {
+        "compatible": all(check["passed"] for check in checks.values()),
+        "validated_stack": {"shotcut": "26.6.25", "mlt": "7.40.x"},
+        "checks": checks,
+        "path_policy": path_policy(),
     }
 
 

@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .errors import ToolError
 from .platform import (
+    compatibility_doctor,
     describe_service,
     expand_path,
     list_services,
@@ -162,11 +163,12 @@ def capabilities(_: dict[str, Any]) -> dict[str, Any]:
         "operations": OPERATION_CATALOG,
         "render_presets": RENDER_PRESETS,
         "workflow": [
+            "run shotcut_doctor after installing or upgrading Shotcut",
             "inspect_project to obtain revision and current item indexes",
             "optionally list_mlt_services/describe_mlt_service",
             "edit_project with expected_revision and one batch of operations",
             "render_preview or validate_project",
-            "start_render and poll render_status",
+            "start_render; render_status is optional for monitoring and logs",
         ],
     }
 
@@ -241,6 +243,20 @@ TOOLS: list[dict[str, Any]] = [
         "name": "shotcut_status",
         "title": "Check Shotcut status",
         "description": "Locates Shotcut, Melt, ffprobe, and ffmpeg and reports their versions.",
+        "inputSchema": _object_schema({}),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "shotcut_doctor",
+        "title": "Check Shotcut compatibility",
+        "description": (
+            "Verifies the validated Shotcut/MLT versions, repository startup, "
+            "RNNoise link/filter availability, and active path policy."
+        ),
         "inputSchema": _object_schema({}),
         "annotations": {
             "readOnlyHint": True,
@@ -344,12 +360,12 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "list_mlt_services",
         "title": "List MLT services",
-        "description": "Lists filters, transitions, producers, or consumers installed with Shotcut.",
+        "description": "Lists filters, transitions, producers, consumers, or links installed with Shotcut.",
         "inputSchema": _object_schema(
             {
                 "kind": {
                     "type": "string",
-                    "enum": ["filter", "transition", "producer", "consumer"],
+                    "enum": ["filter", "transition", "producer", "consumer", "link"],
                 }
             },
             ["kind"],
@@ -368,7 +384,7 @@ TOOLS: list[dict[str, Any]] = [
             {
                 "kind": {
                     "type": "string",
-                    "enum": ["filter", "transition", "producer", "consumer"],
+                    "enum": ["filter", "transition", "producer", "consumer", "link"],
                 },
                 "name": {"type": "string"},
             },
@@ -476,7 +492,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "cancel_render",
         "title": "Cancel render",
-        "description": "Stops an active render started in this MCP session.",
+        "description": "Requests cancellation of an active supervised render, including after an MCP restart.",
         "inputSchema": _object_schema({"job_id": {"type": "string"}}, ["job_id"]),
         "annotations": {
             "readOnlyHint": False,
@@ -521,6 +537,7 @@ TOOLS: list[dict[str, Any]] = [
 
 HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "shotcut_status": lambda _: status(),
+    "shotcut_doctor": lambda _: compatibility_doctor(),
     "shotcut_capabilities": capabilities,
     "probe_media": lambda arguments: summarize_media(
         expand_path(arguments.get("path", ""))
