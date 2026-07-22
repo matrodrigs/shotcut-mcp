@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +10,8 @@ from unittest.mock import patch
 
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import render_preview
-from shotcut_mcp.render import start_render
+from shotcut_mcp import render as render_module
+from shotcut_mcp.render import cancel_render, render_status, start_render
 
 
 class PreviewSafetyTests(unittest.TestCase):
@@ -94,6 +97,104 @@ class RenderPropertySafetyTests(unittest.TestCase):
                         },
                     }
                 )
+
+
+class RenderLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _start_with_python_renderer(
+        renderer_path: Path, output_path: Path
+    ) -> dict[str, object]:
+        with (
+            patch(
+                "shotcut_mcp.render.discover_executables",
+                return_value=SimpleNamespace(melt=Path(sys.executable)),
+            ),
+            patch(
+                "shotcut_mcp.render.require_executable",
+                return_value=Path(sys.executable),
+            ),
+            patch("shotcut_mcp.render.ensure_melt_ready"),
+        ):
+            return start_render(
+                {
+                    "project_path": str(renderer_path),
+                    "output_path": str(output_path),
+                }
+            )
+
+    def test_completed_render_is_promoted_without_status_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer_path = Path(directory) / "renderer.py"
+            output_path = Path(directory) / "output.mp4"
+            renderer_path.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "target = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\n"
+                "Path(target).write_bytes(b'rendered')\n"
+                "print('percentage: 100', flush=True)\n",
+                encoding="utf-8",
+            )
+
+            job = self._start_with_python_renderer(renderer_path, output_path)
+            worker = render_module.RUNNING_JOBS[str(job["job_id"])]
+
+            try:
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and not output_path.is_file():
+                    time.sleep(0.05)
+                self.assertTrue(
+                    output_path.is_file(),
+                    "the worker must promote output without a render_status request",
+                )
+            finally:
+                worker.wait(timeout=3)
+                render_status(str(job["job_id"]))
+
+    def test_render_remains_managed_after_session_state_is_lost(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer_path = Path(directory) / "slow_renderer.py"
+            output_path = Path(directory) / "output.mp4"
+            renderer_path.write_text(
+                "from pathlib import Path\n"
+                "import sys, time\n"
+                "time.sleep(0.5)\n"
+                "target = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\n"
+                "Path(target).write_bytes(b'rendered')\n",
+                encoding="utf-8",
+            )
+            job = self._start_with_python_renderer(renderer_path, output_path)
+            worker = render_module.RUNNING_JOBS.pop(str(job["job_id"]))
+            try:
+                active = render_status(str(job["job_id"]))
+                self.assertIn(active["status"], {"queued", "running", "completed"})
+
+                deadline = time.monotonic() + 3
+                status = active
+                while time.monotonic() < deadline and status["status"] != "completed":
+                    time.sleep(0.05)
+                    status = render_status(str(job["job_id"]))
+                self.assertTrue(output_path.is_file())
+                self.assertEqual(status["status"], "completed")
+            finally:
+                worker.wait(timeout=3)
+
+    def test_render_can_be_cancelled_after_session_state_is_lost(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer_path = Path(directory) / "slow_renderer.py"
+            output_path = Path(directory) / "output.mp4"
+            renderer_path.write_text(
+                "import time\n"
+                "time.sleep(20)\n",
+                encoding="utf-8",
+            )
+            job = self._start_with_python_renderer(renderer_path, output_path)
+            worker = render_module.RUNNING_JOBS.pop(str(job["job_id"]))
+
+            cancelled = cancel_render(str(job["job_id"]))
+
+            self.assertEqual(cancelled["status"], "cancelled")
+            self.assertFalse(output_path.exists())
+            worker.wait(timeout=3)
 
 
 if __name__ == "__main__":

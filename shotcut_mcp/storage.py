@@ -27,7 +27,7 @@ def _private_directory(path: Path) -> None:
         path.chmod(0o700)
 
 
-def _process_is_alive(pid: int) -> bool:
+def process_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
@@ -79,6 +79,8 @@ class OutputTransaction:
                     f"Output must not refer to the protected input file: {protected}"
                 )
         signature = _file_signature(target)
+        if signature is not None and not target.is_file():
+            raise ToolError(f"The existing output is not a file: {target}")
         if signature is not None and not overwrite:
             raise ToolError(f"The output already exists: {target}")
         mode = target.stat().st_mode if signature is not None else None
@@ -103,6 +105,43 @@ class OutputTransaction:
 
     def cleanup(self) -> None:
         self.temporary.unlink(missing_ok=True)
+
+    def serialize(self) -> dict[str, object]:
+        return {
+            "target": str(self.target),
+            "temporary": str(self.temporary),
+            "initial_signature": (
+                list(self.initial_signature)
+                if self.initial_signature is not None
+                else None
+            ),
+            "initial_mode": self.initial_mode,
+        }
+
+    @classmethod
+    def deserialize(cls, value: object) -> OutputTransaction:
+        if not isinstance(value, dict):
+            raise ToolError("Invalid output transaction metadata.")
+        target = value.get("target")
+        temporary = value.get("temporary")
+        signature = value.get("initial_signature")
+        mode = value.get("initial_mode")
+        if not isinstance(target, str) or not isinstance(temporary, str):
+            raise ToolError("Invalid output transaction paths.")
+        if signature is not None and (
+            not isinstance(signature, list)
+            or len(signature) != 4
+            or not all(isinstance(item, int) for item in signature)
+        ):
+            raise ToolError("Invalid output transaction signature.")
+        if mode is not None and not isinstance(mode, int):
+            raise ToolError("Invalid output transaction mode.")
+        return cls(
+            Path(target),
+            Path(temporary),
+            tuple(signature) if signature is not None else None,
+            mode,
+        )
 
 
 @contextmanager
@@ -133,7 +172,7 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
             except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
                 age = 0
                 owner_pid = 0
-            if age > stale_seconds and not _process_is_alive(owner_pid):
+            if age > stale_seconds and not process_is_alive(owner_pid):
                 lock_path.unlink(missing_ok=True)
                 continue
             raise ConflictError(

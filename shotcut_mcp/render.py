@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
-import tempfile
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -19,10 +18,19 @@ from .platform import (
     ensure_melt_ready,
     require_executable,
 )
+from .render_jobs import (
+    TERMINAL_STATUSES,
+    log_path,
+    prune_jobs,
+    read_job,
+    read_progress,
+    release_gate,
+    request_cancel,
+    write_job,
+)
+from .storage import OutputTransaction, process_is_alive
 
 
-JOB_DIR = Path(tempfile.gettempdir()) / "shotcut-mcp" / "jobs"
-JOB_DIR.mkdir(parents=True, exist_ok=True)
 RUNNING_JOBS: dict[str, subprocess.Popen[Any]] = {}
 
 RENDER_PRESETS: dict[str, dict[str, str]] = {
@@ -119,34 +127,6 @@ SAFE_SINGLE_FILE_FORMATS = {
 }
 
 
-def _metadata_path(job_id: str) -> Path:
-    if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise ToolError("Invalid job_id.")
-    return JOB_DIR / f"{job_id}.json"
-
-
-def _write_job(metadata: dict[str, Any]) -> None:
-    path = _metadata_path(metadata["job_id"])
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)
-
-
-def _read_job(job_id: str) -> dict[str, Any]:
-    path = _metadata_path(job_id)
-    if not path.is_file():
-        raise ToolError(f"Render job not found: {job_id}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ToolError(f"Invalid render metadata: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ToolError("Invalid render metadata.")
-    return payload
-
-
 def _consumer_properties(value: Any) -> dict[str, str]:
     if value is None:
         return {}
@@ -199,16 +179,9 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     output_path = expand_path(arguments.get("output_path", ""))
     if not project_path.is_file():
         raise ToolError(f"Project not found: {project_path}")
-    if project_path == output_path:
-        raise ToolError("Project and output cannot be the same file.")
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
         raise ToolError("overwrite must be a boolean.")
-    if output_path.exists():
-        if not output_path.is_file():
-            raise ToolError(f"The existing output is not a file: {output_path}")
-        if not overwrite:
-            raise ToolError(f"The output already exists: {output_path}")
 
     preset = arguments.get("preset", "h264-high")
     if preset not in RENDER_PRESETS:
@@ -217,111 +190,106 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     properties.update(_consumer_properties(arguments.get("consumer_properties")))
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    job_id = uuid.uuid4().hex
-    temporary_output = output_path.with_name(
-        f".{output_path.stem}.{job_id}.shotcut-mcp{output_path.suffix}"
+    output = OutputTransaction.prepare(
+        output_path, overwrite=overwrite, protected_paths=(project_path,)
     )
-    log_path = JOB_DIR / f"{job_id}.log"
-    command = [
-        str(melt),
-        str(project_path),
-        "-progress",
-        "-consumer",
-        f"avformat:{temporary_output}",
-        "real_time=-1",
-        "terminate_on_pause=1",
-        *[f"{key}={value}" for key, value in properties.items()],
-    ]
-    try:
-        with log_path.open("w", encoding="utf-8", errors="replace") as log:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                text=True,
-                creationflags=creation_flags(),
-                start_new_session=os.name != "nt",
-            )
-    except OSError as exc:
-        raise ToolError(f"Could not start the render: {exc}") from exc
-    RUNNING_JOBS[job_id] = process
+    prune_jobs()
+    job_id = uuid.uuid4().hex
     metadata = {
         "job_id": job_id,
-        "pid": process.pid,
-        "status": "running",
+        "pid": None,
+        "worker_pid": None,
+        "renderer_pid": None,
+        "status": "queued",
         "return_code": None,
         "project_path": str(project_path),
         "output_path": str(output_path),
-        "temporary_output_path": str(temporary_output),
+        "temporary_output_path": str(output.temporary),
+        "output_transaction": output.serialize(),
         "overwrite": overwrite,
         "preset": preset,
         "consumer_properties": properties,
-        "log_path": str(log_path),
+        "melt_path": str(melt),
+        "log_path": str(log_path(job_id)),
         "started_at": time.time(),
         "finished_at": None,
     }
-    _write_job(metadata)
+    write_job(metadata)
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "shotcut_mcp.render_worker", job_id],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags(),
+            start_new_session=os.name != "nt",
+        )
+    except OSError as exc:
+        output.cleanup()
+        metadata.update(
+            status="failed",
+            status_note=f"Could not start the render supervisor: {exc}",
+            finished_at=time.time(),
+        )
+        write_job(metadata)
+        raise ToolError(f"Could not start the render: {exc}") from exc
+    RUNNING_JOBS[job_id] = process
+    metadata.update(pid=process.pid, worker_pid=process.pid, status="running")
+    write_job(metadata)
+    release_gate(job_id)
     return metadata
 
 
-def _finish_render(metadata: dict[str, Any], return_code: int) -> None:
-    temporary = Path(metadata["temporary_output_path"])
-    output = Path(metadata["output_path"])
-    metadata["return_code"] = return_code
-    metadata["finished_at"] = time.time()
-    if return_code != 0 or not temporary.is_file():
-        metadata["status"] = "failed"
-        temporary.unlink(missing_ok=True)
-        return
-    if output.exists() and not metadata.get("overwrite", False):
-        metadata["status"] = "failed"
-        metadata["status_note"] = (
-            "The output appeared during rendering; the new file was preserved to avoid overwriting it."
-        )
-        return
-    try:
-        os.replace(temporary, output)
-    except OSError as exc:
-        metadata["status"] = "failed"
-        metadata["status_note"] = (
-            f"The render completed, but atomic promotion failed: {exc}"
-        )
-        return
-    metadata["status"] = "completed"
-
-
-def _progress(log_path: Path) -> tuple[int | None, str | None]:
-    if not log_path.is_file():
-        return None, None
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None, None
-    matches = re.findall(
-        r"(?:percentage|percent|progress)\s*[:=]\s*(\d{1,3})", text, re.I
-    )
-    progress = min(100, int(matches[-1])) if matches else None
-    return progress, text[-4000:].strip() or None
-
-
 def render_status(job_id: str) -> dict[str, Any]:
-    metadata = _read_job(job_id)
+    metadata = read_job(job_id)
     process = RUNNING_JOBS.get(job_id)
-    if process is not None:
-        return_code = process.poll()
-        if return_code is not None and metadata.get("status") == "running":
-            _finish_render(metadata, return_code)
-            _write_job(metadata)
-            RUNNING_JOBS.pop(job_id, None)
-    elif metadata.get("status") == "running":
-        metadata["status"] = "detached"
-        metadata["status_note"] = (
-            "The MCP server restarted; the process may continue, but it can no longer be cancelled safely."
-        )
+    if process is not None and process.poll() is not None:
+        RUNNING_JOBS.pop(job_id, None)
+        metadata = read_job(job_id)
+    if metadata.get("status") not in TERMINAL_STATUSES:
+        worker_pid = metadata.get("worker_pid")
+        if isinstance(worker_pid, int) and not process_is_alive(worker_pid):
+            metadata = read_job(job_id)
+            if metadata.get("status") not in TERMINAL_STATUSES:
+                renderer_pid = metadata.get("renderer_pid")
+                renderer_alive = isinstance(
+                    renderer_pid, int
+                ) and process_is_alive(renderer_pid)
+                if renderer_alive:
+                    metadata.update(
+                        status="orphaned",
+                        status_note=(
+                            "The render supervisor exited while Melt was still running; "
+                            "the temporary output was retained."
+                        ),
+                        finished_at=time.time(),
+                    )
+                else:
+                    metadata.update(
+                        status="failed",
+                        status_note=(
+                            "The render supervisor exited before finalizing the job."
+                        ),
+                        finished_at=time.time(),
+                    )
+                    OutputTransaction.deserialize(
+                        metadata.get("output_transaction")
+                    ).cleanup()
+                write_job(metadata)
+        elif worker_pid is None and time.time() - float(
+            metadata.get("started_at", 0)
+        ) > 10:
+            metadata.update(
+                status="failed",
+                status_note="The render supervisor never started.",
+                finished_at=time.time(),
+            )
+            OutputTransaction.deserialize(
+                metadata.get("output_transaction")
+            ).cleanup()
+            write_job(metadata)
     output_path = Path(metadata["output_path"])
-    progress, log_tail = _progress(Path(metadata["log_path"]))
+    progress, log_tail = read_progress(Path(metadata["log_path"]))
     metadata["progress_percent"] = (
         100 if metadata.get("status") == "completed" else progress
     )
@@ -334,24 +302,16 @@ def render_status(job_id: str) -> dict[str, Any]:
 
 
 def cancel_render(job_id: str) -> dict[str, Any]:
-    metadata = _read_job(job_id)
-    process = RUNNING_JOBS.get(job_id)
-    if process is None:
-        raise ToolError("This render is not active in the current MCP session.")
-    if process.poll() is not None:
+    metadata = read_job(job_id)
+    if metadata.get("status") in TERMINAL_STATUSES:
         return render_status(job_id)
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-    metadata.update(
-        status="cancelled", return_code=process.returncode, finished_at=time.time()
-    )
-    temporary = Path(metadata.get("temporary_output_path", ""))
-    if temporary.name:
-        temporary.unlink(missing_ok=True)
-    _write_job(metadata)
-    RUNNING_JOBS.pop(job_id, None)
-    return metadata
+    request_cancel(job_id)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        metadata = read_job(job_id)
+        if metadata.get("status") in TERMINAL_STATUSES:
+            return render_status(job_id)
+        time.sleep(0.05)
+    result = render_status(job_id)
+    result["cancellation_requested"] = True
+    return result
