@@ -1887,6 +1887,7 @@ def _write_validated(
     path.parent.mkdir(parents=True, exist_ok=True)
     with project_lock(path):
         current = path.read_bytes() if path.is_file() else None
+        current_mode = path.stat().st_mode if current is not None else None
         current_revision = _sha256(current) if current is not None else None
         if current is not None and not force:
             if not expected_revision:
@@ -1897,7 +1898,12 @@ def _write_validated(
                 raise ConflictError(
                     f"The project changed. Expected {expected_revision}, current {current_revision}."
                 )
-        temporary.write_bytes(data)
+        with temporary.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if current_mode is not None:
+            os.chmod(temporary, current_mode)
         try:
             validation = (
                 validate_project_file(temporary, timeout=timeout)
@@ -1908,6 +1914,13 @@ def _write_validated(
                 raise ToolError(
                     "MLT rejected the edit before the project was replaced: "
                     + str(validation.get("diagnostic") or validation.get("return_code"))
+                )
+            latest = path.read_bytes() if path.is_file() else None
+            latest_revision = _sha256(latest) if latest is not None else None
+            if latest_revision != current_revision:
+                raise ConflictError(
+                    "The project changed while the candidate edit was being validated. "
+                    f"Expected {current_revision}, current {latest_revision}."
                 )
             backup_path = (
                 _backup(path, current)
