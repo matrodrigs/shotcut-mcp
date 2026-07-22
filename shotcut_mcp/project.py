@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
 
-from .errors import ConflictError, ToolError
+from .errors import ConflictError, RequestCancelled, ToolError
 from .platform import media_duration, probe_media_raw, validate_project_file
+from .protocol import cancellation_requested
 from .storage import (
     is_project_backup,
     list_project_backups,
@@ -2099,6 +2100,8 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
     for index, operation in enumerate(operations):
+        if cancellation_requested():
+            raise RequestCancelled("Project edit cancelled by the MCP client.")
         try:
             results.append(document.apply_operation(operation))
         except ToolError as exc:

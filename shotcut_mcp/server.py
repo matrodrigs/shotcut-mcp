@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import sys
+import threading
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import __version__
-from .errors import ToolError
-from .protocol import schema_errors
+from .errors import RequestCancelled, ToolError
+from .protocol import request_cancellation, schema_errors
 from .tools import HANDLERS, TOOLS
 
 
@@ -144,6 +147,8 @@ def handle_request(
             result = _tool_result(
                 handler(arguments), active_session.protocol_version
             )
+        except RequestCancelled as exc:
+            return _error(request_id, -32800, str(exc) or "Request cancelled.")
         except ToolError as exc:
             result = _tool_result(
                 {"error": str(exc), "error_type": type(exc).__name__},
@@ -165,30 +170,156 @@ def handle_request(
     }
 
 
-def write_message(message: dict[str, Any]) -> None:
+def write_message(
+    message: Any,
+    stream: BinaryIO | None = None,
+    lock: threading.Lock | None = None,
+) -> None:
     encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode(
         "utf-8"
     )
-    sys.stdout.buffer.write(encoded + b"\n")
-    sys.stdout.buffer.flush()
+    output = stream or sys.stdout.buffer
+    if lock is None:
+        output.write(encoded + b"\n")
+        output.flush()
+        return
+    with lock:
+        output.write(encoded + b"\n")
+        output.flush()
+
+
+def _worker_count() -> int:
+    try:
+        configured = int(os.environ.get("SHOTCUT_MCP_MAX_WORKERS", "4"))
+    except ValueError:
+        configured = 4
+    return max(1, min(8, configured))
+
+
+def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
+    session = ProtocolSession()
+    output_lock = threading.Lock()
+    pending_lock = threading.Lock()
+    pending: dict[str | int | None, tuple[Future[Any], threading.Event]] = {}
+    executor = ThreadPoolExecutor(
+        max_workers=_worker_count(), thread_name_prefix="shotcut-mcp"
+    )
+
+    def complete(request_id: str | int | None, future: Future[Any]) -> None:
+        with pending_lock:
+            pending.pop(request_id, None)
+        if future.cancelled():
+            response = _error(request_id, -32800, "Request cancelled.")
+        else:
+            try:
+                response = future.result()
+            except CancelledError:
+                response = _error(request_id, -32800, "Request cancelled.")
+            except Exception as exc:
+                print(
+                    f"Unexpected request worker failure: {exc!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                response = _error(request_id, -32603, "Internal error.")
+        if response is not None:
+            write_message(response, output_stream, output_lock)
+
+    def execute(
+        message: dict[str, Any], cancellation: threading.Event
+    ) -> dict[str, Any] | None:
+        with request_cancellation(cancellation):
+            return handle_request(message, session)
+
+    try:
+        for raw_line in input_stream:
+            if not raw_line.strip():
+                continue
+            try:
+                message = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                write_message(
+                    _error(None, -32700, f"Invalid JSON: {exc}"),
+                    output_stream,
+                    output_lock,
+                )
+                continue
+            if isinstance(message, list):
+                if not message or session.protocol_version != "2025-03-26":
+                    write_message(
+                        _error(None, -32600, "JSON-RPC batching is not supported."),
+                        output_stream,
+                        output_lock,
+                    )
+                    continue
+                batch_responses = [
+                    handle_request(item, session)
+                    if isinstance(item, dict)
+                    else _error(None, -32600, "Invalid Request in batch.")
+                    for item in message
+                ]
+                visible = [item for item in batch_responses if item is not None]
+                if visible:
+                    write_message(visible, output_stream, output_lock)
+                continue
+            if not isinstance(message, dict):
+                write_message(
+                    _error(None, -32600, "Invalid Request: expected a JSON object."),
+                    output_stream,
+                    output_lock,
+                )
+                continue
+
+            if (
+                message.get("method") == "notifications/cancelled"
+                and "id" not in message
+            ):
+                params = message.get("params")
+                request_id = params.get("requestId") if isinstance(params, dict) else None
+                with pending_lock:
+                    item = pending.get(request_id)
+                if item is not None:
+                    future, cancellation = item
+                    cancellation.set()
+                    future.cancel()
+                continue
+
+            if message.get("method") == "tools/call" and "id" in message:
+                request_id = message.get("id")
+                if isinstance(request_id, bool) or not isinstance(
+                    request_id, (str, int, type(None))
+                ):
+                    write_message(
+                        _error(None, -32600, "Invalid Request: invalid id."),
+                        output_stream,
+                        output_lock,
+                    )
+                    continue
+                with pending_lock:
+                    duplicate = request_id in pending
+                if duplicate:
+                    write_message(
+                        _error(request_id, -32600, "Duplicate in-flight request id."),
+                        output_stream,
+                        output_lock,
+                    )
+                    continue
+                cancellation = threading.Event()
+                future = executor.submit(execute, message, cancellation)
+                with pending_lock:
+                    pending[request_id] = (future, cancellation)
+                future.add_done_callback(
+                    lambda completed, key=request_id: complete(key, completed)
+                )
+                continue
+
+            response = handle_request(message, session)
+            if response is not None:
+                write_message(response, output_stream, output_lock)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=False)
 
 
 def main() -> int:
-    session = ProtocolSession()
-    for raw_line in sys.stdin.buffer:
-        if not raw_line.strip():
-            continue
-        try:
-            message = json.loads(raw_line.decode("utf-8"))
-            if not isinstance(message, dict):
-                raise ValueError("The message is not a JSON object.")
-            response = handle_request(message, session)
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-            response = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": f"Invalid JSON: {exc}"},
-            }
-        if response is not None:
-            write_message(response)
+    serve(sys.stdin.buffer, sys.stdout.buffer)
     return 0

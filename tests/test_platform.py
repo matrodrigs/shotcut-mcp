@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from shotcut_mcp import platform
-from shotcut_mcp.errors import ToolError
+from shotcut_mcp.errors import RequestCancelled, ToolError
+from shotcut_mcp.protocol import request_cancellation
 
 
 class MeltCacheTests(unittest.TestCase):
@@ -77,6 +80,24 @@ class PathPolicyTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ToolError, "allowed roots"):
                     platform.expand_path(str(outside))
+
+
+class ProcessCancellationTests(unittest.TestCase):
+    def test_run_capture_terminates_when_mcp_request_is_cancelled(self) -> None:
+        cancellation = threading.Event()
+        timer = threading.Timer(0.1, cancellation.set)
+        started = time.monotonic()
+        timer.start()
+        try:
+            with request_cancellation(cancellation):
+                with self.assertRaises(RequestCancelled):
+                    platform.run_capture(
+                        [os.sys.executable, "-c", "import time; time.sleep(20)"],
+                        timeout=30,
+                    )
+        finally:
+            timer.cancel()
+        self.assertLess(time.monotonic() - started, 3)
 
 
 if __name__ == "__main__":

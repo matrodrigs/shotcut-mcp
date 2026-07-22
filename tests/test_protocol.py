@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import io
+import json
+import threading
+import time
 import unittest
+from unittest.mock import patch
 
-from shotcut_mcp.server import ProtocolSession, handle_request
+from shotcut_mcp.errors import RequestCancelled
+from shotcut_mcp.protocol import cancellation_requested
+from shotcut_mcp.server import ProtocolSession, handle_request, serve
 
 
 def request(method: str, params: object = None, request_id: int = 1) -> dict[str, object]:
@@ -34,8 +41,63 @@ class ProtocolValidationTests(unittest.TestCase):
         self.assertEqual(response["error"]["code"], -32602)
         self.assertIn("path", response["error"]["data"]["validationErrors"][0])
 
+    def test_cancellation_notification_reaches_an_inflight_tool(self) -> None:
+        started = threading.Event()
+
+        def slow_handler(_arguments: dict[str, object]) -> dict[str, object]:
+            started.set()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if cancellation_requested():
+                    raise RequestCancelled("cancelled in test")
+                time.sleep(0.01)
+            return {"unexpected": True}
+
+        messages = (
+            json.dumps(
+                request(
+                    "tools/call",
+                    {"name": "shotcut_status", "arguments": {}},
+                    request_id=9,
+                )
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": 9, "reason": "test"},
+                }
+            )
+            + "\n"
+        ).encode()
+        output = io.BytesIO()
+        with patch.dict("shotcut_mcp.server.HANDLERS", {"shotcut_status": slow_handler}):
+            serve(io.BytesIO(messages), output)
+
+        response = json.loads(output.getvalue().decode().strip())
+        self.assertEqual(response["id"], 9)
+        self.assertEqual(response["error"]["code"], -32800)
+
 
 class ProtocolNegotiationTests(unittest.TestCase):
+    def test_2025_03_batch_requests_are_supported_only_after_negotiation(self) -> None:
+        messages = (
+            json.dumps(
+                request("initialize", {"protocolVersion": "2025-03-26"})
+            )
+            + "\n"
+            + json.dumps([request("ping", request_id=2), request("ping", request_id=3)])
+            + "\n"
+        ).encode()
+        output = io.BytesIO()
+
+        serve(io.BytesIO(messages), output)
+
+        responses = [json.loads(line) for line in output.getvalue().decode().splitlines()]
+        self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-03-26")
+        self.assertEqual([item["id"] for item in responses[1]], [2, 3])
+
     def test_legacy_client_receives_only_legacy_tool_fields(self) -> None:
         session = ProtocolSession()
         handle_request(

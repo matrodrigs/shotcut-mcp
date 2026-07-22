@@ -3,7 +3,29 @@
 from __future__ import annotations
 
 import re
+import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
+
+
+_CANCELLATION_EVENT: ContextVar[threading.Event | None] = ContextVar(
+    "shotcut_mcp_cancellation_event", default=None
+)
+
+
+@contextmanager
+def request_cancellation(event: threading.Event):
+    token = _CANCELLATION_EVENT.set(event)
+    try:
+        yield
+    finally:
+        _CANCELLATION_EVENT.reset(token)
+
+
+def cancellation_requested() -> bool:
+    event = _CANCELLATION_EVENT.get()
+    return event is not None and event.is_set()
 
 
 def _matches_type(value: Any, expected: str) -> bool:

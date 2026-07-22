@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .errors import ToolError
+from .errors import RequestCancelled, ToolError
 from .platform import (
     creation_flags,
     discover_executables,
@@ -28,6 +28,7 @@ from .render_jobs import (
     request_cancel,
     write_job,
 )
+from .protocol import cancellation_requested
 from .storage import OutputTransaction, process_is_alive
 
 
@@ -308,6 +309,8 @@ def cancel_render(job_id: str) -> dict[str, Any]:
     request_cancel(job_id)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
+        if cancellation_requested():
+            raise RequestCancelled("Render cancellation request was itself cancelled.")
         metadata = read_job(job_id)
         if metadata.get("status") in TERMINAL_STATUSES:
             return render_status(job_id)

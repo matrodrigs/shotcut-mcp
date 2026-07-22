@@ -7,13 +7,16 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .errors import ToolError
+from .errors import RequestCancelled, ToolError
+from .protocol import cancellation_requested
 from .storage import OutputTransaction
 
 
@@ -194,8 +197,10 @@ def _runtime_identity(executable: Path) -> tuple[object, ...]:
 def run_capture(
     command: list[str], timeout: int = 30
 ) -> subprocess.CompletedProcess[str]:
+    if cancellation_requested():
+        raise RequestCancelled("Request cancelled before the command started.")
     try:
-        return subprocess.run(
+        process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -203,14 +208,48 @@ def run_capture(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
-            check=False,
             creationflags=creation_flags(),
+            start_new_session=os.name != "nt",
         )
-    except subprocess.TimeoutExpired as exc:
-        raise ToolError(f"The command timed out after {timeout} seconds.") from exc
     except OSError as exc:
         raise ToolError(f"Could not run {command[0]}: {exc}") from exc
+    deadline = time.monotonic() + timeout
+    while True:
+        if cancellation_requested():
+            _terminate_process(process)
+            raise RequestCancelled("Request cancelled by the MCP client.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _terminate_process(process)
+            expired = subprocess.TimeoutExpired(command, timeout)
+            raise ToolError(f"The command timed out after {timeout} seconds.") from expired
+        try:
+            stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+            return subprocess.CompletedProcess(
+                command, process.returncode, stdout, stderr
+            )
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _terminate_process(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> None:
