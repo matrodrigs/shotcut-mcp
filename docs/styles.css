@@ -1056,6 +1056,8 @@ summary:active {
 }
 
 .source-panel {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1101,6 +1103,7 @@ summary:active {
 }
 
 .source-panel > pre {
+  flex: 1 0 auto;
   min-height: 235px;
   padding: 1.5rem;
 }
