@@ -8,6 +8,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![Shotcut 26.2.26](https://img.shields.io/badge/Shotcut-26.2.26-115c77.svg)](https://www.shotcut.org/)
 [![MCP stdio](https://img.shields.io/badge/MCP-stdio-7c3aed.svg)](https://modelcontextprotocol.io/)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-active-39e6ca.svg)](https://registry.modelcontextprotocol.io/?search=io.github.matrodrigs%2Fshotcut-mcp)
 [![Project website](https://img.shields.io/badge/website-GitHub_Pages-39e6ca.svg)](https://matrodrigs.github.io/shotcut-mcp/)
 
 [Quick start](#quick-start) · [Features](#features) · [Tools](#mcp-tools) · [Safety](#transactional-safety) · [Development](#development)
