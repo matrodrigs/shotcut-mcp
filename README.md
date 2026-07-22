@@ -14,6 +14,9 @@
 
 </div>
 
+> **Download:** MCPB-compatible clients can install the packaged server from the
+> [latest GitHub release](https://github.com/matrodrigs/shotcut-mcp/releases/latest).
+
 Shotcut MCP is a local [Model Context Protocol](https://modelcontextprotocol.io/) server for
 working with [Shotcut](https://www.shotcut.org/) projects stored as MLT XML. It gives an AI client
 structured tools for timeline editing while preserving Shotcut-specific project data.

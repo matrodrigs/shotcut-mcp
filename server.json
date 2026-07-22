@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.matrodrigs/shotcut-mcp",
+  "title": "Shotcut MCP",
+  "description": "Create, edit, validate, preview, and render Shotcut projects through AI clients.",
+  "repository": {
+    "url": "https://github.com/matrodrigs/shotcut-mcp",
+    "source": "github"
+  },
+  "version": "1.0.1",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/matrodrigs/shotcut-mcp/releases/download/v1.0.1/shotcut-mcp-1.0.1.mcpb",
+      "fileSha256": "abbe0e3958bfbd4d6e993cfc8bb638303a522af0eb953d58ec23932d5ef83a73",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
