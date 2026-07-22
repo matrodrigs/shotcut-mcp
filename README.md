@@ -293,8 +293,14 @@ shotcut-mcp/
 ├── .github/workflows/          # Cross-platform CI and verified registry publishing
 ├── scripts/                    # Stdio entry point and release metadata checks
 ├── shotcut_mcp/
-│   ├── platform.py             # Executable discovery, policies, MLT integration
-│   ├── project.py              # Structure-preserving MLT project model
+│   ├── media.py                # Cached FFprobe inspection and summaries
+│   ├── mlt_xml.py              # Shared MLT XML primitive decoding
+│   ├── path_policy.py          # Canonical path and network-resource policy
+│   ├── platform.py             # Public Shotcut/MLT orchestration interface
+│   ├── processes.py            # Executable discovery and process supervision
+│   ├── project.py              # Transactional project workflow
+│   ├── project_document.py     # Structure-preserving MLT document model
+│   ├── project_snapshot.py     # Read-only MCP project projection
 │   ├── protocol.py             # Input-schema validation and cancellation context
 │   ├── render.py               # Public render-job interface
 │   ├── render_jobs.py          # Durable private job store
