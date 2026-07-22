@@ -183,11 +183,19 @@ class RenderLifecycleTests(unittest.TestCase):
             job = self._start_with_python_renderer(renderer_path, output_path)
             worker = render_module.RUNNING_JOBS.pop(str(job["job_id"]))
 
-            cancelled = cancel_render(str(job["job_id"]))
+            try:
+                requested = cancel_render(str(job["job_id"]))
+                if requested["status"] != "cancelled":
+                    self.assertTrue(requested.get("cancellation_requested"))
+                worker.wait(timeout=15)
+                cancelled = render_status(str(job["job_id"]))
 
-            self.assertEqual(cancelled["status"], "cancelled")
-            self.assertFalse(output_path.exists())
-            worker.wait(timeout=15)
+                self.assertEqual(cancelled["status"], "cancelled")
+                self.assertFalse(output_path.exists())
+            finally:
+                if worker.poll() is None:
+                    worker.terminate()
+                    worker.wait(timeout=5)
 
 
 if __name__ == "__main__":
