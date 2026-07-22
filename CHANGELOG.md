@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-07-22)
 
 ### Added
 
@@ -11,6 +11,12 @@
   cancellation, lifecycle enforcement and bounded request resources.
 - Canonical allowed-root, absolute-path, network-resource and unsafe-consumer policies.
 - Cross-platform CI with Ruff, Mypy, metadata checks and pinned release tooling.
+
+### Changed
+
+- Split project transactions, MLT document inspection, path policy, process supervision,
+  and media probing into focused modules while preserving the public MCP interface.
+- Added repository-wide engineering guidance for architecture, safety, testing, and releases.
 
 ### Fixed
 
