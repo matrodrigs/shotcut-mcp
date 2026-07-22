@@ -13,11 +13,24 @@ jobs:
 
     steps:
       - name: Checkout release
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install mcp-publisher
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          curl --fail --location --output mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/mcp-publisher_linux_amd64.tar.gz"
+          echo "ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac  mcp-publisher.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file mcp-publisher.tar.gz mcp-publisher
+
+      - name: Prepare versioned registry metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          artifact="shotcut-mcp-${version}.mcpb"
+          gh release download "$GITHUB_REF_NAME" --pattern "$artifact"
+          python scripts/prepare_server_json.py "$version" "$artifact"
+          python scripts/check_release.py
 
       - name: Authenticate with GitHub OIDC
         run: ./mcp-publisher login github-oidc
