@@ -7,12 +7,14 @@ import json
 import os
 import re
 import time
+import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from .errors import ConflictError
+from .errors import ConflictError, ToolError
 
 
 def _sha256(data: bytes) -> str:
@@ -33,6 +35,74 @@ def _process_is_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _file_signature(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def paths_refer_to_same_file(first: Path, second: Path) -> bool:
+    if os.path.normcase(str(first.resolve(strict=False))) == os.path.normcase(
+        str(second.resolve(strict=False))
+    ):
+        return True
+    try:
+        return first.samefile(second)
+    except (FileNotFoundError, OSError):
+        return False
+
+
+@dataclass(frozen=True)
+class OutputTransaction:
+    """Render into a sibling temporary file and atomically promote it when safe."""
+
+    target: Path
+    temporary: Path
+    initial_signature: tuple[int, int, int, int] | None
+    initial_mode: int | None
+
+    @classmethod
+    def prepare(
+        cls,
+        target: Path,
+        *,
+        overwrite: bool,
+        protected_paths: tuple[Path, ...] = (),
+    ) -> OutputTransaction:
+        for protected in protected_paths:
+            if paths_refer_to_same_file(target, protected):
+                raise ToolError(
+                    f"Output must not refer to the protected input file: {protected}"
+                )
+        signature = _file_signature(target)
+        if signature is not None and not overwrite:
+            raise ToolError(f"The output already exists: {target}")
+        mode = target.stat().st_mode if signature is not None else None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(
+            f".{target.stem}.{uuid.uuid4().hex}.tmp{target.suffix}"
+        )
+        return cls(target, temporary, signature, mode)
+
+    def commit(self) -> None:
+        if not self.temporary.is_file():
+            raise ToolError("The renderer did not create its temporary output.")
+        if _file_signature(self.target) != self.initial_signature:
+            raise ConflictError(
+                f"The output changed while rendering and was not replaced: {self.target}"
+            )
+        with self.temporary.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        if self.initial_mode is not None:
+            os.chmod(self.temporary, self.initial_mode)
+        os.replace(self.temporary, self.target)
+
+    def cleanup(self) -> None:
+        self.temporary.unlink(missing_ok=True)
 
 
 @contextmanager

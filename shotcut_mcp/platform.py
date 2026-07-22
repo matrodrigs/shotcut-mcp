@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ToolError
+from .storage import OutputTransaction
 
 
 _PROBE_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
@@ -438,34 +439,39 @@ def render_preview(
         raise ToolError(f"Project not found: {project_path}")
     if frame < 0:
         raise ToolError("frame must be zero or positive.")
-    if output_path.exists() and not overwrite:
-        raise ToolError(f"The image already exists: {output_path}")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output = OutputTransaction.prepare(
+        output_path, overwrite=overwrite, protected_paths=(project_path,)
+    )
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
-    result = run_capture(
-        [
-            str(melt),
-            str(project_path),
-            f"in={frame}",
-            f"out={frame}",
-            "-consumer",
-            f"avformat:{output_path}",
-            "f=image2",
-            "vcodec=png",
-            "real_time=-1",
-            "terminate_on_pause=1",
-            "-silent",
-        ],
-        timeout=120,
-    )
-    if result.returncode or not output_path.is_file():
-        detail = "\n".join(
-            part for part in (result.stdout, result.stderr) if part
-        ).strip()
-        raise ToolError(
-            f"Failed to generate preview: {detail[-2000:] or 'output was not created'}"
+    try:
+        result = run_capture(
+            [
+                str(melt),
+                str(project_path),
+                f"in={frame}",
+                f"out={frame}",
+                "-consumer",
+                f"avformat:{output.temporary}",
+                "f=image2",
+                "vcodec=png",
+                "real_time=-1",
+                "terminate_on_pause=1",
+                "-silent",
+            ],
+            timeout=120,
         )
+        if result.returncode or not output.temporary.is_file():
+            detail = "\n".join(
+                part for part in (result.stdout, result.stderr) if part
+            ).strip()
+            raise ToolError(
+                "Failed to generate preview: "
+                + (detail[-2000:] or "output was not created")
+            )
+        output.commit()
+    finally:
+        output.cleanup()
     return {
         "created": True,
         "path": str(output_path),
