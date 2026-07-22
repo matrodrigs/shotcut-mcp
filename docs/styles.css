@@ -1,22 +1,37 @@
 :root {
   color-scheme: dark;
   interpolate-size: allow-keywords;
-  --bg: #071116;
-  --bg-deep: #050c10;
-  --surface: #0b171d;
-  --surface-raised: #0f1d24;
-  --surface-soft: #122229;
-  --text: #eef5f4;
-  --text-secondary: #a6b6b6;
-  --text-muted: #738588;
-  --line: rgba(195, 222, 221, 0.14);
-  --line-strong: rgba(195, 222, 221, 0.24);
-  --accent: #43d8c4;
-  --accent-bright: #76e6d7;
-  --accent-ink: #061210;
-  --playhead: #ff7180;
-  --blue: #6da8dc;
-  --violet: #988bc4;
+  /* Neutral surfaces carry the layout; color is reserved for meaning. */
+  --bg: #080b10;
+  --bg-deep: #06080c;
+  --surface: #0f141b;
+  --surface-raised: #141b23;
+  --surface-soft: #18222c;
+  --text: #f3f6f7;
+  --text-secondary: #b0bac2;
+  --text-muted: #7d8a95;
+  --line: rgba(186, 201, 212, 0.13);
+  --line-strong: rgba(186, 201, 212, 0.23);
+
+  /* Shotcut's official #115c77 anchors the brand palette. */
+  --brand: #115c77;
+  --brand-hover: #176e8e;
+  --brand-bright: #73bcd2;
+  --brand-ink: #f8fbfc;
+  --brand-soft: rgba(66, 145, 174, 0.12);
+  --brand-line: rgba(115, 188, 210, 0.34);
+  --success: #62c98d;
+  --success-bright: #8adda9;
+  --success-ink: #06120a;
+  --success-soft: rgba(98, 201, 141, 0.14);
+  --success-line: rgba(98, 201, 141, 0.36);
+  --attention: #e2a85f;
+  --playhead: #f06d7a;
+  --blue: #79a9d9;
+  --blue-soft: rgba(121, 169, 217, 0.12);
+  --blue-line: rgba(121, 169, 217, 0.28);
+  --track-blue: #1b6078;
+  --track-violet: #625879;
   --max: 1200px;
   --radius-sm: 0.5rem;
   --radius-md: 0.875rem;
@@ -37,7 +52,9 @@ html {
 body {
   margin: 0;
   color: var(--text);
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 72% -12%, rgba(17, 92, 119, 0.11), transparent 30rem),
+    var(--bg);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 1rem;
   line-height: 1.6;
@@ -106,8 +123,8 @@ h3 {
   top: 1rem;
   z-index: 200;
   padding: 0.75rem 1rem;
-  color: var(--accent-ink);
-  background: var(--accent-bright);
+  color: var(--brand-ink);
+  background: var(--brand);
   border-radius: var(--radius-sm);
   font-size: 0.875rem;
   font-weight: 750;
@@ -121,7 +138,7 @@ h3 {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-bright);
+  outline: 2px solid var(--brand-bright);
   outline-offset: 4px;
 }
 
@@ -136,7 +153,7 @@ h3 {
 
 .site-header.is-scrolled,
 .site-header.menu-open {
-  background: rgba(7, 17, 22, 0.86);
+  background: rgba(8, 11, 16, 0.88);
   border-color: var(--line);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
@@ -192,15 +209,15 @@ h3 {
   display: inline-flex;
   align-items: center;
   padding: 0 1rem;
-  color: var(--accent-bright);
-  border: 1px solid rgba(67, 216, 196, 0.38);
+  color: var(--brand-bright);
+  border: 1px solid var(--brand-line);
   border-radius: var(--radius-sm);
-  background: rgba(67, 216, 196, 0.04);
+  background: var(--brand-soft);
 }
 
 .site-nav .nav-cta:hover {
-  border-color: rgba(67, 216, 196, 0.62);
-  background: rgba(67, 216, 196, 0.08);
+  border-color: var(--brand-bright);
+  background: rgba(66, 145, 174, 0.2);
 }
 
 .site-nav a:active,
@@ -262,8 +279,8 @@ summary:active {
   pointer-events: none;
   opacity: 0.42;
   background-image:
-    linear-gradient(rgba(161, 205, 203, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(161, 205, 203, 0.035) 1px, transparent 1px);
+    linear-gradient(rgba(160, 184, 198, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(160, 184, 198, 0.04) 1px, transparent 1px);
   background-size: 72px 72px;
   -webkit-mask-image: linear-gradient(to bottom, black, transparent 88%);
   mask-image: linear-gradient(to bottom, black, transparent 88%);
@@ -284,7 +301,7 @@ summary:active {
   align-items: center;
   gap: 0.7rem;
   margin: 0 0 1.5rem;
-  color: var(--accent-bright);
+  color: var(--brand-bright);
   font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -310,7 +327,7 @@ summary:active {
 }
 
 .hero h1 span {
-  color: var(--accent-bright);
+  color: var(--brand-bright);
 }
 
 .hero-summary {
@@ -368,12 +385,12 @@ summary:active {
 }
 
 .button-primary {
-  color: var(--accent-ink);
-  background: var(--accent);
+  color: var(--brand-ink);
+  background: var(--brand);
 }
 
 .button-primary:hover {
-  background: var(--accent-bright);
+  background: var(--brand-hover);
 }
 
 .button-secondary {
@@ -383,7 +400,7 @@ summary:active {
 }
 
 .button-secondary:hover {
-  border-color: rgba(195, 222, 221, 0.38);
+  border-color: rgba(186, 201, 212, 0.38);
   background: rgba(255, 255, 255, 0.05);
 }
 
@@ -411,6 +428,10 @@ summary:active {
   letter-spacing: -0.03em;
 }
 
+.proof-list div:last-child dt {
+  color: var(--success-bright);
+}
+
 .proof-list dd {
   margin: 0.2rem 0 0;
   color: var(--text-muted);
@@ -421,7 +442,7 @@ summary:active {
 .product-demo {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(118, 230, 215, 0.24);
+  border: 1px solid var(--brand-line);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: 0 32px 90px rgba(0, 0, 0, 0.38);
@@ -456,7 +477,7 @@ summary:active {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #34464d;
+  background: #38434d;
 }
 
 .demo-toolbar p,
@@ -477,8 +498,8 @@ summary:active {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 10px rgba(67, 216, 196, 0.55);
+  background: var(--success);
+  box-shadow: 0 0 10px rgba(98, 201, 141, 0.45);
 }
 
 .demo-prompt {
@@ -488,15 +509,14 @@ summary:active {
   grid-template-columns: auto 1fr;
   gap: 1rem;
   align-items: start;
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--brand-bright);
   background: var(--surface-raised);
 }
 
 .demo-label,
 .panel-kicker,
-.capability-code,
-.recommended-label {
-  color: var(--accent-bright);
+.capability-code {
+  color: var(--brand-bright);
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -505,7 +525,7 @@ summary:active {
 
 .demo-prompt p {
   margin: 0;
-  color: #d6e2e1;
+  color: #d9e0e5;
   font-size: 0.82rem;
   line-height: 1.55;
 }
@@ -520,7 +540,7 @@ summary:active {
 }
 
 .timeline:has(.timeline-input:focus-visible) {
-  outline: 2px solid var(--accent-bright);
+  outline: 2px solid var(--brand-bright);
   outline-offset: -3px;
 }
 
@@ -530,7 +550,7 @@ summary:active {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  color: #506168;
+  color: #596772;
   font: 0.58rem/1 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
@@ -540,11 +560,11 @@ summary:active {
   grid-template-columns: 2.5rem minmax(0, 1fr);
   align-items: center;
   gap: 0.25rem;
-  border-top: 1px solid rgba(195, 222, 221, 0.07);
+  border-top: 1px solid rgba(186, 201, 212, 0.08);
 }
 
 .timeline-track > b {
-  color: #596b70;
+  color: #65737e;
   font-size: 0.62rem;
   font-weight: 650;
 }
@@ -574,26 +594,26 @@ summary:active {
 
 .clip-title {
   grid-column: 3 / 10;
-  color: #cafff7;
-  border-color: rgba(67, 216, 196, 0.46);
-  background: rgba(67, 216, 196, 0.2);
+  color: var(--success-bright);
+  border-color: var(--success-line);
+  background: var(--success-soft);
 }
 
 .clip-a {
   grid-column: 1 / 7;
-  background: #285d72;
+  background: var(--track-blue);
 }
 
 .clip-b {
   grid-column: 7 / -1;
-  background: #625879;
+  background: var(--track-violet);
 }
 
 .clip-audio {
   position: relative;
   grid-column: 1 / -1;
-  border-color: rgba(109, 168, 220, 0.28);
-  background: rgba(109, 168, 220, 0.12);
+  border-color: var(--blue-line);
+  background: var(--blue-soft);
 }
 
 .clip-audio::before {
@@ -640,7 +660,7 @@ summary:active {
 
 .timeline.is-scrubbing .playhead {
   width: 2px;
-  box-shadow: 0 0 12px rgba(255, 113, 128, 0.38);
+  box-shadow: 0 0 12px rgba(240, 109, 122, 0.4);
 }
 
 .demo-result {
@@ -667,9 +687,9 @@ summary:active {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  color: var(--accent-ink);
+  color: var(--success-ink);
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--success);
   font-size: 0.72rem;
   font-weight: 900;
 }
@@ -802,7 +822,7 @@ summary:active {
 .step-number {
   align-self: start;
   padding-top: 0.3rem;
-  color: var(--accent-bright);
+  color: var(--brand-bright);
   font: 0.72rem ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
@@ -847,7 +867,7 @@ summary:active {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  color: var(--accent-bright);
+  color: var(--brand-bright);
   font-size: 0.84rem;
   font-weight: 720;
   text-decoration: none;
@@ -896,9 +916,9 @@ summary:active {
   height: 2rem;
   display: grid;
   place-items: center;
-  color: var(--accent-ink);
+  color: var(--success-ink);
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--success);
   font: 0.68rem ui-monospace, SFMono-Regular, Consolas, monospace;
   font-weight: 850;
 }
@@ -956,7 +976,7 @@ summary:active {
   position: relative;
   padding: 0.75rem 0 0.75rem 1.1rem;
   color: var(--text-secondary);
-  border-top: 1px solid rgba(195, 222, 221, 0.08);
+  border-top: 1px solid rgba(186, 201, 212, 0.08);
   font-size: 0.84rem;
 }
 
@@ -968,7 +988,7 @@ summary:active {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--brand-bright);
 }
 
 .tools-link {
@@ -999,7 +1019,7 @@ summary:active {
   flex-direction: column;
   align-items: flex-start;
   padding: 1.5rem;
-  border-color: rgba(67, 216, 196, 0.28);
+  border-color: var(--brand-line);
 }
 
 .recommended-label {
@@ -1007,9 +1027,13 @@ summary:active {
   align-items: center;
   min-height: 28px;
   padding: 0 0.65rem;
-  color: var(--accent-ink);
+  color: var(--success-ink);
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--success);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .release-panel > div {
@@ -1061,16 +1085,16 @@ summary:active {
 
 .copy-button:hover,
 .copy-button.copied {
-  color: var(--accent-bright);
-  border-color: rgba(67, 216, 196, 0.4);
-  background: rgba(67, 216, 196, 0.06);
+  color: var(--brand-bright);
+  border-color: var(--brand-line);
+  background: var(--brand-soft);
 }
 
 .source-panel > pre,
 .platform-code pre {
   overflow-x: auto;
   margin: 0;
-  color: #dbe8e6;
+  color: #dce4e9;
   font-size: 0.76rem;
   line-height: 1.9;
   scrollbar-color: var(--line-strong) transparent;
@@ -1095,7 +1119,7 @@ summary:active {
   content: ">";
   position: absolute;
   left: 0;
-  color: var(--accent);
+  color: var(--attention);
 }
 
 .platform-details {
@@ -1112,7 +1136,7 @@ summary:active {
 
 .platform-code {
   position: relative;
-  border-top: 1px solid rgba(195, 222, 221, 0.08);
+  border-top: 1px solid rgba(186, 201, 212, 0.08);
   background: var(--bg-deep);
 }
 
@@ -1190,7 +1214,7 @@ summary::after {
   position: absolute;
   right: 0.25rem;
   top: 50%;
-  color: var(--accent);
+  color: var(--brand-bright);
   font-size: 1.3rem;
   font-weight: 400;
   transform: translateY(-50%);
@@ -1237,7 +1261,7 @@ details[open]::details-content {
   top: 0;
   bottom: 0;
   width: 4px;
-  background: var(--accent);
+  background: var(--brand);
 }
 
 .final-cta-layout {
@@ -1287,7 +1311,7 @@ details[open]::details-content {
 }
 
 .site-footer nav a:hover {
-  color: var(--accent-bright);
+  color: var(--brand-bright);
 }
 
 @media (max-width: 1040px) {
@@ -1363,14 +1387,14 @@ details[open]::details-content {
   }
 
   .site-nav a + a {
-    border-top: 1px solid rgba(195, 222, 221, 0.08);
+    border-top: 1px solid rgba(186, 201, 212, 0.08);
   }
 
   .site-nav .nav-cta {
     margin-top: 0.45rem;
     justify-content: center;
-    color: var(--accent-ink);
-    background: var(--accent);
+    color: var(--brand-ink);
+    background: var(--brand);
   }
 
   .no-js .menu-toggle {
@@ -1636,7 +1660,7 @@ details[open]::details-content {
   .compatibility-bar span,
   .compatibility-bar span:nth-child(3) {
     padding-inline: 0;
-    border-top: 1px solid rgba(195, 222, 221, 0.08);
+    border-top: 1px solid rgba(186, 201, 212, 0.08);
     border-left: 0;
   }
 
@@ -1780,10 +1804,12 @@ details[open]::details-content {
 
 @media (prefers-contrast: more) {
   :root {
-    --text-secondary: #d1dcdb;
-    --text-muted: #a7b7b8;
-    --line: rgba(238, 245, 244, 0.34);
-    --line-strong: rgba(238, 245, 244, 0.58);
+    --text-secondary: #d3dae0;
+    --text-muted: #aab5be;
+    --line: rgba(243, 246, 247, 0.34);
+    --line-strong: rgba(243, 246, 247, 0.58);
+    --brand-bright: #95cde0;
+    --success-bright: #a2e6bc;
   }
 
   .site-header.is-scrolled,

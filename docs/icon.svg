@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Shotcut MCP">
-  <rect width="48" height="48" rx="12" fill="#43d8c4"/>
-  <path d="M11 16h15M11 24h26M11 32h15" fill="none" stroke="#071116" stroke-width="3.5" stroke-linecap="round"/>
-  <path d="M31 12v24" fill="none" stroke="#071116" stroke-width="3" stroke-linecap="round"/>
-  <path d="m27.5 12 3.5-4 3.5 4Z" fill="#071116"/>
+  <rect width="48" height="48" rx="12" fill="#115c77"/>
+  <path d="M11 16h15M11 24h26M11 32h15" fill="none" stroke="#f8fbfc" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M31 12v24" fill="none" stroke="#62c98d" stroke-width="3" stroke-linecap="round"/>
+  <path d="m27.5 12 3.5-4 3.5 4Z" fill="#62c98d"/>
 </svg>
