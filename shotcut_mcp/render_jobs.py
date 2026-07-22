@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ToolError
+from .storage import fsync_directory
 
 
 def _owner_key() -> str:
@@ -78,6 +79,7 @@ def write_job(metadata: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 

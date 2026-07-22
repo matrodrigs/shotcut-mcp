@@ -26,6 +26,7 @@ from .platform import (
 )
 from .protocol import cancellation_requested
 from .storage import (
+    fsync_directory,
     is_project_backup,
     list_project_backups,
     project_lock,
@@ -2010,6 +2011,7 @@ def _write_validated(
                 else None
             )
             os.replace(temporary, path)
+            fsync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
     revision = _sha256(data)

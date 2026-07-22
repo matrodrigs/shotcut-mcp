@@ -119,6 +119,36 @@ class ProjectTransactionTests(unittest.TestCase):
                         }
                     )
 
+    def test_restore_rejects_an_unrecognized_file_in_the_backup_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "movie.mlt"
+            with patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ):
+                created = create_project({"project_path": str(project_path)})
+                edited = edit_project(
+                    {
+                        "project_path": str(project_path),
+                        "operations": [{"op": "add_track", "kind": "audio"}],
+                        "expected_revision": created["revision"],
+                    }
+                )
+                backup = Path(list_backups(project_path)["backups"][0]["path"])
+                rogue = backup.parent / "injected.mlt"
+                rogue.write_bytes(backup.read_bytes())
+
+                with self.assertRaisesRegex(
+                    ToolError, "not one of this project's backups"
+                ):
+                    restore_backup(
+                        {
+                            "project_path": str(project_path),
+                            "backup_path": str(rogue),
+                            "expected_revision": edited["revision"],
+                        }
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

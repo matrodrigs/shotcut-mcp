@@ -27,6 +27,19 @@ def _private_directory(path: Path) -> None:
         path.chmod(0o700)
 
 
+def fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def process_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -102,6 +115,7 @@ class OutputTransaction:
         if self.initial_mode is not None:
             os.chmod(self.temporary, self.initial_mode)
         os.replace(self.temporary, self.target)
+        fsync_directory(self.target.parent)
 
     def cleanup(self) -> None:
         self.temporary.unlink(missing_ok=True)
@@ -201,6 +215,13 @@ def _legacy_backup_pattern(project_path: Path) -> re.Pattern[str]:
     )
 
 
+def _isolated_backup_pattern(project_path: Path) -> re.Pattern[str]:
+    return re.compile(
+        r"^\d{8}T\d{6}\.\d{6}Z\."
+        rf"[0-9a-f]{{12}}{re.escape(project_path.suffix)}$"
+    )
+
+
 def legacy_backup_directory(project_path: Path) -> Path:
     return project_path.parent / ".shotcut-mcp" / "backups"
 
@@ -208,8 +229,13 @@ def legacy_backup_directory(project_path: Path) -> Path:
 def list_project_backups(project_path: Path) -> list[Path]:
     candidates: list[Path] = []
     isolated = backup_directory(project_path)
+    isolated_pattern = _isolated_backup_pattern(project_path)
     if isolated.is_dir():
-        candidates.extend(path for path in isolated.iterdir() if path.is_file())
+        candidates.extend(
+            path
+            for path in isolated.iterdir()
+            if path.is_file() and isolated_pattern.fullmatch(path.name)
+        )
     legacy = legacy_backup_directory(project_path)
     pattern = _legacy_backup_pattern(project_path)
     if legacy.is_dir():
@@ -228,7 +254,11 @@ def is_project_backup(project_path: Path, candidate: Path) -> bool:
         return False
     isolated = backup_directory(project_path).resolve(strict=False)
     if resolved.parent == isolated:
-        return resolved.is_file()
+        return (
+            resolved.is_file()
+            and _isolated_backup_pattern(project_path).fullmatch(resolved.name)
+            is not None
+        )
     legacy = legacy_backup_directory(project_path).resolve(strict=False)
     return (
         resolved.parent == legacy
@@ -240,6 +270,14 @@ def is_project_backup(project_path: Path, candidate: Path) -> bool:
 def write_project_backup(project_path: Path, source: bytes, keep: int = 20) -> Path:
     directory = backup_directory(project_path)
     _private_directory(directory)
+    try:
+        directory.resolve(strict=True).relative_to(
+            project_path.parent.resolve(strict=True)
+        )
+    except (OSError, ValueError) as exc:
+        raise ToolError(
+            "The backup directory resolves outside the project directory."
+        ) from exc
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_path = directory / f"{stamp}.{_sha256(source)[:12]}{project_path.suffix}"
     descriptor = os.open(backup_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -247,7 +285,16 @@ def write_project_backup(project_path: Path, source: bytes, keep: int = 20) -> P
         handle.write(source)
         handle.flush()
         os.fsync(handle.fileno())
-    for old in list_project_backups(project_path)[keep:]:
-        if old.parent == directory:
-            old.unlink(missing_ok=True)
+    fsync_directory(directory)
+    isolated_backups = sorted(
+        (
+            path
+            for path in directory.iterdir()
+            if path.is_file()
+            and _isolated_backup_pattern(project_path).fullmatch(path.name)
+        ),
+        reverse=True,
+    )
+    for old in isolated_backups[keep:]:
+        old.unlink(missing_ok=True)
     return backup_path
