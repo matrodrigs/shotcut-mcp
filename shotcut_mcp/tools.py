@@ -146,8 +146,8 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
 def capabilities(_: dict[str, Any]) -> dict[str, Any]:
     return {
         "compatibility": {
-            "shotcut": "26.2.26",
-            "mlt": "7.37.x",
+            "shotcut": "26.6.25",
+            "mlt": "7.40.x",
             "project_format": "MLT XML",
         },
         "transaction_guarantees": [
@@ -284,7 +284,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "create_project",
         "title": "Create multitrack Shotcut project",
-        "description": "Creates Shotcut 26.2 MLT XML with a background, V1, additional tracks, and optional clips.",
+        "description": "Creates Shotcut 26.6 MLT XML with a background, V1, additional tracks, and optional clips.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,

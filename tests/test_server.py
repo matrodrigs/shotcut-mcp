@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
+from shotcut_mcp import platform as platform_module
 from shotcut_mcp.errors import ConflictError, ToolError
 from shotcut_mcp.project import (
     ProjectDocument,
@@ -20,6 +21,35 @@ from shotcut_mcp.render import start_render
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 SERVER_PATH = PLUGIN_ROOT / "scripts" / "shotcut_mcp_server.py"
+
+
+class MeltStartupTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        cache = getattr(platform_module, "_MELT_READY_CACHE", None)
+        if cache is not None:
+            cache.clear()
+
+    def test_cold_start_timeout_is_retried_once_and_then_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            melt = Path(directory) / "melt.exe"
+            melt.write_bytes(b"test executable")
+            timeout = ToolError("cold start timed out")
+            timeout.__cause__ = subprocess.TimeoutExpired([str(melt)], 5)
+            success = subprocess.CompletedProcess(
+                [str(melt), "-query", "consumers"], 0, "consumers", ""
+            )
+
+            with patch(
+                "shotcut_mcp.platform.run_capture",
+                side_effect=[timeout, success],
+            ) as run:
+                platform_module.ensure_melt_ready(melt, attempts=3, timeout=5)
+                platform_module.ensure_melt_ready(melt, attempts=3, timeout=5)
+
+            self.assertEqual(run.call_count, 2)
+            run.assert_called_with(
+                [str(melt), "-query", "consumers"], timeout=5
+            )
 
 
 class ProtocolTests(unittest.TestCase):

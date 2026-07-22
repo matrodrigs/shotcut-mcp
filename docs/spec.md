@@ -3,7 +3,7 @@
 ## Goal
 
 Provide a fast, local and reliable MCP server that can create, inspect, edit, validate,
-preview and render saved Shotcut 26.2 projects without requiring a network service.
+preview and render saved Shotcut 26.6 projects without requiring a network service.
 
 ## Required behavior
 
@@ -24,7 +24,9 @@ preview and render saved Shotcut 26.2 projects without requiring a network servi
 
 ## Compatibility boundary
 
-- Target the installed Shotcut 26.2.26 and MLT 7.37.0 formats.
+- Target the installed Shotcut 26.6.25 and MLT 7.40.0 formats.
+- Warm and retry cold MLT repository initialization before validation, preview and rendering,
+  while keeping every installed service available and caching readiness by executable identity.
 - Work on saved `.mlt`/MLT XML projects. Unsaved GUI state is out of scope.
 - Preserve unsupported structures, but reject an edit when a target is ambiguous or when
   modifying it would require guessing about an unknown transition layout.

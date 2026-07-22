@@ -19,6 +19,8 @@ from .errors import ToolError
 _PROBE_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _PROBE_LOCK = threading.Lock()
 _SERVICE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_MELT_READY_CACHE: set[tuple[str, int, int]] = set()
+_MELT_READY_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,47 @@ def run_capture(
         raise ToolError(f"Could not run {command[0]}: {exc}") from exc
 
 
+def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> None:
+    """Warm MLT's module repository and tolerate one-time cold starts.
+
+    A newly installed or extracted Windows build can spend long enough loading
+    its DLL-backed modules that an ordinary validation command times out. A
+    short terminated attempt warms the operating-system loader; retrying then
+    completes normally with the full repository available. Cache readiness by
+    executable identity so normal operations pay no repeated startup probe.
+    """
+
+    stat = melt.stat()
+    cache_key = (str(melt), stat.st_mtime_ns, stat.st_size)
+    with _MELT_READY_LOCK:
+        if cache_key in _MELT_READY_CACHE:
+            return
+
+        last_timeout: ToolError | None = None
+        command = [str(melt), "-query", "consumers"]
+        for _ in range(attempts):
+            try:
+                result = run_capture(command, timeout=timeout)
+            except ToolError as exc:
+                if not isinstance(exc.__cause__, subprocess.TimeoutExpired):
+                    raise
+                last_timeout = exc
+                continue
+            if result.returncode:
+                detail = (result.stderr.strip() or result.stdout.strip())[-1200:]
+                raise ToolError(
+                    f"MLT repository initialization failed: {detail or 'unknown error'}"
+                )
+            if len(_MELT_READY_CACHE) > 16:
+                _MELT_READY_CACHE.clear()
+            _MELT_READY_CACHE.add(cache_key)
+            return
+
+        raise ToolError(
+            f"MLT repository initialization timed out after {attempts} attempts."
+        ) from last_timeout
+
+
 def version_line(executable: Path | None, args: list[str]) -> str | None:
     if executable is None:
         return None
@@ -156,8 +199,17 @@ def version_line(executable: Path | None, args: list[str]) -> str | None:
 
 def status() -> dict[str, Any]:
     executables = discover_executables()
+    repository_ready = False
+    repository_error = None
+    if executables.melt is not None:
+        try:
+            ensure_melt_ready(executables.melt, attempts=2, timeout=4)
+            repository_ready = True
+        except ToolError as exc:
+            repository_error = str(exc)
     return {
-        "ready": all((executables.shotcut, executables.melt, executables.ffprobe)),
+        "ready": all((executables.shotcut, executables.melt, executables.ffprobe))
+        and repository_ready,
         "shotcut": {
             "found": executables.shotcut is not None,
             "path": str(executables.shotcut) if executables.shotcut else None,
@@ -166,6 +218,8 @@ def status() -> dict[str, Any]:
             "found": executables.melt is not None,
             "path": str(executables.melt) if executables.melt else None,
             "version": version_line(executables.melt, ["--version"]),
+            "repository_ready": repository_ready,
+            "repository_error": repository_error,
         },
         "ffprobe": {
             "found": executables.ffprobe is not None,
@@ -297,6 +351,7 @@ def summarize_media(media_path: Path) -> dict[str, Any]:
 
 def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, Any]:
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
     result = run_capture(
         [
             str(melt),
@@ -325,6 +380,7 @@ def list_services(kind: str) -> dict[str, Any]:
     if kind not in {"filter", "transition", "producer", "consumer"}:
         raise ToolError("kind must be filter, transition, producer, or consumer.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
     cache_key = (str(melt), kind)
     if cache_key in _SERVICE_CACHE:
         return _SERVICE_CACHE[cache_key]
@@ -343,6 +399,7 @@ def describe_service(kind: str, name: str) -> dict[str, Any]:
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:+-]+", name):
         raise ToolError("Invalid MLT service name.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
     result = run_capture([str(melt), "-query", f"{kind}={name}"], timeout=30)
     text = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
     return {
@@ -385,6 +442,7 @@ def render_preview(
         raise ToolError(f"The image already exists: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
     result = run_capture(
         [
             str(melt),

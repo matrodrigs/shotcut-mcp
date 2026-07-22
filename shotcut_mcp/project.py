@@ -198,8 +198,8 @@ class ProjectDocument:
             "mlt",
             {
                 "LC_NUMERIC": "C",
-                "version": "7.37.0",
-                "title": "Shotcut version 26.2.26",
+                "version": "7.40.0",
+                "title": "Shotcut version 26.6.25",
                 "producer": "tractor0",
                 "root": str(path.parent).replace("\\", "/"),
             },

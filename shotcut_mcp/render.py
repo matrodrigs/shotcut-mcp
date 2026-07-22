@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ToolError
-from .platform import creation_flags, discover_executables, require_executable
+from .platform import (
+    creation_flags,
+    discover_executables,
+    ensure_melt_ready,
+    require_executable,
+)
 
 
 JOB_DIR = Path(tempfile.gettempdir()) / "shotcut-mcp" / "jobs"
@@ -148,6 +153,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     properties = dict(RENDER_PRESETS[preset])
     properties.update(_consumer_properties(arguments.get("consumer_properties")))
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex
     temporary_output = output_path.with_name(

@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
-[![Shotcut 26.2.26](https://img.shields.io/badge/Shotcut-26.2.26-115c77.svg)](https://www.shotcut.org/)
+[![Shotcut 26.6.25](https://img.shields.io/badge/Shotcut-26.6.25-115c77.svg)](https://www.shotcut.org/)
 [![MCP stdio](https://img.shields.io/badge/MCP-stdio-7c3aed.svg)](https://modelcontextprotocol.io/)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-active-39e6ca.svg)](https://registry.modelcontextprotocol.io/?search=io.github.matrodrigs%2Fshotcut-mcp)
 [![Project website](https://img.shields.io/badge/website-GitHub_Pages-39e6ca.svg)](https://matrodrigs.github.io/shotcut-mcp/)
@@ -60,12 +60,16 @@ provides Melt, FFmpeg, FFprobe, codecs, filters, and render services.
 ### Requirements
 
 - Python 3.10 or newer
-- Shotcut 26.2.26, or a compatible installation that provides MLT 7.37.x
+- Shotcut 26.6.25, or a compatible installation that provides MLT 7.40.x
 - Codex CLI or another MCP client that supports local stdio servers
 
-The current compatibility target is Shotcut **26.2.26** with MLT **7.37.0**. The integration suite
+The current compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The integration suite
 is exercised on Windows; executable discovery also supports binaries available on `PATH` and common
 macOS locations.
+
+The MCP performs a short, cached MLT repository preflight before validation, preview and render
+operations. This absorbs one-time cold module loading after a Windows install or portable
+extraction without disabling any MLT services or changing the Shotcut environment.
 
 ### 1. Clone the repository
 
