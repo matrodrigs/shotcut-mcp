@@ -3,10 +3,18 @@ name: Publish to MCP Registry
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: Published release tag to register
+        required: true
+        type: string
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
     permissions:
       id-token: write
       contents: read
@@ -14,6 +22,8 @@ jobs:
     steps:
       - name: Checkout release
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install mcp-publisher
         run: |
@@ -26,9 +36,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           artifact="shotcut-mcp-${version}.mcpb"
-          gh release download "$GITHUB_REF_NAME" --pattern "$artifact"
+          checksum="${artifact}.sha256"
+          gh release download "$RELEASE_TAG" --pattern "$artifact"
+          gh release download "$RELEASE_TAG" --pattern "$checksum"
+          sha256sum --check --strict "$checksum"
           python scripts/prepare_server_json.py "$version" "$artifact"
           python scripts/check_release.py
 

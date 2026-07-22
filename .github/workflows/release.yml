@@ -1,0 +1,175 @@
+name: Create release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag in vX.Y.Z form
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish verified release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Validate release tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use vX.Y.Z: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "Checked-out commit does not match $RELEASE_TAG" >&2
+            exit 1
+          fi
+          git fetch origin main:refs/remotes/origin/main --no-tags
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "$RELEASE_TAG must point to a commit contained in main" >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned quality tools
+        run: python -m pip install --disable-pip-version-check ruff==0.15.22 mypy==2.3.0
+
+      - name: Run release checks
+        run: |
+          python -B -m compileall -q shotcut_mcp scripts tests
+          ruff check .
+          ruff format --check .
+          mypy
+          python -B -m unittest discover -s tests -v
+          python scripts/check_release.py
+
+      - name: Build deterministic MCPB
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python -B scripts/build_release.py "$VERSION" --output-dir dist
+
+      - name: Create draft release with verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "dist/shotcut-mcp-${VERSION}.mcpb" \
+            "dist/shotcut-mcp-${VERSION}.mcpb.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "$RELEASE_TAG" \
+            --notes-file "dist/release-notes-${VERSION}.md"
+
+      - name: Verify uploaded release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir verified
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "shotcut-mcp-${VERSION}.mcpb" \
+            --dir verified
+          expected="$(cut -d ' ' -f 1 "dist/shotcut-mcp-${VERSION}.mcpb.sha256")"
+          actual="$(sha256sum "verified/shotcut-mcp-${VERSION}.mcpb" | cut -d ' ' -f 1)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Uploaded MCPB digest mismatch: expected $expected, received $actual" >&2
+            exit 1
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  publish-registry:
+    name: Publish MCP Registry metadata
+    needs: release
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-mcp-registry.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+
+  record-metadata:
+    name: Record published artifact metadata
+    needs: [release, publish-registry]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      VERSION: ${{ needs.release.outputs.version }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Download published MCPB
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact="shotcut-mcp-${VERSION}.mcpb"
+          gh release download "$RELEASE_TAG" --pattern "$artifact"
+          gh release download "$RELEASE_TAG" --pattern "${artifact}.sha256"
+          sha256sum --check --strict "${artifact}.sha256"
+
+      - name: Update and validate server metadata
+        run: |
+          python scripts/prepare_server_json.py "$VERSION" "shotcut-mcp-${VERSION}.mcpb"
+          python scripts/check_release.py
+
+      - name: Commit published metadata
+        run: |
+          if git diff --quiet -- server.json; then
+            echo "server.json already records $RELEASE_TAG"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.json
+          git commit -m "chore(release): record published ${VERSION} artifact"
+          git push origin HEAD:main

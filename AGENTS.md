@@ -134,6 +134,8 @@ integration stays opt-in and must use temporary projects and outputs.
 - Keep `shotcut_mcp.__version__` and `manifest.json` aligned.
 - `server.json` describes the latest published artifact, not unreleased source state.
 - Pin release tooling by version and checksum; never publish an unverified MCPB.
+- Release only an existing `vX.Y.Z` tag contained in `main`; its version must match the package
+  metadata and a closed changelog section. Build and verify the MCPB before publishing the draft.
 
 ## Documentation and commits
 
