@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
 import time
 import unittest
@@ -56,7 +57,9 @@ class ProtocolValidationTests(unittest.TestCase):
             return {"unexpected": True}
 
         messages = (
-            json.dumps(
+            json.dumps(request("initialize", {"protocolVersion": "2025-11-25"}))
+            + "\n"
+            + json.dumps(
                 request(
                     "tools/call",
                     {"name": "shotcut_status", "arguments": {}},
@@ -79,9 +82,78 @@ class ProtocolValidationTests(unittest.TestCase):
         ):
             serve(io.BytesIO(messages), output)
 
-        response = json.loads(output.getvalue().decode().strip())
+        response = json.loads(output.getvalue().decode().splitlines()[-1])
         self.assertEqual(response["id"], 9)
         self.assertEqual(response["error"]["code"], -32800)
+
+    def test_stdio_server_requires_initialize_before_tools(self) -> None:
+        message = (
+            json.dumps(
+                request(
+                    "tools/call",
+                    {"name": "shotcut_status", "arguments": {}},
+                )
+            )
+            + "\n"
+        ).encode()
+        output = io.BytesIO()
+
+        serve(io.BytesIO(message), output)
+
+        response = json.loads(output.getvalue().decode())
+        self.assertEqual(response["error"]["code"], -32002)
+
+    def test_stdio_server_bounds_the_inflight_request_queue(self) -> None:
+        def slow_handler(_arguments: dict[str, object]) -> dict[str, object]:
+            time.sleep(0.2)
+            return {"done": True}
+
+        messages = (
+            json.dumps(request("initialize", {"protocolVersion": "2025-11-25"}))
+            + "\n"
+            + json.dumps(
+                request(
+                    "tools/call",
+                    {"name": "shotcut_status", "arguments": {}},
+                    request_id=10,
+                )
+            )
+            + "\n"
+            + json.dumps(
+                request(
+                    "tools/call",
+                    {"name": "shotcut_status", "arguments": {}},
+                    request_id=11,
+                )
+            )
+            + "\n"
+        ).encode()
+        output = io.BytesIO()
+        with (
+            patch.dict(
+                os.environ,
+                {"SHOTCUT_MCP_MAX_PENDING": "1", "SHOTCUT_MCP_MAX_WORKERS": "1"},
+            ),
+            patch.dict("shotcut_mcp.server.HANDLERS", {"shotcut_status": slow_handler}),
+        ):
+            serve(io.BytesIO(messages), output)
+
+        responses = [
+            json.loads(line) for line in output.getvalue().decode().splitlines()
+        ]
+        overload = next(item for item in responses if item.get("id") == 11)
+        self.assertEqual(overload["error"]["code"], -32000)
+
+    def test_stdio_server_rejects_an_oversized_message(self) -> None:
+        oversized = (json.dumps({"padding": "x" * 2_000}) + "\n").encode()
+        output = io.BytesIO()
+
+        with patch.dict(os.environ, {"SHOTCUT_MCP_MAX_MESSAGE_BYTES": "1024"}):
+            serve(io.BytesIO(oversized), output)
+
+        response = json.loads(output.getvalue().decode())
+        self.assertEqual(response["error"]["code"], -32600)
+        self.assertIn("size limit", response["error"]["message"])
 
 
 class ProtocolNegotiationTests(unittest.TestCase):
@@ -101,6 +173,23 @@ class ProtocolNegotiationTests(unittest.TestCase):
         ]
         self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-03-26")
         self.assertEqual([item["id"] for item in responses[1]], [2, 3])
+
+    def test_legacy_batch_is_bounded_by_the_pending_limit(self) -> None:
+        messages = (
+            json.dumps(request("initialize", {"protocolVersion": "2025-03-26"}))
+            + "\n"
+            + json.dumps([request("ping", request_id=2), request("ping", request_id=3)])
+            + "\n"
+        ).encode()
+        output = io.BytesIO()
+
+        with patch.dict(os.environ, {"SHOTCUT_MCP_MAX_PENDING": "1"}):
+            serve(io.BytesIO(messages), output)
+
+        responses = [
+            json.loads(line) for line in output.getvalue().decode().splitlines()
+        ]
+        self.assertEqual(responses[1]["error"]["code"], -32000)
 
     def test_legacy_client_receives_only_legacy_tool_fields(self) -> None:
         session = ProtocolSession()

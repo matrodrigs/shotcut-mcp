@@ -437,6 +437,9 @@ def status() -> dict[str, Any]:
                 "SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS",
                 "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES",
                 "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES",
+                "SHOTCUT_MCP_MAX_WORKERS",
+                "SHOTCUT_MCP_MAX_PENDING",
+                "SHOTCUT_MCP_MAX_MESSAGE_BYTES",
                 *MLT_ENVIRONMENT_KEYS,
             )
         },

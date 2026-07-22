@@ -31,6 +31,7 @@ STRUCTURED_CONTENT_PROTOCOLS = {"2025-06-18", "2025-11-25"}
 class ProtocolSession:
     protocol_version: str = LATEST_PROTOCOL_VERSION
     initialized: bool = False
+    enforce_lifecycle: bool = False
 
 
 def _error(
@@ -86,7 +87,15 @@ def handle_request(
         request_id, (str, int, type(None))
     ):
         return _error(None, -32600, "Invalid Request: id must be a string or number.")
+    if (
+        active_session.enforce_lifecycle
+        and not active_session.initialized
+        and method != "initialize"
+    ):
+        return _error(request_id, -32002, "Server is not initialized.")
     if method == "initialize":
+        if active_session.enforce_lifecycle and active_session.initialized:
+            return _error(request_id, -32600, "Server is already initialized.")
         raw_params = message.get("params")
         if not isinstance(raw_params, dict):
             return _error(request_id, -32602, "Invalid initialize parameters.")
@@ -197,14 +206,32 @@ def _worker_count() -> int:
     return max(1, min(8, configured))
 
 
+def _pending_limit() -> int:
+    try:
+        configured = int(os.environ.get("SHOTCUT_MCP_MAX_PENDING", "32"))
+    except ValueError:
+        configured = 32
+    return max(1, min(256, configured))
+
+
+def _message_size_limit() -> int:
+    try:
+        configured = int(os.environ.get("SHOTCUT_MCP_MAX_MESSAGE_BYTES", "4194304"))
+    except ValueError:
+        configured = 4_194_304
+    return max(1_024, min(16_777_216, configured))
+
+
 def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
-    session = ProtocolSession()
+    session = ProtocolSession(enforce_lifecycle=True)
     output_lock = threading.Lock()
     pending_lock = threading.Lock()
     pending: dict[str | int | None, tuple[Future[Any], threading.Event]] = {}
     executor = ThreadPoolExecutor(
         max_workers=_worker_count(), thread_name_prefix="shotcut-mcp"
     )
+    pending_limit = _pending_limit()
+    message_size_limit = _message_size_limit()
 
     def complete(request_id: str | int | None, future: Future[Any]) -> None:
         with pending_lock:
@@ -233,7 +260,21 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
             return handle_request(message, session)
 
     try:
-        for raw_line in input_stream:
+        while True:
+            raw_line = input_stream.readline(message_size_limit + 1)
+            if not raw_line:
+                break
+            if len(raw_line) > message_size_limit:
+                while raw_line and not raw_line.endswith(b"\n"):
+                    raw_line = input_stream.readline(message_size_limit + 1)
+                write_message(
+                    _error(
+                        None, -32600, "MCP message exceeds the configured size limit."
+                    ),
+                    output_stream,
+                    output_lock,
+                )
+                continue
             if not raw_line.strip():
                 continue
             try:
@@ -249,6 +290,15 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 if not message or session.protocol_version != "2025-03-26":
                     write_message(
                         _error(None, -32600, "JSON-RPC batching is not supported."),
+                        output_stream,
+                        output_lock,
+                    )
+                    continue
+                if len(message) > pending_limit:
+                    write_message(
+                        _error(
+                            None, -32000, "JSON-RPC batch exceeds the request limit."
+                        ),
                         output_stream,
                         output_lock,
                     )
@@ -300,9 +350,17 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                     continue
                 with pending_lock:
                     duplicate = request_id in pending
+                    overloaded = len(pending) >= pending_limit
                 if duplicate:
                     write_message(
                         _error(request_id, -32600, "Duplicate in-flight request id."),
+                        output_stream,
+                        output_lock,
+                    )
+                    continue
+                if overloaded:
+                    write_message(
+                        _error(request_id, -32000, "Too many in-flight requests."),
                         output_stream,
                         output_lock,
                     )

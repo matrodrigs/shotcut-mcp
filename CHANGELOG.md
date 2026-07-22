@@ -8,7 +8,7 @@
 - `plan_project_edit` for validated read-only snapshots and bounded XML diffs.
 - Restart-resilient render supervision, durable cancellation and automatic output promotion.
 - MCP input-schema validation, version-shaped tool schemas/results, 2025-03 batching and request
-  cancellation.
+  cancellation, lifecycle enforcement and bounded request resources.
 - Canonical allowed-root, absolute-path, network-resource and unsafe-consumer policies.
 - Cross-platform CI with Ruff, Mypy, metadata checks and pinned release tooling.
 
@@ -29,4 +29,4 @@
 - Custom render properties are restricted to single-file outputs by default.
 - Preview/render promotion detects concurrent target changes and uses sibling atomic replacement.
 - Job state and backup storage use per-user/private directories where supported.
-
+- Backup restores reject unrecognized files even when they are injected into the private namespace.
