@@ -1,0 +1,121 @@
+(() => {
+  "use strict";
+
+  const header = document.querySelector("[data-site-header]");
+  const menuToggle = document.querySelector("[data-menu-toggle]");
+  const siteNav = document.querySelector("[data-site-nav]");
+
+  const setMenuOpen = (open) => {
+    if (!header || !menuToggle) return;
+    header.classList.toggle("menu-open", open);
+    menuToggle.setAttribute("aria-expanded", String(open));
+  };
+
+  const updateHeader = () => {
+    if (!header) return;
+    header.classList.toggle("is-scrolled", window.scrollY > 20);
+  };
+
+  let scrollFrame = 0;
+  window.addEventListener("scroll", () => {
+    if (scrollFrame) return;
+    scrollFrame = window.requestAnimationFrame(() => {
+      updateHeader();
+      scrollFrame = 0;
+    });
+  }, { passive: true });
+  updateHeader();
+
+  menuToggle?.addEventListener("click", () => {
+    setMenuOpen(menuToggle.getAttribute("aria-expanded") !== "true");
+  });
+
+  siteNav?.addEventListener("click", (event) => {
+    if (event.target.closest("a")) setMenuOpen(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setMenuOpen(false);
+      menuToggle?.focus();
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (header?.classList.contains("menu-open") && !header.contains(event.target)) {
+      setMenuOpen(false);
+    }
+  });
+
+  const desktopQuery = window.matchMedia("(min-width: 861px)");
+  desktopQuery.addEventListener?.("change", (event) => {
+    if (event.matches) setMenuOpen(false);
+  });
+
+  const writeClipboard = async (text) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  };
+
+  document.querySelectorAll("[data-copy-target]").forEach((button) => {
+    const label = button.querySelector("span:not(.sr-only)");
+    const status = button.querySelector("[data-copy-status]");
+    const defaultLabel = label?.textContent || "Copy";
+    let resetTimer = 0;
+
+    button.addEventListener("click", async () => {
+      const target = document.querySelector(button.dataset.copyTarget);
+      if (!target) return;
+
+      try {
+        await writeClipboard(target.textContent.trim());
+        button.classList.add("copied");
+        if (label) label.textContent = "Copied";
+        if (status) status.textContent = "Command copied to clipboard.";
+      } catch {
+        if (label) label.textContent = "Select text";
+        if (status) status.textContent = "Copy failed. Select the command manually.";
+        target.closest("pre")?.focus?.();
+      }
+
+      window.clearTimeout(resetTimer);
+      resetTimer = window.setTimeout(() => {
+        button.classList.remove("copied");
+        if (label) label.textContent = defaultLabel;
+        if (status) status.textContent = "";
+      }, 1800);
+    });
+  });
+
+  const timeline = document.querySelector("[data-timeline]");
+  const timelineInput = document.querySelector("[data-timeline-input]");
+  const timelineTime = document.querySelector("[data-timeline-time]");
+
+  const updateTimeline = () => {
+    if (!timeline || !timelineInput) return;
+    const min = Number(timelineInput.min);
+    const max = Number(timelineInput.max);
+    const value = Number(timelineInput.value);
+    const progress = ((value - min) / (max - min)) * 100;
+    timeline.style.setProperty("--progress", `${progress}%`);
+    if (timelineTime) timelineTime.textContent = `00:${String(value).padStart(2, "0")}`;
+  };
+
+  timelineInput?.addEventListener("input", updateTimeline);
+  timelineInput?.addEventListener("pointerdown", () => timeline?.classList.add("is-scrubbing"));
+  timelineInput?.addEventListener("pointerup", () => timeline?.classList.remove("is-scrubbing"));
+  timelineInput?.addEventListener("pointercancel", () => timeline?.classList.remove("is-scrubbing"));
+  updateTimeline();
+})();
