@@ -9,10 +9,12 @@ from .errors import ToolError
 from .platform import (
     compatibility_doctor,
     describe_service,
+    detect_hardware_encoders,
     expand_path,
     list_services,
     open_in_shotcut,
     render_preview,
+    render_preview_batch,
     status,
     summarize_media,
     validate_project_file,
@@ -20,12 +22,21 @@ from .platform import (
 from .project import (
     ProjectDocument,
     create_project,
+    diagnose_color_workflow,
+    diagnose_missing_media,
     edit_project,
     list_backups,
     plan_project_edit,
+    render_project_contact_sheet,
     restore_backup,
 )
-from .render import RENDER_PRESETS, cancel_render, render_status, start_render
+from .render import (
+    RENDER_PRESETS,
+    cancel_render,
+    list_render_jobs,
+    render_status,
+    start_render,
+)
 
 OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "add_track": {
@@ -69,7 +80,28 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "remove_item": {"required": ["track", "item_index"], "optional": ["ripple"]},
     "trim_item": {
         "required": ["track", "item_index"],
-        "optional": ["in_frame", "out_frame"],
+        "optional": [
+            "in_frame",
+            "out_frame",
+            "edge",
+            "delta",
+            "ripple",
+            "ripple_markers",
+            "ripple_tracks",
+        ],
+        "notes": "Legacy in/out remains compatible; edge+delta enables explicit ripple behavior.",
+    },
+    "roll_edit": {
+        "required": ["track", "left_item_index", "delta"],
+        "notes": "Moves one contiguous clip boundary without changing total duration.",
+    },
+    "slip_item": {
+        "required": ["track", "item_index", "delta"],
+        "notes": "Changes source in/out while preserving timeline position and duration.",
+    },
+    "slide_item": {
+        "required": ["track", "item_index", "delta"],
+        "notes": "Moves a clip between two contiguous clips without changing source or total duration.",
     },
     "split_item": {"required": ["track", "item_index", "offset_frame"]},
     "move_item": {
@@ -142,6 +174,21 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         ],
         "notes": "Requires preserve_frame_numbers=true; existing positions are not resampled.",
     },
+    "set_color_workflow": {
+        "required": ["workflow"],
+        "optional": ["processing_mode", "colorspace"],
+        "notes": "workflow: sdr|hlg|pq; owns processing mode, transfer, and colorspace together.",
+    },
+    "set_clip_speed": {
+        "required": ["track", "item_index", "speed"],
+        "optional": ["pitch_compensation"],
+        "notes": "Uses MLT timewarp; speed range is -100..-0.05 or 0.05..100.",
+    },
+    "set_clip_speed_map": {
+        "required": ["track", "item_index", "keyframes"],
+        "optional": ["image_mode", "pitch_compensation"],
+        "notes": "Uses one owned timeremap link; positive monotonic speed maps only.",
+    },
 }
 
 
@@ -206,6 +253,30 @@ def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
         frame,
         overwrite,
     )
+
+
+def render_preview_batch_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    raw_requests = arguments.get("requests")
+    if not isinstance(raw_requests, list) or not 1 <= len(raw_requests) <= 64:
+        raise ToolError("requests must contain between 1 and 64 frame/output pairs.")
+    requests: list[tuple[int, Any]] = []
+    for index, item in enumerate(raw_requests):
+        if not isinstance(item, dict):
+            raise ToolError(f"requests[{index}] must be an object.")
+        frame = item.get("frame")
+        if isinstance(frame, bool) or not isinstance(frame, int) or frame < 0:
+            raise ToolError(f"requests[{index}].frame must be a non-negative integer.")
+        requests.append((frame, expand_path(item.get("output_path", ""))))
+    overwrite = arguments.get("overwrite", False)
+    if not isinstance(overwrite, bool):
+        raise ToolError("overwrite must be a boolean.")
+    return render_preview_batch(
+        expand_path(arguments.get("project_path", "")), requests, overwrite
+    )
+
+
+def render_contact_sheet_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    return render_project_contact_sheet(arguments)
 
 
 def open_in_shotcut_tool(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -478,6 +549,183 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "diagnose_color_workflow",
+        "title": "Diagnose project color workflow",
+        "description": "Reports normalized source color facts and Shotcut 26.6 HDR compatibility issues.",
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "output_codec": {"type": "string"},
+                "hdr10_metadata": {"type": "boolean", "default": False},
+            },
+            ["project_path"],
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": True,
+        },
+    },
+    {
+        "name": "diagnose_missing_media",
+        "title": "Find missing-media candidates",
+        "description": "Searches authorized roots with bounded Shotcut-hash and basename scoring; never relinks automatically.",
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "search_roots": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "items": PATH,
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 16,
+                    "default": 6,
+                },
+                "max_files": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20000,
+                    "default": 5000,
+                },
+                "max_candidates_per_resource": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 10,
+                },
+                "max_hash_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1073741824,
+                    "default": 268435456,
+                },
+                "max_probe_candidates": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 256,
+                    "default": 128,
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120,
+                    "default": 30,
+                },
+                "visual_output_path": PATH,
+                "visual_columns": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8,
+                    "default": 4,
+                },
+                "visual_cell_width": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 1920,
+                    "default": 320,
+                },
+                "overwrite_visual": {"type": "boolean", "default": False},
+            },
+            ["project_path", "search_roots"],
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    },
+    {
+        "name": "render_preview_batch",
+        "title": "Render preview frames in batch",
+        "description": "Renders up to 64 exact frames with bounded per-output results.",
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "requests": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": _object_schema(
+                        {
+                            "frame": {"type": "integer", "minimum": 0},
+                            "output_path": PATH,
+                        },
+                        ["frame", "output_path"],
+                    ),
+                },
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["project_path", "requests"],
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    },
+    {
+        "name": "render_contact_sheet",
+        "title": "Render a contact sheet",
+        "description": "Renders exact or evenly sampled frames into one atomically promoted PNG/JPEG.",
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "output_path": PATH,
+                "frames": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": {"type": "integer", "minimum": 0},
+                },
+                "sample_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 64,
+                    "default": 12,
+                },
+                "columns": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8,
+                    "default": 4,
+                },
+                "cell_width": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 1920,
+                    "default": 320,
+                },
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["project_path", "output_path"],
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    },
+    {
+        "name": "detect_hardware_encoders",
+        "title": "Detect usable hardware encoders",
+        "description": "Lists advertised FFmpeg encoders and smoke-tests each OS-appropriate candidate.",
+        "inputSchema": _object_schema(
+            {"refresh": {"type": "boolean", "default": False}}
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": True,
+        },
+    },
+    {
         "name": "open_in_shotcut",
         "title": "Open in Shotcut",
         "description": "Opens a project, media file, or folder in the Shotcut interface.",
@@ -522,6 +770,39 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Get render status",
         "description": "Returns the status, progress, log, and output size.",
         "inputSchema": _object_schema({"job_id": {"type": "string"}}, ["job_id"]),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "list_render_jobs",
+        "title": "List render history",
+        "description": "Returns bounded newest-first durable render summaries with cursor pagination.",
+        "inputSchema": _object_schema(
+            {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "queued",
+                        "running",
+                        "cancelled",
+                        "completed",
+                        "failed",
+                        "orphaned",
+                        "promotion_failed",
+                    ],
+                },
+                "cursor": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 20,
+                },
+            }
+        ),
         "annotations": {
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -582,6 +863,8 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
         expand_path(arguments.get("path", ""))
     ),
     "inspect_project": inspect_project,
+    "diagnose_color_workflow": diagnose_color_workflow,
+    "diagnose_missing_media": diagnose_missing_media,
     "plan_project_edit": plan_project_edit,
     "create_project": create_project,
     "edit_project": edit_project,
@@ -591,9 +874,15 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     ),
     "validate_project": validate_project,
     "render_preview": render_preview_tool,
+    "render_preview_batch": render_preview_batch_tool,
+    "render_contact_sheet": render_contact_sheet_tool,
+    "detect_hardware_encoders": lambda arguments: detect_hardware_encoders(
+        arguments.get("refresh", False)
+    ),
     "open_in_shotcut": open_in_shotcut_tool,
     "start_render": start_render,
     "render_status": lambda arguments: render_status(arguments.get("job_id", "")),
+    "list_render_jobs": list_render_jobs,
     "cancel_render": lambda arguments: cancel_render(arguments.get("job_id", "")),
     "list_project_backups": list_backups_tool,
     "restore_project_backup": restore_backup,

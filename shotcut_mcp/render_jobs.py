@@ -31,6 +31,7 @@ TERMINAL_STATUSES = {
     "orphaned",
     "promotion_failed",
 }
+ALL_STATUSES = TERMINAL_STATUSES | {"queued", "running"}
 
 
 def ensure_job_directory() -> Path:
@@ -127,6 +128,74 @@ def read_progress(path: Path) -> tuple[int | None, str | None]:
     )
     progress = min(100, int(matches[-1])) if matches else None
     return progress, text[-4000:].strip() or None
+
+
+def list_jobs(
+    *, status: str | None = None, cursor: str | None = None, limit: int = 20
+) -> dict[str, Any]:
+    """Return bounded newest-first immutable render summaries."""
+
+    if status is not None and status not in ALL_STATUSES:
+        raise ToolError(f"Invalid render status filter: {status}")
+    if not 1 <= limit <= 100:
+        raise ToolError("limit must be between 1 and 100.")
+    if cursor is not None:
+        validate_job_id(cursor)
+    jobs: list[dict[str, Any]] = []
+    candidates: list[tuple[float, Path]] = []
+    for index, path in enumerate(ensure_job_directory().glob("*.json")):
+        if index >= 5000:
+            break
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    files = [path for _, path in sorted(candidates, reverse=True)[:1000]]
+    for path in files:
+        try:
+            metadata = read_job(path.stem)
+        except (OSError, ToolError):
+            continue
+        if status is None or metadata.get("status") == status:
+            jobs.append(metadata)
+    jobs.sort(
+        key=lambda item: (float(item.get("started_at") or 0), str(item.get("job_id"))),
+        reverse=True,
+    )
+    start = 0
+    if cursor is not None:
+        positions = [
+            index for index, item in enumerate(jobs) if item.get("job_id") == cursor
+        ]
+        if not positions:
+            raise ToolError("Render history cursor was not found for this filter.")
+        start = positions[0] + 1
+    page = jobs[start : start + limit]
+    fields = (
+        "job_id",
+        "status",
+        "project_path",
+        "output_path",
+        "preset",
+        "started_at",
+        "updated_at",
+        "finished_at",
+        "elapsed_seconds",
+        "progress_percent",
+        "current_frame",
+        "return_code",
+        "output_size_bytes",
+        "average_fps",
+        "status_note",
+    )
+    summaries = [{key: item.get(key) for key in fields} for item in page]
+    has_more = start + limit < len(jobs)
+    return {
+        "jobs": summaries,
+        "count": len(summaries),
+        "next_cursor": page[-1]["job_id"] if has_more and page else None,
+        "status_filter": status,
+    }
 
 
 def prune_jobs(max_age_days: int = 30) -> None:

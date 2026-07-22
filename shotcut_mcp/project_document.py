@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import math
 import os
 import re
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .errors import ToolError
-from .media import media_duration, probe_media_raw
+from .media import media_duration, probe_media_raw, shotcut_file_hash
 from .mlt_xml import (
     clock_to_frames as _clock_to_frames,
 )
@@ -26,11 +27,13 @@ from .mlt_xml import (
 from .mlt_xml import (
     property_value as _property,
 )
+from .mlt_xml import resource_references
 
 SEQUENCE_TAGS = {"entry", "blank"}
 BACKGROUND_ID = "background"
 MAIN_BIN_IDS = {"main_bin", "main bin"}
 DocumentT = TypeVar("DocumentT", bound="ProjectDocument")
+MAX_PROJECT_BYTES = 64 * 1024 * 1024
 
 
 def project_revision(data: bytes) -> str:
@@ -151,6 +154,10 @@ class ProjectDocument:
     def load(cls: type[DocumentT], path: Path) -> DocumentT:
         if not path.is_file():
             raise ToolError(f"Project not found: {path}")
+        if path.stat().st_size > MAX_PROJECT_BYTES:
+            raise ToolError(
+                f"Project exceeds the {MAX_PROJECT_BYTES // (1024 * 1024)} MiB limit."
+            )
         source = path.read_bytes()
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         try:
@@ -219,7 +226,7 @@ class ProjectDocument:
         main = ET.SubElement(root, "tractor", {"id": "tractor0", "in": "0", "out": "0"})
         _set_property(main, "shotcut", 1)
         _set_property(main, "shotcut:projectAudioChannels", 2)
-        _set_property(main, "shotcut:processingMode", "native-8bit")
+        _set_property(main, "shotcut:processingMode", "Native8Cpu")
         _set_property(main, "shotcut:projectNote", title)
         ET.SubElement(main, "track", {"producer": BACKGROUND_ID})
         ET.SubElement(main, "track", {"producer": "playlist_v1"})
@@ -942,6 +949,7 @@ class ProjectDocument:
             ("seekable", 1),
             ("shotcut:skipConvert", 1),
             ("shotcut:caption", operation.get("caption") or media_path.name),
+            ("shotcut:hash", shotcut_file_hash(media_path)),
         ):
             _set_property(producer, name, value)
         entry = ET.Element(
@@ -1070,15 +1078,25 @@ class ProjectDocument:
 
     def trim_item(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
-        _, _, item = self._item(track, operation.get("item_index"))
+        sequence, index, item = self._item(track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
             raise ToolError("Only regular clips can be trimmed.")
         frame_in = _clock_to_frames(item.get("in"), self.fps) or 0
         frame_out = _clock_to_frames(item.get("out"), self.fps)
         if frame_out is None:
             frame_out = frame_in + self.item_duration(item) - 1
-        new_in = _int(operation.get("in_frame", frame_in), "in_frame", 0)
-        new_out = _int(operation.get("out_frame", frame_out), "out_frame", 0)
+        edge = operation.get("edge")
+        if edge is not None:
+            if edge not in {"start", "end"}:
+                raise ToolError("edge must be start or end.")
+            delta = _int(operation.get("delta"), "delta")
+            if delta == 0:
+                raise ToolError("delta must not be zero.")
+            new_in = frame_in + delta if edge == "start" else frame_in
+            new_out = frame_out + delta if edge == "end" else frame_out
+        else:
+            new_in = _int(operation.get("in_frame", frame_in), "in_frame", 0)
+            new_out = _int(operation.get("out_frame", frame_out), "out_frame", 0)
         if new_out < new_in:
             raise ToolError("out_frame must be greater than or equal to in_frame.")
         producer = self.id_map().get(item.get("producer", ""))
@@ -1089,10 +1107,194 @@ class ProjectDocument:
         )
         if producer_out is not None and new_out > producer_out:
             raise ToolError(f"out_frame exceeds the end of the media ({producer_out}).")
+        if new_in < 0:
+            raise ToolError("in_frame cannot be negative.")
+        old_duration = frame_out - frame_in + 1
+        new_duration = new_out - new_in + 1
+        duration_change = new_duration - old_duration
+        ripple = True
+        if edge is not None:
+            ripple = _boolean(operation.get("ripple", True), "ripple")
+            if not ripple:
+                side = "before" if edge == "start" else "after"
+                self._compensate_trim_blank(sequence, index, side, -duration_change)
         item.set("in", str(new_in))
         item.set("out", str(new_out))
+        self.replace_sequence(track.playlist, self.consolidate_blanks(sequence))
+        if edge is not None and ripple and operation.get("ripple_markers", False):
+            if not isinstance(operation.get("ripple_markers"), bool):
+                raise ToolError("ripple_markers must be a boolean.")
+            boundary = sum(self.item_duration(node) for node in sequence[:index])
+            if edge == "end":
+                boundary += old_duration
+            self._shift_markers(boundary, duration_change)
+        ripple_tracks = operation.get("ripple_tracks")
+        if ripple_tracks not in (None, [], False):
+            raise ToolError(
+                "ripple_tracks is not enabled until locked-track Shotcut fixtures pass."
+            )
         self.update_main_duration()
-        return {"trimmed": True, "in_frame": new_in, "out_frame": new_out}
+        return {
+            "trimmed": True,
+            "in_frame": new_in,
+            "out_frame": new_out,
+            "duration_change_frames": duration_change,
+            "ripple": ripple,
+        }
+
+    def _compensate_trim_blank(
+        self,
+        sequence: list[ET.Element],
+        item_index: int,
+        side: str,
+        blank_change: int,
+    ) -> None:
+        adjacent_index = item_index - 1 if side == "before" else item_index + 1
+        if adjacent_index >= 0 and adjacent_index < len(sequence):
+            adjacent = sequence[adjacent_index]
+            if self.is_transition(adjacent):
+                raise ToolError("Non-ripple trim cannot touch a transition.")
+        else:
+            adjacent = None
+        if blank_change > 0:
+            if adjacent is not None and adjacent.tag == "blank":
+                adjacent.set("length", str(self.item_duration(adjacent) + blank_change))
+            else:
+                blank = ET.Element("blank", {"length": str(blank_change)})
+                sequence.insert(
+                    item_index if side == "before" else item_index + 1, blank
+                )
+        elif blank_change < 0:
+            needed = -blank_change
+            if adjacent is None or adjacent.tag != "blank":
+                raise ToolError(
+                    "Non-ripple extension requires an adjacent gap with enough frames."
+                )
+            available = self.item_duration(adjacent)
+            if available < needed:
+                raise ToolError(
+                    f"Adjacent gap has {available} frames; {needed} are required."
+                )
+            if available == needed:
+                sequence.remove(adjacent)
+            else:
+                adjacent.set("length", str(available - needed))
+
+    def _shift_markers(self, boundary: int, delta: int) -> None:
+        if delta == 0:
+            return
+        container = self.markers_container()
+        if container is None:
+            return
+        for marker in container.findall("properties"):
+            for prop in marker.findall("property"):
+                if prop.get("name") not in {"start", "end"} or not prop.text:
+                    continue
+                frame = _clock_to_frames(prop.text, self.fps)
+                if frame is not None and frame >= boundary:
+                    prop.text = str(max(0, frame + delta))
+
+    def _regular_clip(
+        self, track: TrackRef, item_index: Any
+    ) -> tuple[list[ET.Element], int, ET.Element, int, int]:
+        sequence, index, item = self._item(track, item_index)
+        if item.tag != "entry" or self.is_transition(item):
+            raise ToolError("The operation requires a regular clip.")
+        frame_in = _clock_to_frames(item.get("in"), self.fps) or 0
+        frame_out = _clock_to_frames(item.get("out"), self.fps)
+        if frame_out is None:
+            frame_out = frame_in + self.item_duration(item) - 1
+        return sequence, index, item, frame_in, frame_out
+
+    def _check_source_range(
+        self, item: ET.Element, frame_in: int, frame_out: int
+    ) -> None:
+        if frame_in < 0 or frame_out < frame_in:
+            raise ToolError("The requested edit exceeds the source handles.")
+        producer = self.id_map().get(item.get("producer", ""))
+        producer_out = (
+            _clock_to_frames(producer.get("out"), self.fps)
+            if producer is not None
+            else None
+        )
+        if producer_out is not None and frame_out > producer_out:
+            raise ToolError(
+                f"The requested edit exceeds the source end ({producer_out})."
+            )
+
+    def slip_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        _, _, item, frame_in, frame_out = self._regular_clip(
+            track, operation.get("item_index")
+        )
+        delta = _int(operation.get("delta"), "delta")
+        if delta == 0:
+            raise ToolError("delta must not be zero.")
+        new_in, new_out = frame_in + delta, frame_out + delta
+        self._check_source_range(item, new_in, new_out)
+        item.set("in", str(new_in))
+        item.set("out", str(new_out))
+        return {
+            "slipped": True,
+            "delta_frames": delta,
+            "before": {"in_frame": frame_in, "out_frame": frame_out},
+            "after": {"in_frame": new_in, "out_frame": new_out},
+        }
+
+    def roll_edit(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        sequence, left_index, left, left_in, left_out = self._regular_clip(
+            track, operation.get("left_item_index")
+        )
+        right_index = left_index + 1
+        if right_index >= len(sequence):
+            raise ToolError("roll_edit requires a contiguous right-hand clip.")
+        _, _, right, right_in, right_out = self._regular_clip(track, right_index)
+        delta = _int(operation.get("delta"), "delta")
+        if delta == 0:
+            raise ToolError("delta must not be zero.")
+        new_left_out = left_out + delta
+        new_right_in = right_in + delta
+        self._check_source_range(left, left_in, new_left_out)
+        self._check_source_range(right, new_right_in, right_out)
+        left.set("out", str(new_left_out))
+        right.set("in", str(new_right_in))
+        self.update_main_duration()
+        return {
+            "rolled": True,
+            "delta_frames": delta,
+            "left": {"in_frame": left_in, "out_frame": new_left_out},
+            "right": {"in_frame": new_right_in, "out_frame": right_out},
+            "duration_change_frames": 0,
+        }
+
+    def slide_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        sequence, index, _selected, selected_in, selected_out = self._regular_clip(
+            track, operation.get("item_index")
+        )
+        if index == 0 or index + 1 >= len(sequence):
+            raise ToolError("slide_item requires contiguous clips on both sides.")
+        _, _, left, left_in, left_out = self._regular_clip(track, index - 1)
+        _, _, right, right_in, right_out = self._regular_clip(track, index + 1)
+        delta = _int(operation.get("delta"), "delta")
+        if delta == 0:
+            raise ToolError("delta must not be zero.")
+        new_left_out = left_out + delta
+        new_right_in = right_in + delta
+        self._check_source_range(left, left_in, new_left_out)
+        self._check_source_range(right, new_right_in, right_out)
+        left.set("out", str(new_left_out))
+        right.set("in", str(new_right_in))
+        self.update_main_duration()
+        return {
+            "slid": True,
+            "delta_frames": delta,
+            "selected": {"in_frame": selected_in, "out_frame": selected_out},
+            "left": {"in_frame": left_in, "out_frame": new_left_out},
+            "right": {"in_frame": new_right_in, "out_frame": right_out},
+            "duration_change_frames": 0,
+        }
 
     def split_item(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
@@ -1583,6 +1785,218 @@ class ProjectDocument:
         self.invalidate()
         return {"subtitle_track": name, "removed_filters": removed}
 
+    def set_color_workflow(self, operation: dict[str, Any]) -> dict[str, Any]:
+        workflow = operation.get("workflow")
+        if workflow not in {"sdr", "hlg", "pq"}:
+            raise ToolError("workflow must be sdr, hlg, or pq.")
+        allowed_modes = {
+            "sdr": {"Native8Cpu", "Native10Cpu", "Linear10Cpu", "Linear10GpuCpu"},
+            "hlg": {"Native10Cpu", "Linear10Cpu", "Linear10GpuCpu"},
+            "pq": {"Native10Cpu", "Linear10Cpu", "Linear10GpuCpu"},
+        }
+        default_mode = "Native8Cpu" if workflow == "sdr" else "Native10Cpu"
+        processing_mode = operation.get("processing_mode", default_mode)
+        if processing_mode not in allowed_modes[workflow]:
+            options = ", ".join(sorted(allowed_modes[workflow]))
+            raise ToolError(
+                f"processing_mode {processing_mode!r} is incompatible with {workflow}; "
+                f"options: {options}."
+            )
+        main = self.main_tractor()
+        profile = self.profile()
+        _set_property(main, "shotcut:processingMode", processing_mode)
+        if workflow == "sdr":
+            _remove_property(main, "shotcut:colorTransfer")
+            colorspace = operation.get("colorspace", 709)
+            if colorspace not in {601, 709}:
+                raise ToolError("SDR colorspace must be 601 or 709.")
+        else:
+            transfer = "arib-std-b67" if workflow == "hlg" else "smpte2084"
+            _set_property(main, "shotcut:colorTransfer", transfer)
+            colorspace = 2020
+        profile.set("colorspace", str(colorspace))
+        return {
+            "color_workflow_updated": True,
+            "workflow": workflow,
+            "processing_mode": processing_mode,
+            "color_transfer": _property(main, "shotcut:colorTransfer"),
+            "colorspace": str(colorspace),
+        }
+
+    def set_clip_speed(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        _, _, entry, frame_in, frame_out = self._regular_clip(
+            track, operation.get("item_index")
+        )
+        speed = _number(operation.get("speed"), "speed")
+        if speed == 0 or not 0.05 <= abs(speed) <= 100:
+            raise ToolError("speed must be between -100 and 100 and not cross zero.")
+        pitch = _boolean(
+            operation.get("pitch_compensation", True), "pitch_compensation"
+        )
+        service = self.isolate_entry_service(entry)
+        if service.tag not in {"producer", "chain"}:
+            raise ToolError("Constant speed requires a producer or chain clip.")
+        if service.findall("link"):
+            raise ToolError("Constant speed cannot replace an existing chain link.")
+        current_service = _property(service, "mlt_service")
+        if current_service not in {"avformat", "avformat-novalidate", "timewarp"}:
+            raise ToolError(
+                "Constant speed is supported only for ordinary media clips."
+            )
+        original_resource = _property(service, "shotcut:mcpOriginalResource")
+        if not original_resource:
+            original_resource = _property(service, "warp_resource")
+        if not original_resource:
+            resource = _property(service, "resource") or ""
+            match = re.match(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+):(.+)$", resource)
+            original_resource = match.group(1) if match else resource
+        if not original_resource:
+            raise ToolError("The clip does not expose a timewarp-compatible resource.")
+        original_in = int(_property(service, "shotcut:mcpOriginalIn") or frame_in)
+        original_out = int(_property(service, "shotcut:mcpOriginalOut") or frame_out)
+        source_out = _clock_to_frames(service.get("out"), self.fps)
+        original_length = int(
+            _property(service, "shotcut:mcpOriginalLength")
+            or ((source_out + 1) if source_out is not None else original_out + 1)
+        )
+        if current_service != "timewarp":
+            _set_property(
+                service,
+                "shotcut:mcpOriginalService",
+                current_service or "avformat-novalidate",
+            )
+        _set_property(service, "shotcut:mcpOriginalResource", original_resource)
+        _set_property(service, "shotcut:mcpOriginalIn", original_in)
+        _set_property(service, "shotcut:mcpOriginalOut", original_out)
+        _set_property(service, "shotcut:mcpOriginalLength", original_length)
+        speed_text = f"{speed:g}"
+        _set_property(service, "resource", f"{speed_text}:{original_resource}")
+        _set_property(service, "warp_resource", original_resource)
+        _set_property(service, "warp_speed", speed_text)
+        _set_property(service, "warp_pitch", 1 if pitch else 0)
+        _set_property(service, "mlt_service", "timewarp")
+        warped_length = max(1, math.ceil(original_length / abs(speed)))
+        warped_in = max(0, math.floor(original_in / abs(speed)))
+        duration = max(1, math.ceil((original_out - original_in + 1) / abs(speed)))
+        warped_out = warped_in + duration - 1
+        service.set("in", "0")
+        service.set("out", str(warped_length - 1))
+        _set_property(service, "length", warped_length)
+        entry.set("in", str(warped_in))
+        entry.set("out", str(warped_out))
+        self.update_main_duration()
+        return {
+            "speed_updated": True,
+            "speed": speed,
+            "pitch_compensation": pitch,
+            "duration_frames": duration,
+            "in_frame": warped_in,
+            "out_frame": warped_out,
+        }
+
+    @staticmethod
+    def _speed_map_duration(
+        source_frames: int, keyframes: list[tuple[int, float]]
+    ) -> int:
+        remaining = float(source_frames)
+        for (start, speed), (end, next_speed) in itertools.pairwise(keyframes):
+            span = end - start
+            slope = (next_speed - speed) / span
+            area = span * (speed + next_speed) / 2
+            if remaining > area:
+                remaining -= area
+                continue
+            if abs(slope) < 1e-12:
+                partial = remaining / speed
+            else:
+                discriminant = speed * speed + 2 * slope * remaining
+                partial = (-speed + math.sqrt(max(0.0, discriminant))) / slope
+            return max(1, math.ceil(start + partial))
+        start, speed = keyframes[-1]
+        return max(1, math.ceil(start + remaining / speed))
+
+    def set_clip_speed_map(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        _, _, entry, frame_in, frame_out = self._regular_clip(
+            track, operation.get("item_index")
+        )
+        raw_keyframes = operation.get("keyframes")
+        if not isinstance(raw_keyframes, list) or not 2 <= len(raw_keyframes) <= 64:
+            raise ToolError("keyframes must contain between 2 and 64 points.")
+        keyframes: list[tuple[int, float]] = []
+        for index, raw in enumerate(raw_keyframes):
+            if not isinstance(raw, dict):
+                raise ToolError(f"keyframes[{index}] must be an object.")
+            frame = _int(raw.get("frame"), f"keyframes[{index}].frame", 0)
+            speed = _number(raw.get("speed"), f"keyframes[{index}].speed", 0.01)
+            if speed > 100:
+                raise ToolError(f"keyframes[{index}].speed must not exceed 100.")
+            if keyframes and frame <= keyframes[-1][0]:
+                raise ToolError("Speed-map frames must be strictly increasing.")
+            keyframes.append((frame, speed))
+        if keyframes[0][0] != 0:
+            raise ToolError("The first speed-map keyframe must be at frame 0.")
+        image_mode = operation.get("image_mode", "blend")
+        if image_mode not in {"blend", "nearest"}:
+            raise ToolError("image_mode must be blend or nearest.")
+        pitch = _boolean(
+            operation.get("pitch_compensation", True), "pitch_compensation"
+        )
+        service = self.isolate_entry_service(entry)
+        if service.tag not in {"producer", "chain"}:
+            raise ToolError("Speed maps require a producer or chain clip.")
+        links = service.findall("link")
+        timeremap_links = [
+            link for link in links if _property(link, "mlt_service") == "timeremap"
+        ]
+        if len(timeremap_links) > 1 or (links and len(timeremap_links) != len(links)):
+            raise ToolError("The clip contains an unowned or ambiguous chain link.")
+        if _property(service, "mlt_service") == "timewarp":
+            raise ToolError("Remove constant speed before applying a speed map.")
+        if _property(service, "mlt_service") not in {
+            "avformat",
+            "avformat-novalidate",
+            None,
+        }:
+            raise ToolError("Speed maps are supported only for ordinary media clips.")
+        if service.tag == "producer":
+            service.tag = "chain"
+        if timeremap_links:
+            link = timeremap_links[0]
+        else:
+            link = ET.Element("link", {"id": self.new_id("link")})
+            first_filter = next(
+                (index for index, child in enumerate(service) if child.tag == "filter"),
+                len(service),
+            )
+            service.insert(first_filter, link)
+            self.invalidate()
+        serialized = ";".join(f"{frame}={speed:g}" for frame, speed in keyframes)
+        _set_property(link, "mlt_service", "timeremap")
+        _set_property(link, "speed_map", serialized)
+        _set_property(link, "image_mode", image_mode)
+        _set_property(link, "pitch", 1 if pitch else 0)
+        source_frames = frame_out - frame_in + 1
+        duration = self._speed_map_duration(source_frames, keyframes)
+        if keyframes[-1][0] >= duration:
+            raise ToolError(
+                "A speed-map keyframe lies beyond the resulting clip duration."
+            )
+        entry.set("in", "0")
+        entry.set("out", str(duration - 1))
+        service.set("in", "0")
+        service.set("out", str(duration - 1))
+        _set_property(service, "length", duration)
+        self.update_main_duration()
+        return {
+            "speed_map_updated": True,
+            "duration_frames": duration,
+            "keyframe_count": len(keyframes),
+            "image_mode": image_mode,
+            "pitch_compensation": pitch,
+        }
+
     def relink_media(self, operation: dict[str, Any]) -> dict[str, Any]:
         old = operation.get("from")
         new = operation.get("to")
@@ -1597,13 +2011,15 @@ class ProjectDocument:
         allow_multiple = _boolean(
             operation.get("allow_multiple", False), "allow_multiple"
         )
-        matches: list[ET.Element] = []
-        for element in [*self.root.findall("producer"), *self.root.findall("chain")]:
-            resource = _property(element, "resource")
-            if resource == old or (
-                resource and Path(resource).name == old and match_basename
-            ):
-                matches.append(element)
+        matches = [
+            reference
+            for reference in resource_references(self.root)
+            if reference.decoded_value == old
+            or (
+                match_basename
+                and Path(reference.decoded_value).name.casefold() == old.casefold()
+            )
+        ]
         if not matches:
             raise ToolError(f"No resource matches {old!r}.")
         if match_basename and len(matches) > 1 and not allow_multiple:
@@ -1611,9 +2027,23 @@ class ProjectDocument:
                 f"The basename {old!r} matches {len(matches)} resources; "
                 "use the full path or allow_multiple=true."
             )
-        for element in matches:
-            _set_property(element, "resource", str(new_path).replace("\\", "/"))
-        return {"relinked": len(matches), "to": str(new_path)}
+        normalized = str(new_path).replace("\\", "/")
+        owners: dict[int, ET.Element] = {}
+        for reference in matches:
+            reference.replace_path(normalized)
+            owners[id(reference.owner)] = reference.owner
+        digest = shotcut_file_hash(new_path)
+        for owner in owners.values():
+            _set_property(owner, "shotcut:hash", digest)
+            _set_property(owner, "shotcut:caption", new_path.name)
+            for name in ("audio_index", "video_index", "astream", "vstream"):
+                _remove_property(owner, name)
+        return {
+            "relinked": len(matches),
+            "owners_updated": len(owners),
+            "to": str(new_path),
+            "shotcut_hash": digest,
+        }
 
     def set_profile(self, operation: dict[str, Any]) -> dict[str, Any]:
         if not _boolean(
@@ -1697,6 +2127,9 @@ class ProjectDocument:
             "add_generator": self.add_generator,
             "remove_item": self.remove_item,
             "trim_item": self.trim_item,
+            "roll_edit": self.roll_edit,
+            "slip_item": self.slip_item,
+            "slide_item": self.slide_item,
             "split_item": self.split_item,
             "move_item": self.move_item,
             "insert_gap": self.insert_gap,
@@ -1713,6 +2146,9 @@ class ProjectDocument:
             "remove_subtitle_track": self.remove_subtitle_track,
             "relink_media": self.relink_media,
             "set_profile": self.set_profile,
+            "set_color_workflow": self.set_color_workflow,
+            "set_clip_speed": self.set_clip_speed,
+            "set_clip_speed_map": self.set_clip_speed_map,
         }
         if not isinstance(name, str):
             raise ToolError("Every operation requires a textual op field.")

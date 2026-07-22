@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import os
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote, urlparse
 
-from .mlt_xml import clock_to_frames, properties, property_value
-from .path_policy import is_network_resource
+from .mlt_xml import (
+    clock_to_frames,
+    properties,
+    property_value,
+    resource_references,
+)
+from .path_policy import is_network_resource, resolve_project_resource
 
 if TYPE_CHECKING:
     from xml.etree.ElementTree import Element
@@ -18,30 +20,7 @@ if TYPE_CHECKING:
 
 
 def _resource_path(document: ProjectDocument, resource: str) -> Path | None:
-    if not resource or resource.startswith(("color:", "colour:", "noise:", "tone:")):
-        return None
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", resource) and not resource.startswith(
-        "file://"
-    ):
-        return None
-    if resource.startswith("file://"):
-        parsed = urlparse(resource)
-        if parsed.netloc:
-            cleaned = f"//{parsed.netloc}{unquote(parsed.path)}"
-        else:
-            cleaned = unquote(parsed.path)
-            if os.name == "nt" and re.match(r"^/[A-Za-z]:/", cleaned):
-                cleaned = cleaned[1:]
-    else:
-        cleaned = resource
-    candidate = Path(cleaned)
-    if candidate.is_absolute():
-        return candidate.resolve()
-    xml_root = document.root.get("root")
-    base = Path(xml_root) if xml_root else document.path.parent
-    if not base.is_absolute():
-        base = document.path.parent / base
-    return (base / candidate).resolve()
+    return resolve_project_resource(document.path, document.root.get("root"), resource)
 
 
 def _filter_summaries(host: Element) -> list[dict[str, Any]]:
@@ -57,30 +36,45 @@ def _filter_summaries(host: Element) -> list[dict[str, Any]]:
     ]
 
 
+def _expected_media(owner: Element, fps: float) -> dict[str, Any]:
+    length = clock_to_frames(property_value(owner, "length"), fps)
+    if length is None:
+        frame_out = clock_to_frames(owner.get("out"), fps)
+        length = frame_out + 1 if frame_out is not None else None
+    return {
+        "duration_seconds": length / fps if length is not None else None,
+        "width": property_value(owner, "meta.media.width")
+        or property_value(owner, "meta.media.0.codec.width"),
+        "height": property_value(owner, "meta.media.height")
+        or property_value(owner, "meta.media.0.codec.height"),
+    }
+
+
 def build_project_snapshot(document: ProjectDocument) -> dict[str, Any]:
     """Build the stable read-only representation exposed through MCP."""
 
     resources: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for element in [
-        *document.root.findall("producer"),
-        *document.root.findall("chain"),
-    ]:
-        resource = property_value(element, "resource")
-        service = property_value(element, "mlt_service")
-        if (
-            not resource
-            or resource in seen
-            or service in {"color", "colour", "noise", "tone"}
-        ):
+    seen: set[tuple[str | None, str, str]] = set()
+    for reference in resource_references(document.root):
+        key = (reference.owner_id, reference.name, reference.stored_value)
+        if key in seen:
             continue
-        seen.add(resource)
-        path = _resource_path(document, resource)
+        seen.add(key)
+        path = _resource_path(document, reference.decoded_value)
         resources.append(
             {
-                "resource": resource,
+                "reference_id": (
+                    f"{reference.owner_id or reference.owner_tag}:{reference.name}"
+                ),
+                "owner_id": reference.owner_id,
+                "owner_tag": reference.owner_tag,
+                "property": reference.name,
+                "resource": reference.stored_value,
+                "decoded_resource": reference.decoded_value,
                 "resolved_path": str(path) if path else None,
                 "exists": path.exists() if path else None,
+                "shotcut_hash": property_value(reference.owner, "shotcut:hash"),
+                "expected_media": _expected_media(reference.owner, document.fps),
             }
         )
     tracks: list[dict[str, Any]] = []
@@ -155,11 +149,26 @@ def build_project_snapshot(document: ProjectDocument) -> dict[str, Any]:
     ]
     profile: dict[str, Any] = dict(document.profile().attrib)
     profile["fps"] = document.fps
+    processing_mode = property_value(main, "shotcut:processingMode") or "Native8Cpu"
+    transfer = property_value(main, "shotcut:colorTransfer")
+    dynamic_range = (
+        "hlg"
+        if transfer == "arib-std-b67"
+        else "pq"
+        if transfer == "smpte2084"
+        else "sdr"
+    )
     return {
         "path": str(document.path),
         "revision": document.revision,
         "shotcut_editable": property_value(main, "shotcut") == "1",
         "profile": profile,
+        "color_workflow": {
+            "processing_mode": processing_mode,
+            "color_transfer": transfer,
+            "colorspace": profile.get("colorspace"),
+            "dynamic_range": dynamic_range,
+        },
         "notes": property_value(main, "shotcut:projectNote"),
         "duration_frames": max(
             (track["duration_frames"] for track in tracks), default=0
@@ -180,7 +189,7 @@ def build_project_snapshot(document: ProjectDocument) -> dict[str, Any]:
         "network_resources": [
             item["resource"]
             for item in resources
-            if is_network_resource(item["resource"])
+            if is_network_resource(item["decoded_resource"])
         ],
         "missing_resources": [
             item["resolved_path"] for item in resources if item["exists"] is False

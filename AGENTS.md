@@ -26,13 +26,15 @@ The intended dependency direction is:
 ```text
 server -> protocol, tools
 tools -> platform, project, render
-project -> platform, project_document, project_snapshot, protocol, storage
+project -> missing_media, platform, project_document, project_snapshot, protocol, storage
+missing_media -> platform, protocol
 project_document -> media, mlt_xml
 project_snapshot -> project_document, mlt_xml, path_policy
 render -> platform, protocol, render_jobs, storage
 render_worker -> platform, render_jobs, storage
 platform -> media, path_policy, processes, storage
 media -> processes
+path_policy -> mlt_xml
 processes -> path_policy, protocol
 ```
 
@@ -40,7 +42,8 @@ Module ownership:
 
 - `server.py`: JSON-RPC/MCP lifecycle, concurrency, cancellation, and wire compatibility.
 - `tools.py`: MCP tool catalog, schemas, annotations, and thin handler routing.
-- `project.py`: public project transaction workflow: create, plan, edit, backup, restore.
+- `project.py`: public project-level orchestration and transaction workflow.
+- `missing_media.py`: bounded missing-resource discovery, scoring, and visualization.
 - `project_document.py`: MLT XML model, timeline invariants, and edit semantics.
 - `project_snapshot.py`: read-only MCP projection of an MLT document.
 - `platform.py`: stable public orchestration interface for Shotcut and MLT operations.

@@ -15,7 +15,16 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ConflictError, RequestCancelled, ToolError
-from .platform import expand_path, validate_project_file
+from .missing_media import diagnose_missing_resources
+from .platform import (
+    enforce_project_resource_policy,
+    expand_path,
+    summarize_media,
+    validate_project_file,
+)
+from .platform import (
+    render_contact_sheet as _render_contact_sheet,
+)
 from .project_document import (
     BACKGROUND_ID,
     MAIN_BIN_IDS,
@@ -49,9 +58,12 @@ __all__ = [
     "ProjectDocument",
     "TrackRef",
     "create_project",
+    "diagnose_color_workflow",
+    "diagnose_missing_media",
     "edit_project",
     "list_backups",
     "plan_project_edit",
+    "render_project_contact_sheet",
     "restore_backup",
 ]
 
@@ -176,7 +188,9 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(clips, list):
         raise ToolError("clips must be a list.")
     for clip in clips:
-        operation = {"op": "add_clip", "track": "V1", **clip}
+        operation = _authorize_operation_paths(
+            {"op": "add_clip", "track": "V1", **clip}
+        )
         results.append(document.add_clip(operation))
     document.update_main_duration()
     saved = _write_validated(
@@ -196,6 +210,20 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
         "operation_results": results,
         "project": loaded.snapshot(),
     }
+
+
+def _authorize_operation_paths(operation: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize every data path before it reaches the XML domain model."""
+
+    result = dict(operation)
+    name = result.get("op")
+    field = "path" if name == "add_clip" else "to" if name == "relink_media" else None
+    if field is not None and field in result:
+        value = result[field]
+        if not isinstance(value, str):
+            raise ToolError(f"{field} must be a string.")
+        result[field] = str(expand_path(value))
+    return result
 
 
 def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
@@ -224,10 +252,13 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
             )
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
-    for index, operation in enumerate(operations):
+    for index, raw_operation in enumerate(operations):
         if cancellation_requested():
             raise RequestCancelled("Project edit cancelled by the MCP client.")
         try:
+            if not isinstance(raw_operation, dict):
+                raise ToolError("Each operation must be an object.")
+            operation = _authorize_operation_paths(raw_operation)
             results.append(document.apply_operation(operation))
         except ToolError as exc:
             raise ToolError(f"Operation {index} failed: {exc}") from exc
@@ -331,6 +362,158 @@ def list_backups(project_path: Path) -> dict[str, Any]:
         "project_path": str(project_path),
         "backup_count": len(backups),
         "backups": backups,
+    }
+
+
+def diagnose_color_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Report project/source color compatibility without changing the document."""
+
+    project_path = expand_path(arguments.get("project_path", ""))
+    enforce_project_resource_policy(project_path)
+    document = ProjectDocument.load(project_path)
+    snapshot = document.snapshot()
+    media: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for resource in snapshot["resources"]:
+        resolved = resource.get("resolved_path")
+        if not resolved or resource.get("exists") is not True or resolved in seen:
+            continue
+        seen.add(resolved)
+        if len(media) >= 128:
+            break
+        try:
+            media.append(summarize_media(Path(resolved)))
+        except ToolError as exc:
+            media.append({"path": resolved, "error": str(exc)})
+    ranges = {
+        stream.get("dynamic_range")
+        for item in media
+        for stream in item.get("streams", [])
+        if stream.get("type") == "video" and stream.get("dynamic_range") != "unknown"
+    }
+    color = snapshot["color_workflow"]
+    mode = color["processing_mode"]
+    issues: list[dict[str, str]] = []
+    if {"hlg", "pq"}.issubset(ranges):
+        issues.append(
+            {
+                "severity": "error",
+                "code": "mixed_hdr_transfers",
+                "message": "Shotcut 26.6 cannot combine HLG and PQ in one project.",
+            }
+        )
+    if ranges.intersection({"hlg", "pq"}) and mode == "Native8Cpu":
+        issues.append(
+            {
+                "severity": "error",
+                "code": "hdr_requires_10bit_processing",
+                "message": "HDR sources require a supported 10-bit processing mode.",
+            }
+        )
+    requested_codec = arguments.get("output_codec")
+    hdr_metadata = arguments.get("hdr10_metadata", False)
+    if hdr_metadata and not isinstance(hdr_metadata, bool):
+        raise ToolError("hdr10_metadata must be a boolean.")
+    if requested_codec is not None and not isinstance(requested_codec, str):
+        raise ToolError("output_codec must be a string.")
+    hardware_tokens = ("_nvenc", "_qsv", "_amf", "_mf", "_vaapi", "videotoolbox")
+    if (
+        hdr_metadata
+        and requested_codec
+        and any(token in requested_codec for token in hardware_tokens)
+    ):
+        issues.append(
+            {
+                "severity": "error",
+                "code": "hdr10_metadata_hardware_encoder",
+                "message": "Shotcut 26.6 supports HDR10 metadata only with libx265 or libsvtav1.",
+            }
+        )
+    if color["dynamic_range"] in {"hlg", "pq"}:
+        unverified = sorted(
+            {
+                item.get("service")
+                for item in [*snapshot["filters"]]
+                if item.get("service")
+            }
+        )
+        if unverified:
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "filters_require_10bit_verification",
+                    "message": "Project filters require #10bit/#gpu verification: "
+                    + ", ".join(unverified[:20]),
+                }
+            )
+    return {
+        "project_path": str(project_path),
+        "compatible": not any(item["severity"] == "error" for item in issues),
+        "project_color_workflow": color,
+        "source_dynamic_ranges": sorted(ranges),
+        "media": media,
+        "issues": issues,
+        "media_truncated": len(seen) > len(media),
+    }
+
+
+def render_project_contact_sheet(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Choose project frames and delegate atomic contact-sheet rendering."""
+
+    project_path = expand_path(arguments.get("project_path", ""))
+    raw_frames = arguments.get("frames")
+    if raw_frames is None:
+        sample_count = _int(arguments.get("sample_count", 12), "sample_count", 1)
+        if sample_count > 64:
+            raise ToolError("sample_count must be an integer between 1 and 64.")
+        duration = ProjectDocument.load(project_path).snapshot()["duration_frames"]
+        if duration <= 0:
+            raise ToolError("The project has no timeline frames to sample.")
+        frames = (
+            [0]
+            if sample_count == 1
+            else [
+                round(index * (duration - 1) / (sample_count - 1))
+                for index in range(sample_count)
+            ]
+        )
+    else:
+        if not isinstance(raw_frames, list) or not 1 <= len(raw_frames) <= 64:
+            raise ToolError("frames must contain between 1 and 64 entries.")
+        frames = []
+        for index, frame in enumerate(raw_frames):
+            if isinstance(frame, bool) or not isinstance(frame, int) or frame < 0:
+                raise ToolError(f"frames[{index}] must be a non-negative integer.")
+            frames.append(frame)
+    columns = arguments.get("columns", 4)
+    cell_width = arguments.get("cell_width", 320)
+    overwrite = arguments.get("overwrite", False)
+    if isinstance(columns, bool) or not isinstance(columns, int):
+        raise ToolError("columns must be an integer.")
+    if isinstance(cell_width, bool) or not isinstance(cell_width, int):
+        raise ToolError("cell_width must be an integer.")
+    if not isinstance(overwrite, bool):
+        raise ToolError("overwrite must be a boolean.")
+    return _render_contact_sheet(
+        project_path,
+        expand_path(arguments.get("output_path", "")),
+        frames,
+        columns=columns,
+        cell_width=cell_width,
+        overwrite=overwrite,
+    )
+
+
+def diagnose_missing_media(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Search authorized roots for bounded, scored missing-media candidates."""
+
+    project_path = expand_path(arguments.get("project_path", ""))
+    snapshot = ProjectDocument.load(project_path).snapshot()
+    diagnosis = diagnose_missing_resources(snapshot["resources"], arguments)
+    return {
+        "project_path": str(project_path),
+        **diagnosis,
+        "commit_workflow": "Choose a candidate and call plan_project_edit/edit_project with relink_media and expected_revision.",
     }
 
 

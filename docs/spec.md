@@ -16,7 +16,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Render previews and exports to protected sibling files and promote them atomically only if the
   original target has not changed.
 - Supervise renders outside the MCP stdio process so completion and cancellation survive restart.
-- Support video and audio tracks, gaps, clips, trim, split, move, ripple/overwrite edits,
+- Support video and audio tracks, gaps, clips, explicit ripple/non-ripple trim, roll, slip,
+  slide, constant timewarp, positive timeremap speed maps, split, move, ripple/overwrite edits,
   crossfades, generic MLT filters, keyframed properties, text/color/tone generators,
   markers, project notes, subtitle feeds and media relinking.
 - Expose MLT service discovery so callers can use filters, transitions and links installed with
@@ -28,6 +29,11 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   negotiated MCP protocol revision.
 - Propagate MCP cancellation notifications to subprocess-backed operations.
 - Provide a read-only plan/diff operation before transactional edits.
+- Render bounded preview batches and atomically promoted contact sheets at exact frames.
+- Normalize source/project color metadata and own SDR/HLG/PQ project annotations as one semantic edit.
+- Smoke-test hardware encoders instead of trusting FFmpeg's advertised encoder list.
+- Persist bounded progress samples, elapsed time, ETA inputs, terminal metrics, and paginated history.
+- Diagnose missing media with bounded Shotcut-hash/basename search and require an explicit relink edit.
 
 ## Compatibility boundary
 
@@ -44,13 +50,18 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   filter is available or renderable on every machine.
 - Deny network resources and sidecar/path-bearing consumer properties by default. Administrators
   may opt in through environment policy and may constrain every tool path to canonical roots.
+- Apply those policies to every recognized MLT path representation, including timewarp, proxy,
+  luma, source, filename, and filter resources.
+- Keep HDR display preview, mixed HLG/PQ conversion, reverse/zero-crossing speed maps, and
+  ambiguous third-party chain edits out of the verified interface.
 
 ## Verification
 
 - MCP negotiation, schema-validation, batching and cancellation tests.
 - Unit tests through public project, preview and render APIs.
 - Regression tests for preservation, optimistic concurrency, backup ownership, atomic output,
-  shared producers, orphan cleanup and security policies.
+  shared producers, advanced timeline edits, speed/color annotations, assisted relinking,
+  bounded process/log output, render history/ETA, orphan cleanup and security policies.
 - Real ffmpeg/ffprobe/melt integration covering multitrack creation, editing, validation,
   preview and final render.
 - Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI.

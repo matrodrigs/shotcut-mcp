@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+## 1.2.0 (2026-07-22)
+
+### Added
+
+- Exact-frame preview batches, atomic contact sheets, hardware-encoder smoke detection, render
+  ETA/history, and bounded visual missing-media candidate sheets.
+- Semantic SDR/HLG/PQ project workflows, constant timewarp, positive timeremap speed maps, and
+  roll/slip/slide plus explicit same-track ripple/non-ripple trim operations.
+- Normalized source color metadata and bounded Shotcut-hash/basename missing-media diagnosis.
+
+### Fixed
+
+- Apply allowed-root and network policy to media edits and all recognized embedded MLT resources.
+- Use Shotcut 26.6's canonical `Native8Cpu` processing mode and maintain Shotcut hashes on relink.
+- Bound project files, subprocess output, and render logs; reap finished supervisors without polling.
+
 ## 1.1.0 (2026-07-22)
 
 ### Added

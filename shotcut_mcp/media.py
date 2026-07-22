@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,52 @@ def media_duration(payload: dict[str, Any]) -> float | None:
         if value is not None and value > 0:
             durations.append(value)
     return max(durations) if durations else None
+
+
+def shotcut_file_hash(media_path: Path) -> str:
+    """Return Shotcut's small-file or first/last-megabyte MD5 identity hash."""
+
+    size = media_path.stat().st_size
+    digest = hashlib.md5(usedforsecurity=False)
+    with media_path.open("rb") as handle:
+        if size < 2 * 1024 * 1024:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        else:
+            digest.update(handle.read(1024 * 1024))
+            handle.seek(-1024 * 1024, 2)
+            digest.update(handle.read(1024 * 1024))
+    return digest.hexdigest()
+
+
+def _pixel_bit_depth(stream: dict[str, Any]) -> int | None:
+    raw = stream.get("bits_per_raw_sample")
+    try:
+        if raw not in (None, "", "0"):
+            return int(raw)
+    except (TypeError, ValueError):
+        pass
+    pixel_format = str(stream.get("pix_fmt") or "")
+    match = re.search(r"(?:p|le|be)(9|10|12|14|16)(?:le|be)?$", pixel_format)
+    return int(match.group(1)) if match else 8 if pixel_format else None
+
+
+def _dynamic_range(transfer: Any) -> str:
+    normalized = str(transfer or "").lower()
+    if normalized in {"arib-std-b67", "hlg"}:
+        return "hlg"
+    if normalized in {"smpte2084", "pq"}:
+        return "pq"
+    if normalized in {
+        "bt709",
+        "bt470bg",
+        "gamma22",
+        "gamma28",
+        "iec61966-2-1",
+        "smpte170m",
+    }:
+        return "sdr"
+    return "unknown"
 
 
 def probe_media_raw(media_path: Path) -> dict[str, Any]:
@@ -117,6 +165,12 @@ def summarize_media(media_path: Path) -> dict[str, Any]:
                 width=stream.get("width"),
                 height=stream.get("height"),
                 pixel_format=stream.get("pix_fmt"),
+                pixel_bit_depth=_pixel_bit_depth(stream),
+                color_primaries=stream.get("color_primaries"),
+                color_transfer=stream.get("color_transfer"),
+                color_space=stream.get("color_space"),
+                color_range=stream.get("color_range"),
+                dynamic_range=_dynamic_range(stream.get("color_transfer")),
                 frame_rate=_fraction(
                     stream.get("avg_frame_rate") or stream.get("r_frame_rate")
                 ),

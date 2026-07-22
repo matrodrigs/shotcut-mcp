@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -22,6 +23,7 @@ from .platform import (
 from .protocol import cancellation_requested
 from .render_jobs import (
     TERMINAL_STATUSES,
+    list_jobs,
     log_path,
     prune_jobs,
     read_job,
@@ -33,6 +35,7 @@ from .render_jobs import (
 from .storage import OutputTransaction, process_is_alive
 
 RUNNING_JOBS: dict[str, subprocess.Popen[Any]] = {}
+_RUNNING_JOBS_LOCK = threading.Lock()
 
 RENDER_PRESETS: dict[str, dict[str, str]] = {
     "h264-high": {
@@ -58,6 +61,32 @@ RENDER_PRESETS: dict[str, dict[str, str]] = {
         "vcodec": "libx265",
         "crf": "22",
         "preset": "medium",
+        "acodec": "aac",
+        "ab": "192k",
+        "movflags": "+faststart",
+    },
+    "hdr-hlg-hevc": {
+        "f": "mp4",
+        "vcodec": "libx265",
+        "crf": "20",
+        "preset": "medium",
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_trc": "arib-std-b67",
+        "colorspace": "bt2020nc",
+        "acodec": "aac",
+        "ab": "192k",
+        "movflags": "+faststart",
+    },
+    "hdr-pq-hevc": {
+        "f": "mp4",
+        "vcodec": "libx265",
+        "crf": "20",
+        "preset": "medium",
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_trc": "smpte2084",
+        "colorspace": "bt2020nc",
         "acodec": "aac",
         "ab": "192k",
         "movflags": "+faststart",
@@ -214,7 +243,11 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "melt_path": str(melt),
         "log_path": str(log_path(job_id)),
         "started_at": time.time(),
+        "updated_at": time.time(),
         "finished_at": None,
+        "progress_percent": 0,
+        "current_frame": None,
+        "progress_samples": [],
     }
     write_job(metadata)
     try:
@@ -235,18 +268,63 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         )
         write_job(metadata)
         raise ToolError(f"Could not start the render: {exc}") from exc
-    RUNNING_JOBS[job_id] = process
+    with _RUNNING_JOBS_LOCK:
+        RUNNING_JOBS[job_id] = process
+    threading.Thread(
+        target=_reap_supervisor, args=(job_id, process), daemon=True
+    ).start()
     metadata.update(pid=process.pid, worker_pid=process.pid, status="running")
     write_job(metadata)
     release_gate(job_id)
     return metadata
 
 
+def _reap_supervisor(job_id: str, process: subprocess.Popen[Any]) -> None:
+    """Release local process handles even when no client polls render status."""
+
+    process.wait()
+    # Preserve the short compatibility window used by callers that inspect an
+    # immediately returned local process while still guaranteeing eventual cleanup.
+    time.sleep(1)
+    with _RUNNING_JOBS_LOCK:
+        if RUNNING_JOBS.get(job_id) is process:
+            RUNNING_JOBS.pop(job_id, None)
+
+
+def _eta(metadata: dict[str, Any]) -> tuple[float | None, str | None, str | None]:
+    samples = [
+        item
+        for item in metadata.get("progress_samples") or []
+        if isinstance(item, dict)
+        and isinstance(item.get("at"), (int, float))
+        and isinstance(item.get("percent"), (int, float))
+    ]
+    advancing = [
+        item
+        for index, item in enumerate(samples)
+        if index == 0 or item["percent"] > samples[index - 1]["percent"]
+    ]
+    if len(advancing) < 2:
+        return None, None, None
+    first, last = advancing[0], advancing[-1]
+    elapsed = float(last["at"]) - float(first["at"])
+    progress = float(last["percent"])
+    gained = progress - float(first["percent"])
+    if elapsed < 1 or gained <= 0 or progress <= 0 or progress >= 100:
+        return None, None, None
+    rate = gained / elapsed
+    eta = (100 - progress) / rate
+    confidence = "high" if progress >= 30 else "medium" if progress >= 10 else "low"
+    return max(0.0, eta), confidence, "smoothed_progress_percent"
+
+
 def render_status(job_id: str) -> dict[str, Any]:
     metadata = read_job(job_id)
-    process = RUNNING_JOBS.get(job_id)
+    with _RUNNING_JOBS_LOCK:
+        process = RUNNING_JOBS.get(job_id)
     if process is not None and process.poll() is not None:
-        RUNNING_JOBS.pop(job_id, None)
+        with _RUNNING_JOBS_LOCK:
+            RUNNING_JOBS.pop(job_id, None)
         metadata = read_job(job_id)
     if metadata.get("status") not in TERMINAL_STATUSES:
         worker_pid = metadata.get("worker_pid")
@@ -292,14 +370,43 @@ def render_status(job_id: str) -> dict[str, Any]:
     output_path = Path(metadata["output_path"])
     progress, log_tail = read_progress(Path(metadata["log_path"]))
     metadata["progress_percent"] = (
-        100 if metadata.get("status") == "completed" else progress
+        100
+        if metadata.get("status") == "completed"
+        else progress
+        if progress is not None
+        else metadata.get("progress_percent")
     )
     metadata["output_exists"] = output_path.is_file()
     metadata["output_size_bytes"] = (
         output_path.stat().st_size if output_path.is_file() else None
     )
     metadata["log_tail"] = log_tail
+    now = float(metadata.get("finished_at") or time.time())
+    metadata["elapsed_seconds"] = max(
+        0.0, now - float(metadata.get("started_at") or now)
+    )
+    eta_seconds, eta_confidence, eta_basis = (
+        (None, None, None)
+        if metadata.get("status") in TERMINAL_STATUSES
+        else _eta(metadata)
+    )
+    metadata["eta_seconds"] = eta_seconds
+    metadata["eta_confidence"] = eta_confidence
+    metadata["eta_basis"] = eta_basis
     return metadata
+
+
+def list_render_jobs(arguments: dict[str, Any]) -> dict[str, Any]:
+    status = arguments.get("status")
+    cursor = arguments.get("cursor")
+    limit = arguments.get("limit", 20)
+    if status is not None and not isinstance(status, str):
+        raise ToolError("status must be a string.")
+    if cursor is not None and not isinstance(cursor, str):
+        raise ToolError("cursor must be a string.")
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ToolError("limit must be an integer.")
+    return list_jobs(status=status, cursor=cursor, limit=limit)
 
 
 def cancel_render(job_id: str) -> dict[str, Any]:

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import queue
+import re
 import subprocess
 import sys
+import threading
 import time
-from typing import Any
+from collections import deque
+from typing import Any, BinaryIO
 
 from .errors import ToolError
 from .platform import creation_flags, terminate_process
@@ -21,6 +25,9 @@ from .render_jobs import (
 )
 from .storage import OutputTransaction
 
+MAX_LOG_BYTES = 512 * 1024
+MAX_PROGRESS_SAMPLES = 32
+
 
 def _stop_renderer(process: subprocess.Popen[Any]) -> None:
     terminate_process(process, grace_seconds=5)
@@ -33,13 +40,76 @@ def _command(metadata: dict[str, Any], output: OutputTransaction) -> list[str]:
     return [
         str(metadata["melt_path"]),
         str(metadata["project_path"]),
-        "-progress",
+        "-progress2",
         "-consumer",
         f"avformat:{output.temporary}",
         "real_time=-1",
         "terminate_on_pause=1",
         *[f"{key}={value}" for key, value in properties.items()],
     ]
+
+
+class _BoundedLog:
+    def __init__(self, path: str) -> None:
+        descriptor = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o600)
+        self.handle: BinaryIO = os.fdopen(descriptor, "w+b", buffering=0)
+
+    def append(self, text: str) -> None:
+        self.handle.write(text.encode("utf-8", errors="replace"))
+        if self.handle.tell() <= MAX_LOG_BYTES:
+            return
+        keep = MAX_LOG_BYTES // 2
+        self.handle.seek(-keep, os.SEEK_END)
+        tail = self.handle.read()
+        self.handle.seek(0)
+        self.handle.truncate()
+        self.handle.write(b"[earlier render log truncated]\n" + tail)
+
+    def close(self) -> None:
+        self.handle.close()
+
+
+def _read_chunks(stream: Any, messages: queue.Queue[bytes | None]) -> None:
+    try:
+        for chunk in iter(lambda: stream.read(8192), b""):
+            messages.put(chunk)
+    finally:
+        messages.put(None)
+
+
+def _observe_progress(metadata: dict[str, Any], line: str) -> bool:
+    percent_match = re.search(
+        r"(?:percentage|percent|progress)\s*[:=]\s*(\d{1,3})", line, re.I
+    )
+    frame_match = re.search(r"(?:current\s+)?frame\s*[:=]\s*(\d+)", line, re.I)
+    if not percent_match and not frame_match:
+        return False
+    changed = False
+    if percent_match:
+        percent = min(100, int(percent_match.group(1)))
+        if metadata.get("progress_percent") != percent:
+            metadata["progress_percent"] = percent
+            changed = True
+    if frame_match:
+        frame = int(frame_match.group(1))
+        if metadata.get("current_frame") != frame:
+            metadata["current_frame"] = frame
+            changed = True
+    if changed:
+        now = time.time()
+        samples = deque(
+            metadata.get("progress_samples") or [], maxlen=MAX_PROGRESS_SAMPLES
+        )
+        samples.append(
+            {
+                "at": now,
+                "percent": metadata.get("progress_percent"),
+                "frame": metadata.get("current_frame"),
+            }
+        )
+        metadata["progress_samples"] = list(samples)
+        metadata["updated_at"] = now
+    return changed
 
 
 def run_worker(job_id: str) -> int:
@@ -65,27 +135,76 @@ def run_worker(job_id: str) -> int:
             return 0
 
         path = log_path(job_id)
-        descriptor = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8", errors="replace") as log:
+        log = _BoundedLog(str(path))
+        try:
             process = subprocess.Popen(
                 _command(metadata, output),
                 stdin=subprocess.DEVNULL,
-                stdout=log,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
                 creationflags=creation_flags(),
                 start_new_session=os.name != "nt",
             )
             metadata.update(renderer_pid=process.pid, status="running")
             write_job(metadata)
-            while process.poll() is None:
+            messages: queue.Queue[bytes | None] = queue.Queue(maxsize=128)
+            reader = threading.Thread(
+                target=_read_chunks, args=(process.stdout, messages), daemon=True
+            )
+            reader.start()
+            reader_finished = False
+            pending_progress = ""
+            last_write = time.monotonic()
+            while process.poll() is None or not reader_finished:
                 if cancel_requested(job_id):
                     _stop_renderer(process)
-                    break
-                time.sleep(0.1)
+                try:
+                    chunk = messages.get(timeout=0.1)
+                except queue.Empty:
+                    chunk = (
+                        None
+                        if process.poll() is not None and not reader.is_alive()
+                        else b""
+                    )
+                if chunk is None:
+                    reader_finished = True
+                elif chunk:
+                    text = chunk.decode("utf-8", errors="replace")
+                    log.append(text)
+                    pending_progress += text
+                    lines = pending_progress.splitlines(keepends=True)
+                    pending_progress = ""
+                    if lines and not lines[-1].endswith(("\n", "\r")):
+                        pending_progress = lines.pop()
+                    for line in lines:
+                        _observe_progress(metadata, line)
+                if time.monotonic() - last_write >= 0.5:
+                    metadata["updated_at"] = time.time()
+                    write_job(metadata)
+                    last_write = time.monotonic()
+            reader.join(timeout=1)
+            if pending_progress:
+                _observe_progress(metadata, pending_progress)
+            process.wait()
+        finally:
+            log.close()
 
         return_code = process.returncode
-        metadata.update(return_code=return_code, finished_at=time.time())
+        finished_at = time.time()
+        started_at = float(metadata.get("started_at") or finished_at)
+        elapsed = max(0.0, finished_at - started_at)
+        current_frame = metadata.get("current_frame")
+        metadata.update(
+            return_code=return_code,
+            finished_at=finished_at,
+            updated_at=finished_at,
+            elapsed_seconds=elapsed,
+            average_fps=(
+                current_frame / elapsed
+                if isinstance(current_frame, int) and current_frame > 0 and elapsed > 0
+                else None
+            ),
+        )
         if cancel_requested(job_id):
             metadata["status"] = "cancelled"
             output.cleanup()
@@ -106,6 +225,8 @@ def run_worker(job_id: str) -> int:
                 )
             else:
                 metadata["status"] = "completed"
+                metadata["progress_percent"] = 100
+                metadata["output_size_bytes"] = output.target.stat().st_size
         write_job(metadata)
         return 0 if metadata["status"] == "completed" else 1
     except Exception as exc:

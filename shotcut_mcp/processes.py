@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,45 +136,61 @@ def runtime_identity(executable: Path) -> tuple[object, ...]:
 
 
 def run_capture(
-    command: list[str], timeout: int = 30
+    command: list[str], timeout: int = 30, max_output_bytes: int = 4 * 1024 * 1024
 ) -> subprocess.CompletedProcess[str]:
-    """Run a child process with bounded time and MCP cancellation propagation."""
+    """Run a child with bounded time, output, and cancellation propagation."""
 
     if cancellation_requested():
         raise RequestCancelled("Request cancelled before the command started.")
-    try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creation_flags(),
-            start_new_session=os.name != "nt",
-        )
-    except OSError as exc:
-        raise ToolError(f"Could not run {command[0]}: {exc}") from exc
-    deadline = time.monotonic() + timeout
-    while True:
-        if cancellation_requested():
-            terminate_process(process)
-            raise RequestCancelled("Request cancelled by the MCP client.")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            terminate_process(process)
-            expired = subprocess.TimeoutExpired(command, timeout)
-            raise ToolError(
-                f"The command timed out after {timeout} seconds."
-            ) from expired
+    if max_output_bytes < 1024:
+        raise ValueError("max_output_bytes must be at least 1024.")
+    with (
+        tempfile.TemporaryFile("w+b") as stdout_file,
+        tempfile.TemporaryFile("w+b") as stderr_file,
+    ):
         try:
-            stdout, stderr = process.communicate(timeout=min(0.1, remaining))
-            return subprocess.CompletedProcess(
-                command, process.returncode, stdout, stderr
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                creationflags=creation_flags(),
+                start_new_session=os.name != "nt",
             )
-        except subprocess.TimeoutExpired:
-            continue
+        except OSError as exc:
+            raise ToolError(f"Could not run {command[0]}: {exc}") from exc
+        deadline = time.monotonic() + timeout
+        while process.poll() is None:
+            if cancellation_requested():
+                terminate_process(process)
+                raise RequestCancelled("Request cancelled by the MCP client.")
+            if (
+                os.fstat(stdout_file.fileno()).st_size > max_output_bytes
+                or os.fstat(stderr_file.fileno()).st_size > max_output_bytes
+            ):
+                terminate_process(process)
+                raise ToolError(
+                    f"The command exceeded the {max_output_bytes}-byte output limit."
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                terminate_process(process)
+                expired = subprocess.TimeoutExpired(command, timeout)
+                raise ToolError(
+                    f"The command timed out after {timeout} seconds."
+                ) from expired
+            time.sleep(min(0.05, remaining))
+        stdout_size = os.fstat(stdout_file.fileno()).st_size
+        stderr_size = os.fstat(stderr_file.fileno()).st_size
+        if stdout_size > max_output_bytes or stderr_size > max_output_bytes:
+            raise ToolError(
+                f"The command exceeded the {max_output_bytes}-byte output limit."
+            )
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read().decode("utf-8", errors="replace")
+        stderr = stderr_file.read().decode("utf-8", errors="replace")
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:
