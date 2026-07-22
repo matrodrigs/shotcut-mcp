@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import json
 import math
@@ -29,6 +30,18 @@ SEQUENCE_TAGS = {"entry", "blank"}
 BACKGROUND_ID = "background"
 MAIN_BIN_IDS = {"main_bin", "main bin"}
 MAX_OPERATIONS = 500
+
+
+@dataclass
+class EditCandidate:
+    path: Path
+    document: ProjectDocument
+    original: bytes
+    original_revision: str
+    expected_revision: str | None
+    force: bool
+    timeout: int
+    operation_results: list[dict[str, Any]]
 
 
 def _sha256(data: bytes) -> str:
@@ -2057,7 +2070,7 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
+def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
     from .platform import expand_path
 
     path = expand_path(arguments.get("project_path", ""))
@@ -2071,6 +2084,18 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
     if expected_revision is not None and not isinstance(expected_revision, str):
         raise ToolError("expected_revision must be a SHA-256 string.")
     document = ProjectDocument.load(path)
+    original = document.source
+    original_revision = document.revision
+    if not force:
+        if not expected_revision:
+            raise ConflictError(
+                "expected_revision is required to edit an existing project."
+            )
+        if expected_revision != original_revision:
+            raise ConflictError(
+                f"The project changed. Expected {expected_revision}, current "
+                f"{original_revision}."
+            )
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
     for index, operation in enumerate(operations):
@@ -2079,19 +2104,87 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
         except ToolError as exc:
             raise ToolError(f"Operation {index} failed: {exc}") from exc
     document.update_main_duration()
-    saved = _write_validated(
-        document,
+    return EditCandidate(
+        path=path,
+        document=document,
+        original=original,
+        original_revision=original_revision,
         expected_revision=expected_revision,
         force=force,
-        validate=True,
         timeout=_int(arguments.get("timeout_seconds", 60), "timeout_seconds", 1),
+        operation_results=results,
+    )
+
+
+def plan_project_edit(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("force") not in (None, False):
+        raise ToolError("force is not supported by plan_project_edit.")
+    candidate = _build_edit_candidate(arguments)
+    data = candidate.document.to_bytes()
+    prospective_revision = _sha256(data)
+    temporary = candidate.path.with_name(
+        f".{candidate.path.name}.{uuid.uuid4().hex}.plan{candidate.path.suffix}"
+    )
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        validation = validate_project_file(temporary, timeout=candidate.timeout)
+    finally:
+        temporary.unlink(missing_ok=True)
+    latest = candidate.path.read_bytes() if candidate.path.is_file() else None
+    latest_revision = _sha256(latest) if latest is not None else None
+    if latest_revision != candidate.original_revision:
+        raise ConflictError(
+            "The project changed while the planned edit was being validated."
+        )
+
+    maximum_lines = _int(arguments.get("max_diff_lines", 2000), "max_diff_lines", 0)
+    maximum_lines = min(maximum_lines, 5000)
+    diff_lines = list(
+        difflib.unified_diff(
+            candidate.original.decode("utf-8", errors="replace").splitlines(),
+            data.decode("utf-8", errors="replace").splitlines(),
+            fromfile=str(candidate.path),
+            tofile=f"{candidate.path} (planned)",
+            lineterm="",
+        )
+    )
+    diff_truncated = len(diff_lines) > maximum_lines
+    shown_lines = diff_lines[:maximum_lines]
+    candidate.document.source = data
+    candidate.document.revision = prospective_revision
+    return {
+        "planned": True,
+        "changed": data != candidate.original,
+        "project_path": str(candidate.path),
+        "base_revision": candidate.original_revision,
+        "prospective_revision": prospective_revision,
+        "operation_results": candidate.operation_results,
+        "validation": validation,
+        "project": candidate.document.snapshot(),
+        "unified_diff": "\n".join(shown_lines),
+        "diff_lines": len(diff_lines),
+        "diff_truncated": diff_truncated,
+    }
+
+
+def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
+    candidate = _build_edit_candidate(arguments)
+    saved = _write_validated(
+        candidate.document,
+        expected_revision=candidate.expected_revision,
+        force=candidate.force,
+        validate=True,
+        timeout=candidate.timeout,
         create_backup=True,
     )
-    updated = ProjectDocument.load(path)
+    updated = ProjectDocument.load(candidate.path)
     return {
         "edited": True,
         **saved,
-        "operation_results": results,
+        "operation_results": candidate.operation_results,
         "project": updated.snapshot(),
     }
 

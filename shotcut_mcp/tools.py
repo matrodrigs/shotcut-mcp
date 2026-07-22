@@ -21,6 +21,7 @@ from .project import (
     create_project,
     edit_project,
     list_backups,
+    plan_project_edit,
     restore_backup,
 )
 from .render import RENDER_PRESETS, cancel_render, render_status, start_render
@@ -298,6 +299,44 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "plan_project_edit",
+        "title": "Plan project edit",
+        "description": (
+            "Applies operations in memory, validates the candidate with MLT, and returns "
+            "a prospective snapshot and bounded unified diff without changing the project."
+        ),
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "items": {
+                        "type": "object",
+                        "properties": {"op": {"type": "string", "enum": OP_NAMES}},
+                        "required": ["op"],
+                        "additionalProperties": True,
+                    },
+                },
+                "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+                "max_diff_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5000,
+                    "default": 2000,
+                },
+            },
+            ["project_path", "expected_revision", "operations"],
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
         "name": "create_project",
         "title": "Create multitrack Shotcut project",
         "description": "Creates Shotcut 26.6 MLT XML with a background, V1, additional tracks, and optional clips.",
@@ -543,6 +582,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
         expand_path(arguments.get("path", ""))
     ),
     "inspect_project": inspect_project,
+    "plan_project_edit": plan_project_edit,
     "create_project": create_project,
     "edit_project": edit_project,
     "list_mlt_services": lambda arguments: list_services(arguments.get("kind", "")),

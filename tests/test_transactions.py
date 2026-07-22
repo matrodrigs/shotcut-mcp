@@ -6,10 +6,39 @@ from pathlib import Path
 from unittest.mock import patch
 
 from shotcut_mcp.errors import ConflictError, ToolError
-from shotcut_mcp.project import create_project, edit_project, list_backups, restore_backup
+from shotcut_mcp.project import (
+    create_project,
+    edit_project,
+    list_backups,
+    plan_project_edit,
+    restore_backup,
+)
 
 
 class ProjectTransactionTests(unittest.TestCase):
+    def test_plan_edit_returns_diff_without_changing_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "project.mlt"
+            with patch("shotcut_mcp.project.validate_project_file", return_value={"valid": True}):
+                created = create_project({"project_path": str(project_path)})
+                before = project_path.read_bytes()
+
+                plan = plan_project_edit(
+                    {
+                        "project_path": str(project_path),
+                        "expected_revision": created["revision"],
+                        "operations": [
+                            {"op": "add_track", "kind": "audio", "name": "Voice"}
+                        ],
+                    }
+                )
+
+            self.assertTrue(plan["changed"])
+            self.assertIn("Voice", plan["unified_diff"])
+            self.assertNotEqual(plan["prospective_revision"], created["revision"])
+            self.assertEqual(project_path.read_bytes(), before)
+            self.assertEqual(list_backups(project_path)["backup_count"], 0)
+
     def test_edit_aborts_if_project_changes_while_candidate_is_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"
