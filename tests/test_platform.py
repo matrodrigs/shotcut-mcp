@@ -81,6 +81,26 @@ class PathPolicyTests(unittest.TestCase):
                 with self.assertRaisesRegex(ToolError, "allowed roots"):
                     platform.expand_path(str(outside))
 
+    def test_project_network_resources_are_blocked_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "remote.mlt"
+            project_path.write_text(
+                "<mlt><producer><property name=\"resource\">"
+                "https://example.invalid/video.mp4"
+                "</property></producer></mlt>",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {}, clear=False),
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, None, None, None),
+                ),
+            ):
+                os.environ.pop("SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES", None)
+                with self.assertRaisesRegex(ToolError, "network resources"):
+                    platform.validate_project_file(project_path)
+
 
 class ProcessCancellationTests(unittest.TestCase):
     def test_run_capture_terminates_when_mcp_request_is_cancelled(self) -> None:

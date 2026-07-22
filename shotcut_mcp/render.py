@@ -15,6 +15,7 @@ from .errors import RequestCancelled, ToolError
 from .platform import (
     creation_flags,
     discover_executables,
+    enforce_project_resource_policy,
     ensure_melt_ready,
     require_executable,
 )
@@ -180,6 +181,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     output_path = expand_path(arguments.get("output_path", ""))
     if not project_path.is_file():
         raise ToolError(f"Project not found: {project_path}")
+    enforce_project_resource_policy(project_path)
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
         raise ToolError("overwrite must be a boolean.")

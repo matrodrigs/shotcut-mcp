@@ -333,7 +333,7 @@ TOOLS: list[dict[str, Any]] = [
         "annotations": {
             "readOnlyHint": True,
             "destructiveHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
     },
     {
@@ -393,7 +393,7 @@ TOOLS: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
     },
     {
@@ -454,7 +454,7 @@ TOOLS: list[dict[str, Any]] = [
         "annotations": {
             "readOnlyHint": True,
             "destructiveHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
     },
     {
@@ -474,7 +474,7 @@ TOOLS: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
     },
     {
@@ -514,7 +514,7 @@ TOOLS: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
     },
     {
@@ -568,7 +568,7 @@ TOOLS: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
     },
 ]

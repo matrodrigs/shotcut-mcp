@@ -17,7 +17,12 @@ from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
 
 from .errors import ConflictError, RequestCancelled, ToolError
-from .platform import media_duration, probe_media_raw, validate_project_file
+from .platform import (
+    is_network_resource,
+    media_duration,
+    probe_media_raw,
+    validate_project_file,
+)
 from .protocol import cancellation_requested
 from .storage import (
     is_project_backup,
@@ -367,7 +372,7 @@ class ProjectDocument:
         return matches[0]
 
     def new_id(self, prefix: str) -> str:
-        existing = set(self.id_map())
+        existing = self.id_map()
         for _ in range(10000):
             candidate = f"{prefix}_{uuid.uuid4().hex[:12]}"
             if candidate not in existing:
@@ -1928,6 +1933,11 @@ class ProjectDocument:
             "markers": markers,
             "subtitles": subtitles,
             "resources": resources,
+            "network_resources": [
+                item["resource"]
+                for item in resources
+                if is_network_resource(item["resource"])
+            ],
             "missing_resources": [
                 item["resolved_path"] for item in resources if item["exists"] is False
             ],

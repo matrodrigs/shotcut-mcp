@@ -11,6 +11,7 @@ import signal
 import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from .protocol import cancellation_requested
 from .storage import OutputTransaction
 
 
-_PROBE_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+_PROBE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
 _PROBE_LOCK = threading.Lock()
 _SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
 _SERVICE_LOCK = threading.Lock()
@@ -43,11 +44,11 @@ class Executables:
     ffmpeg: Path | None
 
 
-def expand_path(value: str) -> Path:
+def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ToolError("The path must be a non-empty string.")
     expanded = Path(os.path.expandvars(value)).expanduser()
-    if (
+    if enforce_policy and (
         os.environ.get("SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS", "").lower()
         in {"1", "true", "yes"}
         and not expanded.is_absolute()
@@ -55,7 +56,7 @@ def expand_path(value: str) -> Path:
         raise ToolError("Relative paths are disabled by SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS.")
     resolved = expanded.resolve()
     configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
-    if configured_roots:
+    if enforce_policy and configured_roots:
         roots = [
             Path(os.path.expandvars(item)).expanduser().resolve()
             for item in configured_roots.split(os.pathsep)
@@ -93,7 +94,66 @@ def path_policy() -> dict[str, Any]:
             "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES", ""
         ).lower()
         in {"1", "true", "yes"},
+        "allow_network_resources": os.environ.get(
+            "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES", ""
+        ).lower()
+        in {"1", "true", "yes"},
     }
+
+
+def is_network_resource(value: str) -> bool:
+    network_schemes = {
+        "ftp",
+        "ftps",
+        "http",
+        "https",
+        "nfs",
+        "rtmp",
+        "rtp",
+        "rtsp",
+        "sftp",
+        "smb",
+        "srt",
+        "tcp",
+        "udp",
+    }
+    return value.startswith(("//", "\\\\")) or value.partition(":")[
+        0
+    ].lower() in network_schemes
+
+
+def project_network_resources(project_path: Path) -> list[str]:
+    try:
+        root = ET.parse(project_path).getroot()
+    except (ET.ParseError, OSError):
+        return []
+    values = [
+        (element.text or "").strip()
+        for element in root.findall(".//property[@name='resource']")
+    ]
+    values.extend(
+        value.strip()
+        for element in root.iter()
+        if (value := element.get("resource"))
+    )
+    return sorted({value for value in values if is_network_resource(value)})
+
+
+def enforce_project_resource_policy(project_path: Path) -> None:
+    if os.environ.get("SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return
+    resources = project_network_resources(project_path)
+    if resources:
+        preview = ", ".join(resources[:3])
+        raise ToolError(
+            "Project network resources are disabled by default: "
+            f"{preview}. An administrator can opt in with "
+            "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES=1."
+        )
 
 
 def _which(name: str) -> Path | None:
@@ -111,7 +171,7 @@ def _first_existing(candidates: list[Path | None]) -> Path | None:
 def discover_executables() -> Executables:
     env_shotcut = os.environ.get("SHOTCUT_PATH")
     shotcut_candidates: list[Path | None] = [
-        expand_path(env_shotcut) if env_shotcut else None,
+        expand_path(env_shotcut, enforce_policy=False) if env_shotcut else None,
         _which("shotcut"),
         _which("shotcut.exe"),
     ]
@@ -139,7 +199,7 @@ def discover_executables() -> Executables:
     ffmpeg_env = os.environ.get("SHOTCUT_FFMPEG_PATH")
     melt = _first_existing(
         [
-            expand_path(melt_env) if melt_env else None,
+            expand_path(melt_env, enforce_policy=False) if melt_env else None,
             sibling_candidate("melt.exe" if os.name == "nt" else "melt"),
             _which("melt"),
             _which("shotcut.melt"),
@@ -150,14 +210,14 @@ def discover_executables() -> Executables:
     )
     ffprobe = _first_existing(
         [
-            expand_path(ffprobe_env) if ffprobe_env else None,
+            expand_path(ffprobe_env, enforce_policy=False) if ffprobe_env else None,
             sibling_candidate("ffprobe.exe" if os.name == "nt" else "ffprobe"),
             _which("ffprobe"),
         ]
     )
     ffmpeg = _first_existing(
         [
-            expand_path(ffmpeg_env) if ffmpeg_env else None,
+            expand_path(ffmpeg_env, enforce_policy=False) if ffmpeg_env else None,
             sibling_candidate("ffmpeg.exe" if os.name == "nt" else "ffmpeg"),
             _which("ffmpeg"),
         ]
@@ -368,6 +428,7 @@ def status() -> dict[str, Any]:
                 "SHOTCUT_MCP_ALLOWED_ROOTS",
                 "SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS",
                 "SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES",
+                "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES",
                 *MLT_ENVIRONMENT_KEYS,
             )
         },
@@ -407,14 +468,19 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
     if not media_path.is_file():
         raise ToolError(f"Media file not found: {media_path}")
     stat = media_path.stat()
-    key = (str(media_path), stat.st_mtime_ns, stat.st_size)
+    ffprobe = require_executable(
+        discover_executables().ffprobe, "ffprobe", "SHOTCUT_FFPROBE_PATH"
+    )
+    key = (
+        str(media_path),
+        stat.st_mtime_ns,
+        stat.st_size,
+        *_runtime_identity(ffprobe),
+    )
     with _PROBE_LOCK:
         cached = _PROBE_CACHE.get(key)
     if cached is not None:
         return cached
-    ffprobe = require_executable(
-        discover_executables().ffprobe, "ffprobe", "SHOTCUT_FFPROBE_PATH"
-    )
     result = run_capture(
         [
             str(ffprobe),
@@ -482,6 +548,7 @@ def summarize_media(media_path: Path) -> dict[str, Any]:
 
 
 def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, Any]:
+    enforce_project_resource_policy(project_path)
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
     result = run_capture(
@@ -649,6 +716,7 @@ def render_preview(
 ) -> dict[str, Any]:
     if not project_path.is_file():
         raise ToolError(f"Project not found: {project_path}")
+    enforce_project_resource_policy(project_path)
     if frame < 0:
         raise ToolError("frame must be zero or positive.")
     output = OutputTransaction.prepare(
