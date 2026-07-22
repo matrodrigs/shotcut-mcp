@@ -16,7 +16,6 @@ from .errors import RequestCancelled, ToolError
 from .protocol import request_cancellation, schema_errors
 from .tools import HANDLERS, TOOLS
 
-
 SERVER_NAME = "shotcut-mcp"
 LATEST_PROTOCOL_VERSION = "2025-11-25"
 SUPPORTED_PROTOCOL_VERSIONS = {
@@ -34,7 +33,9 @@ class ProtocolSession:
     initialized: bool = False
 
 
-def _error(request_id: Any, code: int, message: str, data: Any = None) -> dict[str, Any]:
+def _error(
+    request_id: Any, code: int, message: str, data: Any = None
+) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
@@ -81,7 +82,9 @@ def handle_request(
         return _error(request_id, -32600, "Invalid Request: method must be a string.")
     if "id" not in message:
         return None
-    if isinstance(request_id, bool) or not isinstance(request_id, (str, int, type(None))):
+    if isinstance(request_id, bool) or not isinstance(
+        request_id, (str, int, type(None))
+    ):
         return _error(None, -32600, "Invalid Request: id must be a string or number.")
     if method == "initialize":
         raw_params = message.get("params")
@@ -115,8 +118,8 @@ def handle_request(
     if method in {"ping", "logging/setLevel"}:
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "tools/list":
-        params = message.get("params", {})
-        if not isinstance(params, dict):
+        list_params = message.get("params", {})
+        if not isinstance(list_params, dict):
             return _error(request_id, -32602, "Invalid tools/list parameters.")
         return {
             "jsonrpc": "2.0",
@@ -144,9 +147,7 @@ def handle_request(
                 {"validationErrors": validation_errors},
             )
         try:
-            result = _tool_result(
-                handler(arguments), active_session.protocol_version
-            )
+            result = _tool_result(handler(arguments), active_session.protocol_version)
         except RequestCancelled as exc:
             return _error(request_id, -32800, str(exc) or "Request cancelled.")
         except ToolError as exc:
@@ -275,7 +276,9 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 and "id" not in message
             ):
                 params = message.get("params")
-                request_id = params.get("requestId") if isinstance(params, dict) else None
+                request_id = (
+                    params.get("requestId") if isinstance(params, dict) else None
+                )
                 with pending_lock:
                     item = pending.get(request_id)
                 if item is not None:
@@ -308,9 +311,14 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 future = executor.submit(execute, message, cancellation)
                 with pending_lock:
                     pending[request_id] = (future, cancellation)
-                future.add_done_callback(
-                    lambda completed, key=request_id: complete(key, completed)
-                )
+
+                def finish(
+                    completed: Future[Any],
+                    key: str | int | None = request_id,
+                ) -> None:
+                    complete(key, completed)
+
+                future.add_done_callback(finish)
                 continue
 
             response = handle_request(message, session)

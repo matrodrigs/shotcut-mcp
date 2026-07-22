@@ -8,11 +8,11 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
 
 from .errors import ConflictError, ToolError
 
@@ -152,9 +152,7 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
     payload = json.dumps({"pid": os.getpid(), "created_at": time.time()})
     for attempt in range(2):
         try:
-            descriptor = os.open(
-                lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
-            )
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()
@@ -164,7 +162,7 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
             if attempt:
                 raise ConflictError(
                     f"Another MCP process is editing the project: {lock_path}"
-                )
+                ) from None
             try:
                 age = time.time() - lock_path.stat().st_mtime
                 owner = json.loads(lock_path.read_text(encoding="utf-8"))
@@ -177,7 +175,7 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
                 continue
             raise ConflictError(
                 f"Another MCP process is editing the project: {lock_path}"
-            )
+            ) from None
     try:
         yield
     finally:
@@ -216,7 +214,9 @@ def list_project_backups(project_path: Path) -> list[Path]:
     pattern = _legacy_backup_pattern(project_path)
     if legacy.is_dir():
         candidates.extend(
-            path for path in legacy.iterdir() if path.is_file() and pattern.fullmatch(path.name)
+            path
+            for path in legacy.iterdir()
+            if path.is_file() and pattern.fullmatch(path.name)
         )
     return sorted(candidates, reverse=True)
 

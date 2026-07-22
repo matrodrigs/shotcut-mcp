@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import sys
 import time
 from typing import Any
 
 from .errors import ToolError
-from .platform import creation_flags
+from .platform import creation_flags, terminate_process
 from .render_jobs import (
     cancel_requested,
     clear_control_files,
@@ -24,23 +23,7 @@ from .storage import OutputTransaction
 
 
 def _stop_renderer(process: subprocess.Popen[Any]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if os.name != "nt":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        try:
-            if os.name != "nt":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-            process.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    terminate_process(process, grace_seconds=5)
 
 
 def _command(metadata: dict[str, Any], output: OutputTransaction) -> list[str]:
@@ -82,9 +65,7 @@ def run_worker(job_id: str) -> int:
             return 0
 
         path = log_path(job_id)
-        descriptor = os.open(
-            path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600
-        )
+        descriptor = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8", errors="replace") as log:
             process = subprocess.Popen(
                 _command(metadata, output),

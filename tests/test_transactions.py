@@ -19,7 +19,10 @@ class ProjectTransactionTests(unittest.TestCase):
     def test_plan_edit_returns_diff_without_changing_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"
-            with patch("shotcut_mcp.project.validate_project_file", return_value={"valid": True}):
+            with patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ):
                 created = create_project({"project_path": str(project_path)})
                 before = project_path.read_bytes()
 
@@ -43,10 +46,13 @@ class ProjectTransactionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"
 
-            with patch("shotcut_mcp.project.validate_project_file", return_value={"valid": True}):
+            with patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ):
                 created = create_project({"project_path": str(project_path)})
 
-            external_contents = b"<mlt producer=\"external-editor\"/>\n"
+            external_contents = b'<mlt producer="external-editor"/>\n'
 
             def validate_after_external_save(
                 _candidate_path: str, **_kwargs: object
@@ -54,20 +60,22 @@ class ProjectTransactionTests(unittest.TestCase):
                 project_path.write_bytes(external_contents)
                 return {"valid": True}
 
-            with patch(
-                "shotcut_mcp.project.validate_project_file",
-                side_effect=validate_after_external_save,
+            with (
+                patch(
+                    "shotcut_mcp.project.validate_project_file",
+                    side_effect=validate_after_external_save,
+                ),
+                self.assertRaises(ConflictError),
             ):
-                with self.assertRaises(ConflictError):
-                    edit_project(
-                        {
-                            "project_path": str(project_path),
-                            "operations": [
-                                {"op": "add_track", "kind": "video", "name": "V2"}
-                            ],
-                            "expected_revision": created["revision"],
-                        }
-                    )
+                edit_project(
+                    {
+                        "project_path": str(project_path),
+                        "operations": [
+                            {"op": "add_track", "kind": "video", "name": "V2"}
+                        ],
+                        "expected_revision": created["revision"],
+                    }
+                )
 
             self.assertEqual(project_path.read_bytes(), external_contents)
 
@@ -76,7 +84,10 @@ class ProjectTransactionTests(unittest.TestCase):
             first_path = Path(directory) / "movie.mlt"
             second_path = Path(directory) / "movie.cut.mlt"
 
-            with patch("shotcut_mcp.project.validate_project_file", return_value={"valid": True}):
+            with patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ):
                 first = create_project({"project_path": str(first_path)})
                 second = create_project({"project_path": str(second_path)})
                 first_edit = edit_project(

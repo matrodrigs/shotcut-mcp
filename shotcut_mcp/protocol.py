@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-
 _CANCELLATION_EVENT: ContextVar[threading.Event | None] = ContextVar(
     "shotcut_mcp_cancellation_event", default=None
 )
@@ -51,8 +50,7 @@ def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[s
     expected = schema.get("type")
     expected_types = expected if isinstance(expected, list) else [expected]
     if expected and not any(
-        isinstance(item, str) and _matches_type(value, item)
-        for item in expected_types
+        isinstance(item, str) and _matches_type(value, item) for item in expected_types
     ):
         errors.append(f"{path} must be of type {expected}.")
         return errors
@@ -65,9 +63,11 @@ def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[s
         properties = schema.get("properties", {})
         required = schema.get("required", [])
         if isinstance(required, list):
-            for name in required:
-                if isinstance(name, str) and name not in value:
-                    errors.append(f"{path}.{name} is required.")
+            errors.extend(
+                f"{path}.{name} is required."
+                for name in required
+                if isinstance(name, str) and name not in value
+            )
         if isinstance(properties, dict):
             for name, item in value.items():
                 child_schema = properties.get(name)

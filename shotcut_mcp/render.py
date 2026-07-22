@@ -19,6 +19,7 @@ from .platform import (
     ensure_melt_ready,
     require_executable,
 )
+from .protocol import cancellation_requested
 from .render_jobs import (
     TERMINAL_STATUSES,
     log_path,
@@ -29,9 +30,7 @@ from .render_jobs import (
     request_cancel,
     write_job,
 )
-from .protocol import cancellation_requested
 from .storage import OutputTransaction, process_is_alive
-
 
 RUNNING_JOBS: dict[str, subprocess.Popen[Any]] = {}
 
@@ -255,9 +254,9 @@ def render_status(job_id: str) -> dict[str, Any]:
             metadata = read_job(job_id)
             if metadata.get("status") not in TERMINAL_STATUSES:
                 renderer_pid = metadata.get("renderer_pid")
-                renderer_alive = isinstance(
-                    renderer_pid, int
-                ) and process_is_alive(renderer_pid)
+                renderer_alive = isinstance(renderer_pid, int) and process_is_alive(
+                    renderer_pid
+                )
                 if renderer_alive:
                     metadata.update(
                         status="orphaned",
@@ -279,17 +278,16 @@ def render_status(job_id: str) -> dict[str, Any]:
                         metadata.get("output_transaction")
                     ).cleanup()
                 write_job(metadata)
-        elif worker_pid is None and time.time() - float(
-            metadata.get("started_at", 0)
-        ) > 10:
+        elif (
+            worker_pid is None
+            and time.time() - float(metadata.get("started_at", 0)) > 10
+        ):
             metadata.update(
                 status="failed",
                 status_note="The render supervisor never started.",
                 finished_at=time.time(),
             )
-            OutputTransaction.deserialize(
-                metadata.get("output_transaction")
-            ).cleanup()
+            OutputTransaction.deserialize(metadata.get("output_transaction")).cleanup()
             write_job(metadata)
     output_path = Path(metadata["output_path"])
     progress, log_tail = read_progress(Path(metadata["log_path"]))

@@ -5,15 +5,16 @@ from __future__ import annotations
 import copy
 import difflib
 import hashlib
-import json
 import math
 import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .errors import ConflictError, RequestCancelled, ToolError
@@ -30,7 +31,6 @@ from .storage import (
     project_lock,
     write_project_backup,
 )
-
 
 SEQUENCE_TAGS = {"entry", "blank"}
 BACKGROUND_ID = "background"
@@ -194,7 +194,7 @@ class ProjectDocument:
         self._id_cache: dict[str, ET.Element] | None = None
 
     @classmethod
-    def load(cls, path: Path) -> "ProjectDocument":
+    def load(cls, path: Path) -> ProjectDocument:
         if not path.is_file():
             raise ToolError(f"Project not found: {path}")
         source = path.read_bytes()
@@ -215,7 +215,7 @@ class ProjectDocument:
         fps_num: int,
         fps_den: int,
         title: str,
-    ) -> "ProjectDocument":
+    ) -> ProjectDocument:
         divisor = math.gcd(width, height)
         root = ET.Element(
             "mlt",
@@ -430,10 +430,8 @@ class ProjectDocument:
             for track in self.track_container().findall("track"):
                 playlist = self.id_map().get(track.get("producer", ""))
                 if playlist is not None and playlist.tag == "playlist":
-                    try:
+                    with suppress(ValueError):
                         index = min(index, children.index(playlist))
-                    except ValueError:
-                        pass
         self.root.insert(index, element)
         self.invalidate()
 
@@ -442,11 +440,7 @@ class ProjectDocument:
         main = self.main_tractor()
         editable_playlists = [track.playlist for track in self.tracks()]
         children = list(self.root)
-        anchors = [
-            playlist
-            for playlist in editable_playlists
-            if playlist in children
-        ]
+        anchors = [playlist for playlist in editable_playlists if playlist in children]
         if not anchors:
             return
         anchor = min(anchors, key=children.index)
@@ -2051,12 +2045,10 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
         if isinstance(arguments.get("notes", ""), str)
         else "",
     )
-    results: list[dict[str, Any]] = []
     tracks = arguments.get("tracks", [])
     if not isinstance(tracks, list):
         raise ToolError("tracks must be a list.")
-    for track in tracks:
-        results.append(document.add_track({"op": "add_track", **track}))
+    results = [document.add_track({"op": "add_track", **track}) for track in tracks]
     clips = arguments.get("clips", [])
     if not isinstance(clips, list):
         raise ToolError("clips must be a list.")
@@ -2203,16 +2195,15 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_backups(project_path: Path) -> dict[str, Any]:
-    backups = []
-    for path in list_project_backups(project_path):
-        backups.append(
-            {
-                "path": str(path),
-                "size_bytes": path.stat().st_size,
-                "modified_at": path.stat().st_mtime,
-                "revision": _sha256(path.read_bytes()),
-            }
-        )
+    backups = [
+        {
+            "path": str(path),
+            "size_bytes": path.stat().st_size,
+            "modified_at": path.stat().st_mtime,
+            "revision": _sha256(path.read_bytes()),
+        }
+        for path in list_project_backups(project_path)
+    ]
     return {
         "project_path": str(project_path),
         "backup_count": len(backups),

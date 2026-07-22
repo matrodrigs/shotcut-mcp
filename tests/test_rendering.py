@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import tempfile
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from shotcut_mcp import render as render_module
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import render_preview
-from shotcut_mcp import render as render_module
 from shotcut_mcp.render import cancel_render, render_status, start_render
 
 
@@ -43,9 +43,8 @@ class PreviewSafetyTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
             first, second, third, fourth = self._platform_patches(render)
-            with first, second, third, fourth:
-                with self.assertRaises(ToolError):
-                    render_preview(project_path, project_path, frame=0, overwrite=True)
+            with first, second, third, fourth, self.assertRaises(ToolError):
+                render_preview(project_path, project_path, frame=0, overwrite=True)
 
             self.assertEqual(project_path.read_bytes(), original)
 
@@ -70,9 +69,8 @@ class PreviewSafetyTests(unittest.TestCase):
             first, second, third, fourth = self._platform_patches(
                 fail_after_partial_output
             )
-            with first, second, third, fourth:
-                with self.assertRaises(ToolError):
-                    render_preview(project_path, output_path, frame=0, overwrite=True)
+            with first, second, third, fourth, self.assertRaises(ToolError):
+                render_preview(project_path, output_path, frame=0, overwrite=True)
 
             self.assertEqual(output_path.read_bytes(), b"existing")
             self.assertEqual(list(Path(directory).glob("*.tmp.png")), [])
@@ -183,8 +181,7 @@ class RenderLifecycleTests(unittest.TestCase):
             renderer_path = Path(directory) / "slow_renderer.py"
             output_path = Path(directory) / "output.mp4"
             renderer_path.write_text(
-                "import time\n"
-                "time.sleep(20)\n",
+                "import time\ntime.sleep(20)\n",
                 encoding="utf-8",
             )
             job = self._start_with_python_renderer(renderer_path, output_path)

@@ -20,7 +20,6 @@ from .errors import RequestCancelled, ToolError
 from .protocol import cancellation_requested
 from .storage import OutputTransaction
 
-
 _PROBE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
 _PROBE_LOCK = threading.Lock()
 _SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
@@ -53,7 +52,9 @@ def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
         in {"1", "true", "yes"}
         and not expanded.is_absolute()
     ):
-        raise ToolError("Relative paths are disabled by SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS.")
+        raise ToolError(
+            "Relative paths are disabled by SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS."
+        )
     resolved = expanded.resolve()
     configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
     if enforce_policy and configured_roots:
@@ -117,9 +118,10 @@ def is_network_resource(value: str) -> bool:
         "tcp",
         "udp",
     }
-    return value.startswith(("//", "\\\\")) or value.partition(":")[
-        0
-    ].lower() in network_schemes
+    return (
+        value.startswith(("//", "\\\\"))
+        or value.partition(":")[0].lower() in network_schemes
+    )
 
 
 def project_network_resources(project_path: Path) -> list[str]:
@@ -132,9 +134,7 @@ def project_network_resources(project_path: Path) -> list[str]:
         for element in root.findall(".//property[@name='resource']")
     ]
     values.extend(
-        value.strip()
-        for element in root.iter()
-        if (value := element.get("resource"))
+        value.strip() for element in root.iter() if (value := element.get("resource"))
     )
     return sorted({value for value in values if is_network_resource(value)})
 
@@ -176,7 +176,7 @@ def discover_executables() -> Executables:
         _which("shotcut.exe"),
     ]
     if os.name == "nt":
-        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        program_files = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
         local_appdata = Path(os.environ.get("LOCALAPPDATA", ""))
         shotcut_candidates.extend(
             [
@@ -276,13 +276,15 @@ def run_capture(
     deadline = time.monotonic() + timeout
     while True:
         if cancellation_requested():
-            _terminate_process(process)
+            terminate_process(process)
             raise RequestCancelled("Request cancelled by the MCP client.")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            _terminate_process(process)
+            terminate_process(process)
             expired = subprocess.TimeoutExpired(command, timeout)
-            raise ToolError(f"The command timed out after {timeout} seconds.") from expired
+            raise ToolError(
+                f"The command timed out after {timeout} seconds."
+            ) from expired
         try:
             stdout, stderr = process.communicate(timeout=min(0.1, remaining))
             return subprocess.CompletedProcess(
@@ -292,22 +294,28 @@ def run_capture(
             continue
 
 
-def _terminate_process(process: subprocess.Popen[Any]) -> None:
+def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:
     if process.poll() is not None:
         return
     try:
         if os.name != "nt":
-            os.killpg(process.pid, signal.SIGTERM)
+            kill_group = getattr(os, "killpg", None)
+            if not callable(kill_group):
+                raise OSError("process-group signals are unavailable")
+            kill_group(process.pid, signal.SIGTERM)
         else:
             process.terminate()
-        process.wait(timeout=2)
+        process.wait(timeout=grace_seconds)
     except (OSError, subprocess.TimeoutExpired):
         try:
             if os.name != "nt":
-                os.killpg(process.pid, signal.SIGKILL)
+                kill_group = getattr(os, "killpg", None)
+                if not callable(kill_group):
+                    raise OSError("process-group signals are unavailable")
+                kill_group(process.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
             else:
                 process.kill()
-            process.wait(timeout=2)
+            process.wait(timeout=grace_seconds)
         except (OSError, subprocess.TimeoutExpired):
             pass
 
@@ -627,6 +635,13 @@ def _extract_version(value: str | None) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.groups() if part is not None)
 
 
+def _safe_service_description(kind: str, name: str) -> dict[str, Any]:
+    try:
+        return describe_service(kind, name)
+    except ToolError as exc:
+        return {"available": False, "error": str(exc)}
+
+
 def compatibility_doctor() -> dict[str, Any]:
     executables = discover_executables()
     repository_error: str | None = None
@@ -638,24 +653,17 @@ def compatibility_doctor() -> dict[str, Any]:
         except ToolError as exc:
             repository_error = str(exc)
 
-    shotcut_version, shotcut_error = _safe_version(
-        executables.shotcut, ["--version"]
-    )
+    shotcut_version, shotcut_error = _safe_version(executables.shotcut, ["--version"])
     mlt_version, mlt_error = _safe_version(executables.melt, ["--version"])
     shotcut_number = _extract_version(shotcut_version)
     mlt_number = _extract_version(mlt_version)
 
-    rnnoise: dict[str, Any] = {}
-    for kind in ("link", "filter"):
-        try:
-            rnnoise[kind] = describe_service(kind, "rnnoise")
-        except ToolError as exc:
-            rnnoise[kind] = {"available": False, "error": str(exc)}
-    rnnoise_available = any(
-        bool(item.get("available")) for item in rnnoise.values()
-    )
+    rnnoise = {
+        kind: _safe_service_description(kind, "rnnoise") for kind in ("link", "filter")
+    }
+    rnnoise_available = any(bool(item.get("available")) for item in rnnoise.values())
 
-    checks = {
+    checks: dict[str, dict[str, Any]] = {
         "shotcut": {
             "passed": shotcut_number == (26, 6, 25),
             "expected": "26.6.25",

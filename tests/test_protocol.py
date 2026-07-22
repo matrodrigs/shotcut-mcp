@@ -12,7 +12,9 @@ from shotcut_mcp.protocol import cancellation_requested
 from shotcut_mcp.server import ProtocolSession, handle_request, serve
 
 
-def request(method: str, params: object = None, request_id: int = 1) -> dict[str, object]:
+def request(
+    method: str, params: object = None, request_id: int = 1
+) -> dict[str, object]:
     message: dict[str, object] = {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -72,7 +74,9 @@ class ProtocolValidationTests(unittest.TestCase):
             + "\n"
         ).encode()
         output = io.BytesIO()
-        with patch.dict("shotcut_mcp.server.HANDLERS", {"shotcut_status": slow_handler}):
+        with patch.dict(
+            "shotcut_mcp.server.HANDLERS", {"shotcut_status": slow_handler}
+        ):
             serve(io.BytesIO(messages), output)
 
         response = json.loads(output.getvalue().decode().strip())
@@ -83,9 +87,7 @@ class ProtocolValidationTests(unittest.TestCase):
 class ProtocolNegotiationTests(unittest.TestCase):
     def test_2025_03_batch_requests_are_supported_only_after_negotiation(self) -> None:
         messages = (
-            json.dumps(
-                request("initialize", {"protocolVersion": "2025-03-26"})
-            )
+            json.dumps(request("initialize", {"protocolVersion": "2025-03-26"}))
             + "\n"
             + json.dumps([request("ping", request_id=2), request("ping", request_id=3)])
             + "\n"
@@ -94,7 +96,9 @@ class ProtocolNegotiationTests(unittest.TestCase):
 
         serve(io.BytesIO(messages), output)
 
-        responses = [json.loads(line) for line in output.getvalue().decode().splitlines()]
+        responses = [
+            json.loads(line) for line in output.getvalue().decode().splitlines()
+        ]
         self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-03-26")
         self.assertEqual([item["id"] for item in responses[1]], [2, 3])
 

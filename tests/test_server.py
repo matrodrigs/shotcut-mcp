@@ -47,9 +47,7 @@ class MeltStartupTests(unittest.TestCase):
                 platform_module.ensure_melt_ready(melt, attempts=3, timeout=5)
 
             self.assertEqual(run.call_count, 2)
-            run.assert_called_with(
-                [str(melt), "-query", "consumers"], timeout=5
-            )
+            run.assert_called_with([str(melt), "-query", "consumers"], timeout=5)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -75,8 +73,7 @@ class ProtocolTests(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, str(SERVER_PATH)],
             input=messages.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=10,
             check=False,
         )
@@ -351,7 +348,9 @@ class ProjectEditingTests(unittest.TestCase):
             self.assertIsNotNone(entry)
             producer = document.id_map()[entry.get("producer", "")]
             document.root.remove(producer)
-            document.root.insert(list(document.root).index(document.main_tractor()), producer)
+            document.root.insert(
+                list(document.root).index(document.main_tractor()), producer
+            )
             Path(edited["path"]).write_bytes(document.to_bytes())
             broken = ProjectDocument.load(Path(edited["path"]))
             repaired = edit_project(

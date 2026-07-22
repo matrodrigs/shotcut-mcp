@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .errors import ToolError
 from .platform import (
@@ -25,7 +26,6 @@ from .project import (
     restore_backup,
 )
 from .render import RENDER_PRESETS, cancel_render, render_status, start_render
-
 
 OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "add_track": {

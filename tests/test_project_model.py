@@ -24,7 +24,7 @@ class ProjectModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"
             created = create_project({"project_path": str(project_path)})
-            generated = edit_project(
+            edit_project(
                 {
                     "project_path": str(project_path),
                     "expected_revision": created["revision"],
@@ -145,7 +145,7 @@ class ProjectModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "ambiguous.mlt"
             project_path.write_text(
-                "<mlt><profile/><tractor id=\"one\"/><tractor id=\"two\"/></mlt>",
+                '<mlt><profile/><tractor id="one"/><tractor id="two"/></mlt>',
                 encoding="utf-8",
             )
 

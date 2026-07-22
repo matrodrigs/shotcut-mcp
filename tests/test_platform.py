@@ -24,7 +24,9 @@ class MeltCacheTests(unittest.TestCase):
             melt = Path(directory) / "melt"
             melt.write_bytes(b"executable")
             completed = subprocess.CompletedProcess([], 0, "consumers", "")
-            with patch("shotcut_mcp.platform.run_capture", return_value=completed) as run:
+            with patch(
+                "shotcut_mcp.platform.run_capture", return_value=completed
+            ) as run:
                 with patch.dict(os.environ, {"MLT_REPOSITORY_DENY": "first"}):
                     platform.ensure_melt_ready(melt)
                 with patch.dict(os.environ, {"MLT_REPOSITORY_DENY": "second"}):
@@ -44,17 +46,21 @@ class MeltCacheTests(unittest.TestCase):
                 ),
                 patch("shotcut_mcp.platform.ensure_melt_ready"),
                 patch("shotcut_mcp.platform.run_capture", return_value=failed),
+                self.assertRaisesRegex(ToolError, "repository failure"),
             ):
-                with self.assertRaisesRegex(ToolError, "repository failure"):
-                    platform.list_services("filter")
+                platform.list_services("filter")
 
-    def test_doctor_checks_rnnoise_independently_from_repository_preflight(self) -> None:
+    def test_doctor_checks_rnnoise_independently_from_repository_preflight(
+        self,
+    ) -> None:
         executables = platform.Executables(
             Path("shotcut"), Path("melt"), Path("ffprobe"), Path("ffmpeg")
         )
         unavailable = {"available": False, "metadata": "# No metadata"}
         with (
-            patch("shotcut_mcp.platform.discover_executables", return_value=executables),
+            patch(
+                "shotcut_mcp.platform.discover_executables", return_value=executables
+            ),
             patch("shotcut_mcp.platform.ensure_melt_ready"),
             patch(
                 "shotcut_mcp.platform.version_line",
@@ -75,17 +81,19 @@ class PathPolicyTests(unittest.TestCase):
             allowed = Path(directory) / "allowed"
             outside = Path(directory) / "outside.mlt"
             allowed.mkdir()
-            with patch.dict(
-                os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(allowed)}, clear=False
+            with (
+                patch.dict(
+                    os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(allowed)}, clear=False
+                ),
+                self.assertRaisesRegex(ToolError, "allowed roots"),
             ):
-                with self.assertRaisesRegex(ToolError, "allowed roots"):
-                    platform.expand_path(str(outside))
+                platform.expand_path(str(outside))
 
     def test_project_network_resources_are_blocked_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "remote.mlt"
             project_path.write_text(
-                "<mlt><producer><property name=\"resource\">"
+                '<mlt><producer><property name="resource">'
                 "https://example.invalid/video.mp4"
                 "</property></producer></mlt>",
                 encoding="utf-8",
@@ -109,12 +117,14 @@ class ProcessCancellationTests(unittest.TestCase):
         started = time.monotonic()
         timer.start()
         try:
-            with request_cancellation(cancellation):
-                with self.assertRaises(RequestCancelled):
-                    platform.run_capture(
-                        [os.sys.executable, "-c", "import time; time.sleep(20)"],
-                        timeout=30,
-                    )
+            with (
+                request_cancellation(cancellation),
+                self.assertRaises(RequestCancelled),
+            ):
+                platform.run_capture(
+                    [os.sys.executable, "-c", "import time; time.sleep(20)"],
+                    timeout=30,
+                )
         finally:
             timer.cancel()
         self.assertLess(time.monotonic() - started, 3)
