@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shotcut_mcp.errors import ConflictError
-from shotcut_mcp.project import create_project, edit_project
+from shotcut_mcp.errors import ConflictError, ToolError
+from shotcut_mcp.project import create_project, edit_project, list_backups, restore_backup
 
 
 class ProjectTransactionTests(unittest.TestCase):
@@ -41,6 +41,43 @@ class ProjectTransactionTests(unittest.TestCase):
                     )
 
             self.assertEqual(project_path.read_bytes(), external_contents)
+
+    def test_backups_are_isolated_between_similarly_named_projects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first_path = Path(directory) / "movie.mlt"
+            second_path = Path(directory) / "movie.cut.mlt"
+
+            with patch("shotcut_mcp.project.validate_project_file", return_value={"valid": True}):
+                first = create_project({"project_path": str(first_path)})
+                second = create_project({"project_path": str(second_path)})
+                first_edit = edit_project(
+                    {
+                        "project_path": str(first_path),
+                        "operations": [{"op": "add_track", "kind": "video"}],
+                        "expected_revision": first["revision"],
+                    }
+                )
+                edit_project(
+                    {
+                        "project_path": str(second_path),
+                        "operations": [{"op": "add_track", "kind": "video"}],
+                        "expected_revision": second["revision"],
+                    }
+                )
+
+                first_backups = list_backups(first_path)
+                second_backups = list_backups(second_path)
+                self.assertEqual(first_backups["backup_count"], 1)
+                self.assertEqual(second_backups["backup_count"], 1)
+
+                with self.assertRaises(ToolError):
+                    restore_backup(
+                        {
+                            "project_path": str(first_path),
+                            "backup_path": second_backups["backups"][0]["path"],
+                            "expected_revision": first_edit["revision"],
+                        }
+                    )
 
 
 if __name__ == "__main__":

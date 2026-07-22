@@ -8,17 +8,20 @@ import json
 import math
 import os
 import re
-import time
 import uuid
 import xml.etree.ElementTree as ET
-from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Mapping
 
 from .errors import ConflictError, ToolError
 from .platform import media_duration, probe_media_raw, validate_project_file
+from .storage import (
+    is_project_backup,
+    list_project_backups,
+    project_lock,
+    write_project_backup,
+)
 
 
 SEQUENCE_TAGS = {"entry", "blank"}
@@ -1832,46 +1835,6 @@ class ProjectDocument:
         return ET.tostring(self.root, encoding="utf-8", xml_declaration=True)
 
 
-@contextmanager
-def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
-    lock_path = path.with_suffix(path.suffix + ".shotcut-mcp.lock")
-    payload = json.dumps({"pid": os.getpid(), "created_at": time.time()})
-    for attempt in range(2):
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-            break
-        except FileExistsError:
-            if attempt == 0 and time.time() - lock_path.stat().st_mtime > stale_seconds:
-                lock_path.unlink(missing_ok=True)
-                continue
-            raise ConflictError(
-                f"Another MCP process is editing the project: {lock_path}"
-            )
-    try:
-        yield
-    finally:
-        lock_path.unlink(missing_ok=True)
-
-
-def _backup(project_path: Path, source: bytes, keep: int = 20) -> Path:
-    backup_dir = project_path.parent / ".shotcut-mcp" / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    backup_path = (
-        backup_dir
-        / f"{project_path.stem}.{stamp}.{_sha256(source)[:12]}{project_path.suffix}"
-    )
-    backup_path.write_bytes(source)
-    candidates = sorted(
-        backup_dir.glob(f"{project_path.stem}.*{project_path.suffix}"), reverse=True
-    )
-    for old in candidates[keep:]:
-        old.unlink(missing_ok=True)
-    return backup_path
-
-
 def _write_validated(
     document: ProjectDocument,
     *,
@@ -1923,7 +1886,7 @@ def _write_validated(
                     f"Expected {current_revision}, current {latest_revision}."
                 )
             backup_path = (
-                _backup(path, current)
+                write_project_backup(path, current)
                 if current is not None and create_backup
                 else None
             )
@@ -2033,20 +1996,16 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_backups(project_path: Path) -> dict[str, Any]:
-    backup_dir = project_path.parent / ".shotcut-mcp" / "backups"
     backups = []
-    if backup_dir.is_dir():
-        for path in sorted(
-            backup_dir.glob(f"{project_path.stem}.*{project_path.suffix}"), reverse=True
-        ):
-            backups.append(
-                {
-                    "path": str(path),
-                    "size_bytes": path.stat().st_size,
-                    "modified_at": path.stat().st_mtime,
-                    "revision": _sha256(path.read_bytes()),
-                }
-            )
+    for path in list_project_backups(project_path):
+        backups.append(
+            {
+                "path": str(path),
+                "size_bytes": path.stat().st_size,
+                "modified_at": path.stat().st_mtime,
+                "revision": _sha256(path.read_bytes()),
+            }
+        )
     return {
         "project_path": str(project_path),
         "backup_count": len(backups),
@@ -2063,8 +2022,7 @@ def restore_backup(arguments: dict[str, Any]) -> dict[str, Any]:
     expected_revision = arguments.get("expected_revision")
     if expected_revision is not None and not isinstance(expected_revision, str):
         raise ToolError("expected_revision must be a SHA-256 string.")
-    allowed_dir = (project_path.parent / ".shotcut-mcp" / "backups").resolve()
-    if backup_path.parent.resolve() != allowed_dir or not backup_path.is_file():
+    if not is_project_backup(project_path, backup_path):
         raise ToolError("backup_path is not one of this project's backups.")
     document = ProjectDocument.load(backup_path)
     document.path = project_path
