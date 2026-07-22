@@ -302,7 +302,7 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "annotations": {
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "idempotentHint": False,
             "openWorldHint": False,
         },
@@ -417,7 +417,7 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "annotations": {
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "idempotentHint": True,
             "openWorldHint": False,
         },
@@ -457,7 +457,7 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "annotations": {
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "idempotentHint": False,
             "openWorldHint": False,
         },
