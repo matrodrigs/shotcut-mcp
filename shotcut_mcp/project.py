@@ -109,12 +109,15 @@ def _write_validated(
         if current is not None and not force:
             if not expected_revision:
                 raise ConflictError(
-                    "expected_revision is required to edit an existing project."
+                    "expected_revision is required to edit an existing project.",
+                    current_revision=current_revision,
                 )
             if expected_revision != current_revision:
                 raise ConflictError(
                     f"The project changed. Expected {expected_revision}, current "
-                    f"{current_revision}."
+                    f"{current_revision}.",
+                    expected_revision=expected_revision,
+                    current_revision=current_revision,
                 )
         with temporary.open("wb") as handle:
             handle.write(data)
@@ -138,7 +141,9 @@ def _write_validated(
             if latest_revision != current_revision:
                 raise ConflictError(
                     "The project changed while the candidate edit was being validated. "
-                    f"Expected {current_revision}, current {latest_revision}."
+                    f"Expected {current_revision}, current {latest_revision}.",
+                    expected_revision=current_revision,
+                    current_revision=latest_revision,
                 )
             backup_path = (
                 write_project_backup(path, current)
@@ -243,12 +248,15 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
     if not force:
         if not expected_revision:
             raise ConflictError(
-                "expected_revision is required to edit an existing project."
+                "expected_revision is required to edit an existing project.",
+                current_revision=original_revision,
             )
         if expected_revision != original_revision:
             raise ConflictError(
                 f"The project changed. Expected {expected_revision}, current "
-                f"{original_revision}."
+                f"{original_revision}.",
+                expected_revision=expected_revision,
+                current_revision=original_revision,
             )
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
@@ -296,7 +304,9 @@ def plan_project_edit(arguments: dict[str, Any]) -> dict[str, Any]:
     latest_revision = project_revision(latest) if latest is not None else None
     if latest_revision != candidate.original_revision:
         raise ConflictError(
-            "The project changed while the planned edit was being validated."
+            "The project changed while the planned edit was being validated.",
+            expected_revision=candidate.original_revision,
+            current_revision=latest_revision,
         )
 
     maximum_lines = _int(arguments.get("max_diff_lines", 2000), "max_diff_lines", 0)
@@ -494,9 +504,12 @@ def render_project_contact_sheet(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("cell_width must be an integer.")
     if not isinstance(overwrite, bool):
         raise ToolError("overwrite must be a boolean.")
+    raw_output = arguments.get("output_path")
+    if raw_output is not None and not isinstance(raw_output, str):
+        raise ToolError("output_path must be a string when provided.")
     return _render_contact_sheet(
         project_path,
-        expand_path(arguments.get("output_path", "")),
+        expand_path(raw_output) if isinstance(raw_output, str) else None,
         frames,
         columns=columns,
         cell_width=cell_width,

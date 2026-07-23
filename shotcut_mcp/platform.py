@@ -35,7 +35,7 @@ from .processes import (
     sys_platform,
     terminate_process,
 )
-from .storage import OutputTransaction
+from .storage import OutputTransaction, managed_preview_path
 
 _SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
 _SERVICE_LOCK = threading.Lock()
@@ -370,13 +370,18 @@ def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
 
 
 def render_preview(
-    project_path: Path, output_path: Path, frame: int, overwrite: bool
+    project_path: Path, output_path: Path | None, frame: int, overwrite: bool
 ) -> dict[str, Any]:
     if not project_path.is_file():
         raise ToolError(f"Project not found: {project_path}")
     enforce_project_resource_policy(project_path)
     if frame < 0:
         raise ToolError("frame must be zero or positive.")
+    managed_output = output_path is None
+    if managed_output:
+        output_path = managed_preview_path(project_path, "preview.png")
+        overwrite = True
+    assert output_path is not None
     output = OutputTransaction.prepare(
         output_path, overwrite=overwrite, protected_paths=(project_path,)
     )
@@ -415,6 +420,7 @@ def render_preview(
         "path": str(output_path),
         "frame": frame,
         "size_bytes": output_path.stat().st_size,
+        "managed_output": managed_output,
     }
 
 
@@ -460,7 +466,7 @@ def _preview_batch_item(
 
 def render_contact_sheet(
     project_path: Path,
-    output_path: Path,
+    output_path: Path | None,
     frames: list[int],
     *,
     columns: int,
@@ -477,6 +483,11 @@ def render_contact_sheet(
         raise ToolError("columns must be between 1 and 8.")
     if not 64 <= cell_width <= 1920:
         raise ToolError("cell_width must be between 64 and 1920.")
+    managed_output = output_path is None
+    if managed_output:
+        output_path = managed_preview_path(project_path, "contact-sheet.png")
+        overwrite = True
+    assert output_path is not None
     if output_path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
         raise ToolError("A contact sheet output must be PNG or JPEG.")
     enforce_project_resource_policy(project_path)
@@ -514,6 +525,7 @@ def render_contact_sheet(
         "size_bytes": output_path.stat().st_size,
         "columns": columns,
         "rows": rows,
+        "managed_output": managed_output,
         "cells": [
             {"cell_index": index, "frame": frame} for index, frame in enumerate(frames)
         ],

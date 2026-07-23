@@ -3,14 +3,22 @@ from __future__ import annotations
 import io
 import json
 import os
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from shotcut_mcp.errors import RequestCancelled
+from shotcut_mcp.errors import ConflictError, RequestCancelled
 from shotcut_mcp.protocol import cancellation_requested
-from shotcut_mcp.server import ProtocolSession, handle_request, serve
+from shotcut_mcp.server import (
+    HANDLERS,
+    SERVER_INSTRUCTIONS,
+    ProtocolSession,
+    handle_request,
+    serve,
+)
 
 
 def request(
@@ -157,6 +165,23 @@ class ProtocolValidationTests(unittest.TestCase):
 
 
 class ProtocolNegotiationTests(unittest.TestCase):
+    def test_initialize_instructions_route_common_safe_workflows(self) -> None:
+        response = handle_request(
+            request("initialize", {"protocolVersion": "2025-11-25"})
+        )
+        instructions = response["result"]["instructions"]
+        first_window = instructions[:512]
+        self.assertEqual(instructions, SERVER_INSTRUCTIONS)
+        for phrase in (
+            "inspect_project",
+            "render_contact_sheet",
+            "expected_revision",
+            "shotcut_capabilities",
+            "force",
+            "overwrite",
+        ):
+            self.assertIn(phrase, first_window)
+
     def test_2025_03_batch_requests_are_supported_only_after_negotiation(self) -> None:
         messages = (
             json.dumps(request("initialize", {"protocolVersion": "2025-03-26"}))
@@ -201,6 +226,7 @@ class ProtocolNegotiationTests(unittest.TestCase):
         tool = listed["result"]["tools"][0]
         self.assertNotIn("title", tool)
         self.assertNotIn("annotations", tool)
+        self.assertNotIn("outputSchema", tool)
 
         called = handle_request(
             request(
@@ -220,6 +246,119 @@ class ProtocolNegotiationTests(unittest.TestCase):
         tool = listed["result"]["tools"][0]
         self.assertNotIn("title", tool)
         self.assertIn("title", tool["annotations"])
+        self.assertNotIn("outputSchema", tool)
+
+    def test_current_tools_publish_described_inputs_outputs_and_local_hints(
+        self,
+    ) -> None:
+        listed = handle_request(request("tools/list"))
+        tools = listed["result"]["tools"]
+        for tool in tools:
+            self.assertIn("outputSchema", tool)
+            self.assertFalse(tool["annotations"]["openWorldHint"])
+            properties = tool["inputSchema"].get("properties", {})
+            for name, schema in properties.items():
+                self.assertIn("description", schema, f"{tool['name']}.{name}")
+        by_name = {tool["name"]: tool for tool in tools}
+        track_kind = by_name["create_project"]["inputSchema"]["properties"]["tracks"][
+            "items"
+        ]["properties"]["kind"]
+        self.assertEqual(track_kind["description"], "Track kind.")
+
+    def test_capabilities_can_describe_one_operation_in_full(self) -> None:
+        response = handle_request(
+            request(
+                "tools/call",
+                {
+                    "name": "shotcut_capabilities",
+                    "arguments": {"operation": "trim_item"},
+                },
+            )
+        )
+        operation = response["result"]["structuredContent"]["operations"]["trim_item"]
+        self.assertEqual(operation["schema"]["properties"]["delta"]["type"], "integer")
+        self.assertEqual(operation["example"]["op"], "trim_item")
+
+    def test_conflicts_return_structured_recovery_context(self) -> None:
+        def conflict(_arguments: dict[str, object]) -> dict[str, object]:
+            raise ConflictError(
+                "stale",
+                expected_revision="a" * 64,
+                current_revision="b" * 64,
+            )
+
+        with patch.dict(HANDLERS, {"inspect_project": conflict}):
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "inspect_project", "arguments": {"path": "project.mlt"}},
+                )
+            )
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(
+            result["structuredContent"]["recommended_action"], "inspect_project"
+        )
+        self.assertEqual(result["structuredContent"]["current_revision"], "b" * 64)
+
+    def test_small_preview_is_returned_as_image_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "preview.png"
+            preview.write_bytes(b"small-png")
+
+            def rendered(_arguments: dict[str, object]) -> dict[str, object]:
+                return {
+                    "created": True,
+                    "path": str(preview),
+                    "frame": 0,
+                    "size_bytes": preview.stat().st_size,
+                    "managed_output": True,
+                }
+
+            with patch.dict(HANDLERS, {"render_preview": rendered}):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "render_preview",
+                            "arguments": {"project_path": "project.mlt"},
+                        },
+                    )
+                )
+        content = response["result"]["content"]
+        self.assertEqual([item["type"] for item in content], ["text", "image"])
+        self.assertEqual(content[1]["mimeType"], "image/png")
+
+    def test_user_selected_preview_path_is_not_read_back_into_mcp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "preview.png"
+            preview.write_bytes(b"user-selected-output")
+
+            def rendered(_arguments: dict[str, object]) -> dict[str, object]:
+                return {
+                    "created": True,
+                    "path": str(preview),
+                    "frame": 0,
+                    "size_bytes": preview.stat().st_size,
+                    "managed_output": False,
+                }
+
+            with patch.dict(HANDLERS, {"render_preview": rendered}):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "render_preview",
+                            "arguments": {
+                                "project_path": "project.mlt",
+                                "output_path": str(preview),
+                            },
+                        },
+                    )
+                )
+        self.assertEqual(
+            [item["type"] for item in response["result"]["content"]], ["text"]
+        )
 
     def test_file_writing_tools_are_conservatively_destructive(self) -> None:
         listed = handle_request(request("tools/list"))

@@ -21,6 +21,11 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _project_identity(project_path: Path) -> str:
+    canonical = os.path.normcase(str(project_path.resolve(strict=False)))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def _private_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     if os.name != "nt":
@@ -108,7 +113,8 @@ class OutputTransaction:
             raise ToolError("The renderer did not create its temporary output.")
         if _file_signature(self.target) != self.initial_signature:
             raise ConflictError(
-                f"The output changed while rendering and was not replaced: {self.target}"
+                f"The output changed while rendering and was not replaced: {self.target}",
+                recommended_action="choose_another_output_path_or_retry",
             )
         with self.temporary.open("r+b") as handle:
             os.fsync(handle.fileno())
@@ -197,14 +203,33 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
 
 
 def backup_directory(project_path: Path) -> Path:
-    canonical = os.path.normcase(str(project_path.resolve(strict=False)))
-    identity = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     return (
         project_path.parent
         / ".shotcut-mcp"
         / "backups"
-        / f"{project_path.name}.{identity}"
+        / f"{project_path.name}.{_project_identity(project_path)}"
     )
+
+
+def managed_preview_path(project_path: Path, filename: str) -> Path:
+    """Return a bounded server-owned preview target for a project.
+
+    The caller supplies one of a small fixed set of filenames. Reusing those
+    filenames keeps automatic review artifacts bounded while the canonical
+    project identity prevents projects with the same basename from sharing
+    output.
+    """
+
+    if filename not in {"preview.png", "contact-sheet.png"}:
+        raise ValueError(f"Unsupported managed preview filename: {filename}")
+    directory = (
+        project_path.parent
+        / ".shotcut-mcp"
+        / "previews"
+        / f"{project_path.name}.{_project_identity(project_path)}"
+    )
+    _private_directory(directory)
+    return directory / filename
 
 
 def _legacy_backup_pattern(project_path: Path) -> re.Pattern[str]:

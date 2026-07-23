@@ -25,11 +25,17 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Keep project inspection and render-job management from the original MCP.
 - Return stable, structured JSON from every tool and use English for public tool descriptions,
   server instructions and error messages.
+- Route common user intents through concise server instructions, including visual review,
+  optimistic-conflict recovery, missing media, color diagnosis, export monitoring and backups.
 - Validate tool arguments against the published input schemas and shape responses for the
   negotiated MCP protocol revision.
+- Publish output schemas for structured-content protocol revisions and omit them for legacy
+  clients that predate structured tool results.
 - Propagate MCP cancellation notifications to subprocess-backed operations.
 - Provide a read-only plan/diff operation before transactional edits.
 - Render bounded preview batches and atomically promoted contact sheets at exact frames.
+- Allow single previews and contact sheets to use bounded server-owned output when the caller does
+  not need a persistent destination, and embed small review images within the MCP message budget.
 - Normalize source/project color metadata and own SDR/HLG/PQ project annotations as one semantic edit.
 - Smoke-test hardware encoders instead of trusting FFmpeg's advertised encoder list.
 - Persist bounded progress samples, elapsed time, ETA inputs, terminal metrics, and paginated history.

@@ -292,6 +292,20 @@ class BacklogProjectFeatureTests(unittest.TestCase):
                 [round(index * (duration - 1) / 3) for index in range(4)],
             )
 
+    def test_contact_sheet_can_use_managed_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            root = Path(directory)
+            project_path = root / "managed-contact-sheet.mlt"
+            create_project({"project_path": str(project_path)})
+            with patch(
+                "shotcut_mcp.project._render_contact_sheet",
+                return_value={"created": True, "path": str(root / "managed.png")},
+            ) as render:
+                render_contact_sheet_tool(
+                    {"project_path": str(project_path), "sample_count": 1}
+                )
+            self.assertIsNone(render.call_args.args[1])
+
 
 class BacklogPlatformFeatureTests(unittest.TestCase):
     def test_batch_preview_reports_per_item_failures(self) -> None:

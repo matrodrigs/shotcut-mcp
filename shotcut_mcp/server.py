@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -9,10 +10,11 @@ import sys
 import threading
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, BinaryIO
 
 from . import __version__
-from .errors import RequestCancelled, ToolError
+from .errors import ConflictError, RequestCancelled, ToolError
 from .protocol import request_cancellation, schema_errors
 from .tools import HANDLERS, TOOLS
 
@@ -25,6 +27,21 @@ SUPPORTED_PROTOCOL_VERSIONS = {
     "2025-11-25",
 }
 STRUCTURED_CONTENT_PROTOCOLS = {"2025-06-18", "2025-11-25"}
+SERVER_INSTRUCTIONS = (
+    "Use the user-supplied project path; ask if missing or ambiguous. To show or "
+    "review an edit, call inspect_project, then render_contact_sheet with sampled "
+    "frames and surface the image when supported; use render_preview for a specific "
+    "moment. Before planning, editing, or restoring, inspect the project and pass its "
+    "revision as expected_revision. Consult shotcut_capabilities for unfamiliar "
+    "operations, batch related edits, and never use force or overwrite without "
+    "explicit authorization. On a revision conflict, re-inspect and reconsider the "
+    "operations; never retry with force automatically. Use plan_project_edit for dry "
+    "runs, uncertain edits, or user review before committing. For missing media, use "
+    "diagnose_missing_media and let the user choose before relinking. For washed-out "
+    "color or HDR questions, use diagnose_color_workflow. For exports, use start_render "
+    "and its job_id; use list_render_jobs when the job_id is unknown. List backups "
+    "before restoring and confirm the selected revision."
+)
 
 
 @dataclass
@@ -46,6 +63,8 @@ def _error(
 def _tools_for_version(protocol_version: str) -> list[dict[str, Any]]:
     tools = copy.deepcopy(TOOLS)
     for tool in tools:
+        if protocol_version not in STRUCTURED_CONTENT_PROTOCOLS:
+            tool.pop("outputSchema", None)
         if protocol_version == "2024-11-05":
             tool.pop("title", None)
             tool.pop("annotations", None)
@@ -58,17 +77,85 @@ def _tools_for_version(protocol_version: str) -> list[dict[str, Any]]:
 
 
 def _tool_result(
-    payload: dict[str, Any], protocol_version: str, is_error: bool = False
+    payload: dict[str, Any],
+    protocol_version: str,
+    is_error: bool = False,
+    tool_name: str | None = None,
 ) -> dict[str, Any]:
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
+    ]
+    image = _inline_image_content(tool_name, payload) if not is_error else None
+    if image is not None:
+        content.append(image)
     result = {
-        "content": [
-            {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
-        ],
+        "content": content,
         "isError": is_error,
     }
     if protocol_version in STRUCTURED_CONTENT_PROTOCOLS:
         result["structuredContent"] = payload
     return result
+
+
+def _inline_image_limit() -> int:
+    try:
+        configured = int(
+            os.environ.get("SHOTCUT_MCP_MAX_INLINE_IMAGE_BYTES", "1048576")
+        )
+    except ValueError:
+        configured = 1_048_576
+    message_budget = max(0, (_message_size_limit() - 65_536) * 3 // 4)
+    return max(0, min(4_194_304, configured, message_budget))
+
+
+def _inline_image_content(
+    tool_name: str | None, payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    if tool_name not in {"render_preview", "render_contact_sheet"}:
+        return None
+    value = payload.get("path")
+    if (
+        not payload.get("created")
+        or payload.get("managed_output") is not True
+        or not isinstance(value, str)
+    ):
+        return None
+    path = Path(value)
+    mime_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(path.suffix.lower())
+    limit = _inline_image_limit()
+    try:
+        size = path.stat().st_size
+        if mime_type is None or limit <= 0 or size <= 0 or size > limit:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if len(data) > limit:
+        return None
+    return {
+        "type": "image",
+        "data": base64.b64encode(data).decode("ascii"),
+        "mimeType": mime_type,
+        "annotations": {"audience": ["user"], "priority": 1.0},
+    }
+
+
+def _tool_error_payload(exc: ToolError) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+    }
+    if isinstance(exc, ConflictError):
+        payload["recommended_action"] = exc.recommended_action
+        if exc.expected_revision is not None:
+            payload["expected_revision"] = exc.expected_revision
+        if exc.current_revision is not None:
+            payload["current_revision"] = exc.current_revision
+    return payload
 
 
 def handle_request(
@@ -117,11 +204,7 @@ def handle_request(
                 "protocolVersion": protocol,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": SERVER_NAME, "version": __version__},
-                "instructions": (
-                    "Use inspect_project before editing and pass its revision as expected_revision. "
-                    "Consult shotcut_capabilities for the operation catalog. Group related changes "
-                    "in one edit_project call and do not use force without explicit authorization."
-                ),
+                "instructions": SERVER_INSTRUCTIONS,
             },
         }
     if method in {"ping", "logging/setLevel"}:
@@ -156,14 +239,17 @@ def handle_request(
                 {"validationErrors": validation_errors},
             )
         try:
-            result = _tool_result(handler(arguments), active_session.protocol_version)
+            result = _tool_result(
+                handler(arguments), active_session.protocol_version, tool_name=name
+            )
         except RequestCancelled as exc:
             return _error(request_id, -32800, str(exc) or "Request cancelled.")
         except ToolError as exc:
             result = _tool_result(
-                {"error": str(exc), "error_type": type(exc).__name__},
+                _tool_error_payload(exc),
                 active_session.protocol_version,
                 True,
+                name,
             )
         except Exception as exc:  # Keep the long-running stdio server alive.
             print(f"Unexpected error in {name}: {exc!r}", file=sys.stderr, flush=True)

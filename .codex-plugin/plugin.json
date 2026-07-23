@@ -28,6 +28,7 @@
     ],
     "defaultPrompt": [
       "Check whether Shotcut is ready to use.",
+      "Show me how the current edit looks and summarize the timeline.",
       "Build a complete Shotcut project from these media files.",
       "Edit this timeline and generate a preview for review."
     ]

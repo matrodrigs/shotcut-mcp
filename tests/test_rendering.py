@@ -74,6 +74,37 @@ class PreviewSafetyTests(unittest.TestCase):
             self.assertEqual(output_path.read_bytes(), b"existing")
             self.assertEqual(list(Path(directory).glob("*.tmp.png")), [])
 
+    def test_managed_preview_uses_one_bounded_server_owned_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "project.mlt"
+            project_path.write_text("<mlt/>\n", encoding="utf-8")
+
+            def render(command: list[str], **_kwargs: object) -> SimpleNamespace:
+                target = next(
+                    value.removeprefix("avformat:")
+                    for value in command
+                    if value.startswith("avformat:")
+                )
+                Path(target).write_bytes(b"PNG")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            first, second, third, fourth = self._platform_patches(render)
+            with first, second, third, fourth:
+                first_result = render_preview(
+                    project_path, None, frame=0, overwrite=False
+                )
+                second_result = render_preview(
+                    project_path, None, frame=30, overwrite=False
+                )
+
+            self.assertTrue(first_result["managed_output"])
+            self.assertEqual(first_result["path"], second_result["path"])
+            self.assertEqual(Path(first_result["path"]).read_bytes(), b"PNG")
+            previews = list(
+                (Path(directory) / ".shotcut-mcp" / "previews").rglob("*.png")
+            )
+            self.assertEqual(previews, [Path(first_result["path"])])
+
 
 class RenderPropertySafetyTests(unittest.TestCase):
     def test_sidecar_consumer_properties_are_rejected_by_default(self) -> None:

@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 from scripts.build_release import ROOT, build_release, package_members
+from shotcut_mcp.tools import TOOLS
 
 
 class ReleaseBundleTests(unittest.TestCase):
@@ -77,6 +78,12 @@ class ReleaseBundleTests(unittest.TestCase):
             self.assertEqual(
                 len(responses[1]["result"]["tools"]), len(manifest["tools"])
             )
+
+    def test_manifest_tool_descriptions_match_runtime_catalog(self) -> None:
+        manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+        advertised = {tool["name"]: tool["description"] for tool in manifest["tools"]}
+        runtime = {tool["name"]: tool["description"] for tool in TOOLS}
+        self.assertEqual(advertised, runtime)
 
     def test_release_bundle_rejects_a_version_mismatch(self) -> None:
         with (

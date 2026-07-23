@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Agent-facing MCP workflow instructions, described input parameters, operation-specific schemas
+  and examples, structured output contracts, recoverable conflict context, and bounded inline
+  preview images.
+
+### Changed
+
+- Single-frame previews and contact sheets can use bounded server-managed output when callers omit
+  a destination path, and local-only tools now advertise closed-world behavior.
+
 ## 1.2.0 (2026-07-22)
 
 ### Added

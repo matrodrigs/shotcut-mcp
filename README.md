@@ -141,7 +141,9 @@ then render an H.264 web export. Monitor the job until it completes.
    without changing the project.
 5. Submit related changes together through `edit_project`, passing the revision as
    `expected_revision`.
-6. Generate one or more previews and review the structured project snapshot.
+6. For a broad visual review, call `render_contact_sheet`; use `render_preview` for one exact
+   moment or `render_preview_batch` for separate exact-frame files. Single previews and contact
+   sheets can omit `output_path` to use bounded server-managed output.
 7. Start a render. The supervisor promotes it without polling; use `render_status` for ETA/progress,
    `list_render_jobs` for history, or `cancel_render` to stop it after an MCP restart.
 
@@ -197,9 +199,9 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | `list_mlt_services` | List locally available MLT filters, transitions, producers, consumers, or links |
 | `describe_mlt_service` | Return metadata for one installed MLT service |
 | `validate_project` | Parse the project and validate it with Melt |
-| `render_preview` | Render a selected frame to PNG |
+| `render_preview` | Render a selected frame to PNG, with optional managed output |
 | `render_preview_batch` | Render up to 64 exact frames with bounded per-output outcomes |
-| `render_contact_sheet` | Render exact or evenly sampled frames into one atomic PNG/JPEG |
+| `render_contact_sheet` | Render exact or evenly sampled frames into one atomic review image |
 | `detect_hardware_encoders` | Distinguish built, advertised, and smoke-tested FFmpeg hardware encoders |
 | `open_in_shotcut` | Open a project or media path in the Shotcut GUI |
 | `start_render` | Start a monitored background render |
@@ -293,6 +295,7 @@ Common Shotcut installations are detected automatically. Override discovery when
 | `SHOTCUT_MCP_MAX_WORKERS` | Concurrent MCP tool requests, clamped to 1–8 (default 4) |
 | `SHOTCUT_MCP_MAX_PENDING` | Maximum in-flight tool requests or legacy batch items, clamped to 1–256 (default 32) |
 | `SHOTCUT_MCP_MAX_MESSAGE_BYTES` | Maximum newline-delimited MCP message size, clamped to 1 KiB–16 MiB (default 4 MiB) |
+| `SHOTCUT_MCP_MAX_INLINE_IMAGE_BYTES` | Maximum preview image embedded in an MCP result, clamped to the message budget (default 1 MiB; `0` disables) |
 
 Network resources and unsafe consumer properties are denied by default. These variables are
 administrator policies: tools cannot override them per request. `shotcut_status` and
