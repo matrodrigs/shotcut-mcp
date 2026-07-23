@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -32,9 +33,10 @@ TERMINAL_STATUSES = {
     "promotion_failed",
 }
 ALL_STATUSES = TERMINAL_STATUSES | {"queued", "running"}
-_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33}
-_REPLACE_RETRY_SECONDS = 1.0
-_REPLACE_RETRY_INTERVAL = 0.01
+_WINDOWS_TRANSIENT_FILE_ERRORS = {5, 32, 33}
+_WINDOWS_FILE_RETRY_SECONDS = 1.0
+_WINDOWS_FILE_RETRY_INTERVAL = 0.01
+_IS_WINDOWS = os.name == "nt"
 
 
 def ensure_job_directory() -> Path:
@@ -72,10 +74,16 @@ def release_gate(job_id: str) -> None:
     os.close(descriptor)
 
 
+def _is_transient_windows_file_error(exc: OSError) -> bool:
+    return getattr(exc, "winerror", None) in _WINDOWS_TRANSIENT_FILE_ERRORS or (
+        _IS_WINDOWS and isinstance(exc, PermissionError) and exc.errno == errno.EACCES
+    )
+
+
 def _replace_job_metadata(temporary: Path, path: Path) -> None:
     """Promote job state atomically despite short-lived Windows reader locks."""
 
-    deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
+    deadline = time.monotonic() + _WINDOWS_FILE_RETRY_SECONDS
     while True:
         try:
             os.replace(temporary, path)
@@ -85,11 +93,27 @@ def _replace_job_metadata(temporary: Path, path: Path) -> None:
             # by os.replace. Keep retrying the same complete temporary file; never fall
             # back to an in-place write that could expose partial JSON to another process.
             if (
-                getattr(exc, "winerror", None) not in _WINDOWS_TRANSIENT_REPLACE_ERRORS
+                not _is_transient_windows_file_error(exc)
                 or time.monotonic() >= deadline
             ):
                 raise
-            time.sleep(_REPLACE_RETRY_INTERVAL)
+            time.sleep(_WINDOWS_FILE_RETRY_INTERVAL)
+
+
+def _read_job_metadata(path: Path) -> str:
+    """Read complete job state despite short-lived Windows writer locks."""
+
+    deadline = time.monotonic() + _WINDOWS_FILE_RETRY_SECONDS
+    while True:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:  # noqa: PERF203 - retry is the purpose of this loop
+            if (
+                not _is_transient_windows_file_error(exc)
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(_WINDOWS_FILE_RETRY_INTERVAL)
 
 
 def write_job(metadata: dict[str, Any]) -> None:
@@ -110,10 +134,10 @@ def write_job(metadata: dict[str, Any]) -> None:
 
 def read_job(job_id: str) -> dict[str, Any]:
     path = metadata_path(job_id)
-    if not path.is_file():
-        raise ToolError(f"Render job not found: {job_id}")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_job_metadata(path))
+    except FileNotFoundError as exc:
+        raise ToolError(f"Render job not found: {job_id}") from exc
     except (OSError, json.JSONDecodeError) as exc:
         raise ToolError(f"Invalid render metadata: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("job_id") != job_id:

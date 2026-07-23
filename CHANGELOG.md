@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Retry transient Windows sharing violations while reading durable render-job metadata so
+  `render_status` and `cancel_render` remain reliable during atomic worker updates.
+
 ## 1.4.0 (2026-07-23)
 
 ### Changed

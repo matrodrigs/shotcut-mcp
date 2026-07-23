@@ -133,6 +133,50 @@ class RenderPropertySafetyTests(unittest.TestCase):
 
 
 class RenderJobPersistenceTests(unittest.TestCase):
+    def test_cancel_render_retries_transient_metadata_read_contention(self) -> None:
+        class SharingViolation(PermissionError):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            job_directory = Path(directory) / "jobs"
+            job_id = "c" * 32
+            metadata = {
+                "job_id": job_id,
+                "status": "cancelled",
+                "output_path": str(Path(directory) / "output.mp4"),
+                "log_path": str(Path(directory) / "render.log"),
+                "started_at": time.time(),
+                "finished_at": time.time(),
+            }
+
+            with (
+                patch.object(render_jobs_module, "JOB_DIR", job_directory),
+                patch.object(render_jobs_module, "_IS_WINDOWS", True),
+            ):
+                render_jobs_module.write_job(metadata)
+                path = render_jobs_module.metadata_path(job_id)
+                path_type = type(path)
+                real_read_text = path_type.read_text
+                attempts = 0
+
+                def read_after_contention(
+                    candidate: Path, *args: object, **kwargs: object
+                ) -> str:
+                    nonlocal attempts
+                    if candidate == path:
+                        attempts += 1
+                        if attempts < 3:
+                            raise SharingViolation(
+                                13, "simulated metadata read contention"
+                            )
+                    return real_read_text(candidate, *args, **kwargs)
+
+                with patch.object(path_type, "read_text", new=read_after_contention):
+                    result = cancel_render(job_id)
+
+            self.assertEqual(result["status"], "cancelled")
+            self.assertGreaterEqual(attempts, 3)
+
     def test_job_state_retries_a_windows_sharing_violation(self) -> None:
         class SharingViolation(PermissionError):
             winerror = 32
