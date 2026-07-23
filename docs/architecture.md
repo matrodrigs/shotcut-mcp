@@ -30,7 +30,7 @@ system, process, path, and storage concerns stay behind their respective modules
 shotcut-mcp/
 ├── .codex-plugin/plugin.json   # Codex plugin manifest
 ├── .github/workflows/          # Cross-platform CI and verified registry publishing
-├── scripts/                    # Stdio entry point and release metadata checks
+├── scripts/                    # Stdio entry point and release metadata synchronization/checks
 ├── shotcut_mcp/
 │   ├── media.py                # Cached FFprobe inspection and quality analysis
 │   ├── missing_media.py        # Bounded missing-resource search and scoring

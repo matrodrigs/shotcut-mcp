@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -11,8 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.build_release import ROOT, build_release, package_members
+from scripts.check_release import (
+    runtime_tool_entries,
+    sync_tool_contracts,
+    validate_tool_contracts,
+)
 from scripts.require_green_ci import require_green_ci
-from shotcut_mcp.tools import TOOLS
 
 
 class ReleaseBundleTests(unittest.TestCase):
@@ -82,20 +85,63 @@ class ReleaseBundleTests(unittest.TestCase):
                 len(responses[1]["result"]["tools"]), len(manifest["tools"])
             )
 
-    def test_manifest_tool_descriptions_match_runtime_catalog(self) -> None:
-        manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        advertised = {tool["name"]: tool["description"] for tool in manifest["tools"]}
-        runtime = {tool["name"]: tool["description"] for tool in TOOLS}
-        self.assertEqual(advertised, runtime)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        tools_section = readme.split("## MCP tools", 1)[1].split("\n## ", 1)[0]
-        documented = set(
-            re.findall(r"^\| `([a-z][a-z0-9_]*)` \|", tools_section, re.MULTILINE)
-        )
-        self.assertEqual(documented, set(runtime))
-        site = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-        self.assertIn(f"<dt>{len(TOOLS)}</dt><dd>MCP tools</dd>", site)
-        self.assertIn(f"See all {len(TOOLS)} MCP tools", site)
+    def test_checked_in_tool_contracts_match_the_runtime_projection(self) -> None:
+        validate_tool_contracts(ROOT, runtime_tool_entries())
+        self.assertEqual(sync_tool_contracts(ROOT, runtime_tool_entries()), ())
+
+    def test_tool_contract_sync_updates_only_mechanical_projections(self) -> None:
+        entries = [
+            {"name": "first_tool", "description": "First runtime description."},
+            {"name": "second_tool", "description": "Second runtime description."},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "name": "fixture",
+                        "tools": list(reversed(entries)),
+                        "tools_generated": False,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            readme = (
+                "# Fixture\n\n"
+                "## MCP tools\n\n"
+                "| Tool | Purpose |\n"
+                "| --- | --- |\n"
+                "| `first_tool` | Concise human summary |\n"
+                "| `second_tool` | Another human summary |\n"
+            )
+            (root / "README.md").write_text(readme, encoding="utf-8")
+            (root / "docs" / "index.html").write_text(
+                "<dt>1</dt><dd>MCP tools</dd>\nSee all 1 MCP tools\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "order_changed=True"):
+                validate_tool_contracts(root, entries)
+
+            changed = sync_tool_contracts(root, entries)
+
+            self.assertEqual(
+                changed,
+                (root / "manifest.json", root / "docs" / "index.html"),
+            )
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["tools"], entries)
+            self.assertIs(manifest["tools_generated"], False)
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), readme)
+            self.assertIn(
+                "<dt>2</dt><dd>MCP tools</dd>",
+                (root / "docs" / "index.html").read_text(encoding="utf-8"),
+            )
+            validate_tool_contracts(root, entries)
+            self.assertEqual(sync_tool_contracts(root, entries), ())
 
     def test_plugin_base_version_matches_runtime_release(self) -> None:
         plugin = json.loads(

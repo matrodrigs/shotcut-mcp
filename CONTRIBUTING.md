@@ -13,6 +13,9 @@ boundaries and verified behavior.
 - Return recoverable user/input problems as tool errors without terminating the MCP server.
 - Tests must use public interfaces and include literal expected outcomes.
 - Add a failing regression test before each bug fix and keep real Shotcut integration opt-in.
+- After changing the runtime tool catalog, keep the README table's concise human summaries current,
+  then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical
+  `manifest.json` descriptions and website tool counts.
 - Run `ruff format --check .`, `ruff check .`, `mypy`, `python scripts/check_release.py`, and
   `python -B -m unittest discover -s tests -v` before publishing changes.
 - Keep runtime, `manifest.json`, and the base version before `+` in
