@@ -30,7 +30,7 @@
   "tools": [
     { "name": "shotcut_status", "description": "Use for a quick readiness check. Locates Shotcut, Melt, FFprobe, and FFmpeg and reports their versions; use shotcut_doctor for compatibility diagnosis." },
     { "name": "shotcut_doctor", "description": "Use after installation, upgrade, or a setup failure. Verifies validated Shotcut/MLT versions, repository startup, RNNoise, and path policy." },
-    { "name": "shotcut_capabilities", "description": "Use before an unfamiliar edit. Returns the operation catalog and transactional guarantees; pass operation for its complete schema and example." },
+    { "name": "shotcut_capabilities", "description": "Use before an unfamiliar edit. Omit operation for the catalog, presets, compatibility, and workflow; pass operation for only its complete schema, example, and transaction guarantees enforced by plan and edit." },
     { "name": "probe_media", "description": "Use to understand a source file before editing. Reads duration, codecs, resolution, frame rate, color, and audio with per-file caching." },
     { "name": "analyze_media_quality", "description": "Use before proposing cleanup or delivery edits. Runs installed FFmpeg analyzers for silence, black frames, freezes, interlacing, and loudness and returns bounded structured measurements without changing the media." },
     { "name": "inspect_project", "description": "Use first to understand a timeline or before planning, editing, or restoring. Returns structural state and the SHA-256 revision; use render_contact_sheet for visual review." },
@@ -38,7 +38,7 @@
     { "name": "diagnose_missing_media", "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates; never relinks automatically, so let the user choose first." },
     { "name": "plan_project_edit", "description": "Use for a dry run, uncertain edit, or user review before committing. Applies operations in memory, validates with MLT, and returns a snapshot and diff without changing the project." },
     { "name": "create_project", "description": "Use to create a new editable Shotcut 26.6 project. Builds MLT XML with a background, V1, optional add_track-shaped tracks, and add_clip-shaped clips." },
-    { "name": "edit_project", "description": "Use only after inspect_project. Applies up to 500 related operations in one validated atomic write; pass expected_revision and re-inspect on conflicts instead of using force." },
+    { "name": "edit_project", "description": "Use only after inspect_project. Applies up to 500 related operations in one validated atomic write, enforcing each focused operation schema; pass expected_revision and re-inspect on conflicts instead of using force." },
     { "name": "list_mlt_services", "description": "Use when an edit needs an unfamiliar native MLT effect or transition. Lists services of one kind installed with Shotcut." },
     { "name": "describe_mlt_service", "description": "Use after list_mlt_services to learn one installed service's accepted properties and local MLT metadata." },
     { "name": "validate_project", "description": "Use to check technical MLT validity, not visual quality. Parses the XML and processes the first frame with local Melt." },
@@ -53,7 +53,7 @@
     { "name": "list_render_jobs", "description": "Use for 'the latest render', render history, or when job_id is unknown. Returns bounded newest-first durable summaries." },
     { "name": "cancel_render", "description": "Use only when the user asks to stop an active render. Requests supervised cancellation, including after an MCP restart." },
     { "name": "list_project_backups", "description": "Use before undo or recovery. Lists only backups owned by this project, including paths, revisions, sizes, and timestamps." },
-    { "name": "restore_project_backup", "description": "Use after list_project_backups and confirmation of the selected revision. Validates and atomically restores it while backing up the current project." }
+    { "name": "restore_project_backup", "description": "Use after list_project_backups and confirmation of the selected backup. Validates and atomically restores it while backing up the current project; pass the current expected_revision unless force=true was explicitly authorized." }
   ],
   "tools_generated": false,
   "keywords": [

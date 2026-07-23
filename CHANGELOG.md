@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Focus operation-specific `shotcut_capabilities` responses on the requested schema, example, and
+  transaction guarantees; enforce those same schemas before planning or applying edits.
+- Publish required stable fields and typed nested collections for every tool output, including
+  identifiers, indexes, units, validation results, media streams, render jobs, and project state.
+
+### Fixed
+
+- Require either `expected_revision` or explicitly authorized `force: true` for edits and backup
+  restores, while documenting the distinct plan and chapter-export revision contracts.
+- Reject incomplete or conflicting render ranges and structurally invalid advanced consumer
+  properties at the MCP schema seam.
+- Align operation schemas with non-zero trim deltas, non-zero bounded clip speeds, marker-update
+  requirements, and Shotcut's exclusive marker end convention.
+- Correct `validate_project` output to expose `return_code` and nullable `diagnostic` fields instead
+  of the nonexistent `validator` field.
+
 ## 1.3.1 (2026-07-22)
 
 ### Added

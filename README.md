@@ -205,7 +205,7 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | --- | --- |
 | `shotcut_status` | Discover Shotcut, Melt, FFmpeg, and FFprobe and report versions |
 | `shotcut_doctor` | Verify Shotcut 26.6.25, MLT 7.40.x, repository startup, RNNoise, and path policy |
-| `shotcut_capabilities` | Return edit operations, render presets, compatibility, and workflow guidance |
+| `shotcut_capabilities` | Return the complete edit catalog and context, or one focused operation schema and example |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
 | `inspect_project` | Return revision, profile, tracks, items, filters, markers, subtitles, and resources |
@@ -244,6 +244,15 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | Subtitles | `set_subtitle_track`, `remove_subtitle_track` |
 
 `shotcut_capabilities` is the runtime source of truth for the accepted fields of each operation.
+Omit `operation` to receive the catalog, render presets, compatibility, and workflow guidance. Pass
+one operation name to receive only its complete schema, example, and the transaction guarantees.
+Both `plan_project_edit` and `edit_project` validate every operation against that same focused
+schema before loading or mutating the project, so unknown fields and missing required fields fail
+as invalid MCP parameters.
+
+For `add_marker` and `update_marker`, `end_frame` is exclusive. A value equal to `start_frame`
+creates a point marker; otherwise it must be greater than `start_frame`, and a range covers
+`start_frame` through `end_frame - 1`.
 
 ### Transaction example
 
@@ -276,6 +285,12 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 }
 ```
 
+The `edit_project` input contract requires either `expected_revision` or an explicitly authorized
+`force: true`. The normal workflow always uses the revision returned by `inspect_project`; do not
+retry a revision conflict with `force`. `restore_project_backup` uses the same revision guard.
+`plan_project_edit` always requires `expected_revision` and does not accept `force`;
+`export_marker_chapters` accepts the revision optionally and checks it when supplied.
+
 ## Rendering
 
 Built-in presets are provided for common delivery and intermediate formats:
@@ -292,15 +307,17 @@ Built-in presets are provided for common delivery and intermediate formats:
 - `audio-mp3`
 
 The HDR presets use verified 10-bit software-encoder combinations; they do not claim display-HDR
-preview or hardware HDR10 metadata support. Advanced callers can supply native `avformat` consumer properties from a safe single-file
-allowlist. Arbitrary properties, sidecar formats, and path-bearing options are rejected unless an
-administrator explicitly enables them. Codec and hardware availability still depend on the local
-Shotcut/FFmpeg build.
+preview or hardware HDR10 metadata support. Advanced callers can supply up to 50 native
+`avformat` consumer properties with valid MLT names and scalar values. Those properties come from
+a safe single-file allowlist by default. Arbitrary properties, sidecar formats, and path-bearing
+options are rejected unless an administrator explicitly enables them. Codec and hardware
+availability still depend on the local Shotcut/FFmpeg build.
 
-`start_render` accepts both `in_frame` and `out_frame` as inclusive bounds, or one `marker_id`
-returned by `inspect_project`. Shotcut stores a range marker's end as exclusive; the MCP converts it
-to MLT's inclusive `out` value and records the resolved frames in the durable job. Point markers do
-not define a render range. `export_marker_chapters` follows Shotcut's `<timecode> <text>` format,
+`start_render` accepts exactly one range mode: omit all range fields for the full project, supply
+both `in_frame` and `out_frame` as inclusive bounds, or supply one `marker_id` returned by
+`inspect_project`. Shotcut stores a range marker's end as exclusive; the MCP converts it to MLT's
+inclusive `out` value and records the resolved frames in the durable job. Point markers do not
+define a render range. `export_marker_chapters` follows Shotcut's `<timecode> <text>` format,
 includes point markers by default, and can opt into range markers or selected colors.
 
 ## Configuration

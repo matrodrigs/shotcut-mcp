@@ -119,19 +119,46 @@ def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[s
     if isinstance(value, dict):
         properties = schema.get("properties", {})
         required = schema.get("required", [])
+        minimum_properties = schema.get("minProperties")
+        maximum_properties = schema.get("maxProperties")
+        if isinstance(minimum_properties, int) and len(value) < minimum_properties:
+            errors.append(
+                f"{path} must contain at least {minimum_properties} properties."
+            )
+        if isinstance(maximum_properties, int) and len(value) > maximum_properties:
+            errors.append(
+                f"{path} must contain at most {maximum_properties} properties."
+            )
         if isinstance(required, list):
             errors.extend(
                 f"{path}.{name} is required."
                 for name in required
                 if isinstance(name, str) and name not in value
             )
+        property_names = schema.get("propertyNames")
         if isinstance(properties, dict):
             for name, item in value.items():
+                if isinstance(property_names, dict):
+                    errors.extend(
+                        schema_errors(
+                            name,
+                            property_names,
+                            f"{path} property {name!r}",
+                        )
+                    )
                 child_schema = properties.get(name)
                 if isinstance(child_schema, dict):
                     errors.extend(schema_errors(item, child_schema, f"{path}.{name}"))
                 elif schema.get("additionalProperties") is False:
                     errors.append(f"{path}.{name} is not allowed.")
+                elif isinstance(schema.get("additionalProperties"), dict):
+                    errors.extend(
+                        schema_errors(
+                            item,
+                            schema["additionalProperties"],
+                            f"{path}.{name}",
+                        )
+                    )
 
     if isinstance(value, list):
         minimum_items = schema.get("minItems")
@@ -146,6 +173,12 @@ def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[s
                 errors.extend(schema_errors(item, item_schema, f"{path}[{index}]"))
 
     if isinstance(value, str):
+        minimum_length = schema.get("minLength")
+        maximum_length = schema.get("maxLength")
+        if isinstance(minimum_length, int) and len(value) < minimum_length:
+            errors.append(f"{path} must contain at least {minimum_length} characters.")
+        if isinstance(maximum_length, int) and len(value) > maximum_length:
+            errors.append(f"{path} must contain at most {maximum_length} characters.")
         pattern = schema.get("pattern")
         if isinstance(pattern, str) and re.search(pattern, value) is None:
             errors.append(f"{path} does not match the required pattern.")
@@ -157,5 +190,41 @@ def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[s
             errors.append(f"{path} must be at least {minimum}.")
         if isinstance(maximum, (int, float)) and value > maximum:
             errors.append(f"{path} must be at most {maximum}.")
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        alternatives = [
+            schema_errors(value, alternative, path)
+            for alternative in any_of
+            if isinstance(alternative, dict)
+        ]
+        if alternatives and all(
+            alternative_errors for alternative_errors in alternatives
+        ):
+            details = " OR ".join(
+                "; ".join(alternative_errors) for alternative_errors in alternatives
+            )
+            errors.append(f"{path} must match at least one schema in anyOf: {details}")
+
+    one_of = schema.get("oneOf")
+    if isinstance(one_of, list):
+        alternatives = [
+            schema_errors(value, alternative, path)
+            for alternative in one_of
+            if isinstance(alternative, dict)
+        ]
+        matches = sum(not alternative_errors for alternative_errors in alternatives)
+        if alternatives and matches != 1:
+            if matches == 0:
+                details = " OR ".join(
+                    "; ".join(alternative_errors) for alternative_errors in alternatives
+                )
+                errors.append(
+                    f"{path} must match exactly one schema in oneOf: {details}"
+                )
+            else:
+                errors.append(
+                    f"{path} matches {matches} schemas in oneOf; exactly one is required."
+                )
 
     return errors

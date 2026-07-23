@@ -18,7 +18,7 @@ from typing import Any, BinaryIO
 from . import __version__
 from .errors import ConflictError, RequestCancelled, ToolError
 from .protocol import request_cancellation, request_progress, schema_errors
-from .tools import HANDLERS, TOOLS
+from .tools import HANDLERS, TOOLS, validate_tool_arguments
 
 SERVER_NAME = "shotcut-mcp"
 LATEST_PROTOCOL_VERSION = "2025-11-25"
@@ -42,11 +42,11 @@ SERVER_INSTRUCTIONS = (
     "diagnose_missing_media and let the user choose before relinking. For washed-out "
     "color or HDR questions, use diagnose_color_workflow. Use analyze_media_quality "
     "before proposing cleanup for silence, black frames, freezes, interlacing, or "
-    "loudness. For exports, use start_render for the full project, explicit inclusive "
-    "frames, or one range marker; after it returns, monitor its job_id with "
-    "render_status. Use export_marker_chapters for Shotcut-compatible chapter text. "
-    "Use list_render_jobs when the job_id is unknown. List backups before restoring "
-    "and confirm the selected revision."
+    "loudness. For exports, choose exactly one start_render mode: the full project, "
+    "both inclusive frames, or one range marker; after it returns, monitor its "
+    "job_id with render_status. Use export_marker_chapters for Shotcut-compatible "
+    "chapter text. Use list_render_jobs when the job_id is unknown. List backups "
+    "before restoring and confirm the selected backup."
 )
 
 
@@ -209,6 +209,7 @@ def _handle_tool_call(
     handler = HANDLERS.get(name) if isinstance(name, str) else None
     if handler is None:
         return _error(request_id, -32602, f"Unknown tool: {name}")
+    assert isinstance(name, str)
     arguments = call_params.get("arguments", {})
     if not isinstance(arguments, dict):
         return _error(request_id, -32602, "Tool arguments must be an object.")
@@ -226,11 +227,12 @@ def _handle_tool_call(
         )
     tool = next(item for item in TOOLS if item["name"] == name)
     validation_errors = schema_errors(arguments, tool["inputSchema"])
+    validation_errors.extend(validate_tool_arguments(name, arguments))
     if validation_errors:
         return _error(
             request_id,
             -32602,
-            "Tool arguments do not match inputSchema.",
+            "Tool arguments do not match the published input contracts.",
             {"validationErrors": validation_errors},
         )
     try:

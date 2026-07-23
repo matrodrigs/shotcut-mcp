@@ -33,7 +33,7 @@ from .project import (
     render_project_contact_sheet,
     restore_backup,
 )
-from .protocol import report_progress
+from .protocol import report_progress, schema_errors
 from .render import (
     RENDER_PRESETS,
     cancel_render,
@@ -319,7 +319,11 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "enum": ["start", "end"],
         "description": "Clip edge adjusted by delta.",
     },
-    "delta": {"type": "integer", "description": "Signed frame adjustment."},
+    "delta": {
+        "type": "integer",
+        "description": "Non-zero signed frame adjustment.",
+        "anyOf": [{"maximum": -1}, {"minimum": 1}],
+    },
     "ripple_markers": {
         "type": "boolean",
         "description": "Move affected markers with a ripple trim.",
@@ -375,7 +379,15 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "minimum": 0,
         "description": "Marker start frame.",
     },
-    "end_frame": {"type": "integer", "minimum": 0, "description": "Marker end frame."},
+    "end_frame": {
+        "type": "integer",
+        "minimum": 0,
+        "description": (
+            "Exclusive marker end frame. A value equal to start_frame creates a "
+            "point marker; otherwise it must be greater than or equal to start_frame "
+            "and the range covers start_frame through end_frame - 1."
+        ),
+    },
     "marker_id": {
         "type": "string",
         "description": "Marker id returned by inspect_project or add_marker.",
@@ -483,6 +495,10 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
     "speed": {
         "type": "number",
         "description": "Playback multiplier: -100..-0.05 or 0.05..100.",
+        "anyOf": [
+            {"minimum": -100, "maximum": -0.05},
+            {"minimum": 0.05, "maximum": 100},
+        ],
     },
     "pitch_compensation": {
         "type": "boolean",
@@ -676,7 +692,51 @@ def _operation_details(name: str) -> dict[str, Any]:
         "required": ["op", *summary.get("required", [])],
         "additionalProperties": False,
     }
+    if name == "update_marker":
+        schema["anyOf"] = [
+            {"required": [field]}
+            for field in ("start_frame", "end_frame", "text", "color")
+        ]
     return {**summary, "schema": schema, "example": OPERATION_EXAMPLES[name]}
+
+
+def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> list[str]:
+    """Validate contracts that stay focused outside the compact tools/list schema."""
+
+    if name not in {"edit_project", "plan_project_edit"}:
+        return []
+    operations = arguments.get("operations")
+    if not isinstance(operations, list):
+        return []
+    errors: list[str] = []
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict):
+            continue
+        operation_name = operation.get("op")
+        if (
+            not isinstance(operation_name, str)
+            or operation_name not in OPERATION_CATALOG
+        ):
+            continue
+        errors.extend(
+            schema_errors(
+                operation,
+                _operation_details(operation_name)["schema"],
+                f"$.operations[{index}]",
+            )
+        )
+    return errors
+
+
+TRANSACTION_GUARANTEES = [
+    "optimistic concurrency using SHA-256 revision",
+    "single parse/write for up to 500 operations",
+    "MCP lock file",
+    "temporary-file MLT validation before replace",
+    "atomic replace",
+    "timestamped backup retention (20)",
+    "unknown XML elements and properties preserved",
+]
 
 
 def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -685,26 +745,19 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
         not isinstance(requested, str) or requested not in OPERATION_CATALOG
     ):
         raise ToolError(f"Unknown edit operation: {requested}")
+    if isinstance(requested, str):
+        return {
+            "transaction_guarantees": TRANSACTION_GUARANTEES,
+            "operations": {requested: _operation_details(requested)},
+        }
     return {
         "compatibility": {
             "shotcut": "26.6.25",
             "mlt": "7.40.x",
             "project_format": "MLT XML",
         },
-        "transaction_guarantees": [
-            "optimistic concurrency using SHA-256 revision",
-            "single parse/write for up to 500 operations",
-            "MCP lock file",
-            "temporary-file MLT validation before replace",
-            "atomic replace",
-            "timestamped backup retention (20)",
-            "unknown XML elements and properties preserved",
-        ],
-        "operations": (
-            {requested: _operation_details(requested)}
-            if isinstance(requested, str)
-            else OPERATION_CATALOG
-        ),
+        "transaction_guarantees": TRANSACTION_GUARANTEES,
+        "operations": OPERATION_CATALOG,
         "operation_query": (
             "Pass operation to shotcut_capabilities for its complete schema and example."
         ),
@@ -842,6 +895,124 @@ TRACK = {
 }
 OP_NAMES = list(OPERATION_CATALOG)
 
+
+def _operations_input_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 500,
+        "items": {
+            "type": "object",
+            "properties": {"op": {"type": "string", "enum": OP_NAMES}},
+            "required": ["op"],
+            "additionalProperties": True,
+        },
+    }
+
+
+def _revision_guarded_input_schema(
+    properties: dict[str, Any], required: list[str]
+) -> dict[str, Any]:
+    schema = _object_schema(properties, required)
+    schema["anyOf"] = [
+        {"required": ["expected_revision"]},
+        {
+            "required": ["force"],
+            "properties": {"force": {"enum": [True]}},
+        },
+    ]
+    return schema
+
+
+def _edit_project_input_schema() -> dict[str, Any]:
+    return _revision_guarded_input_schema(
+        {
+            "project_path": PATH,
+            "expected_revision": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": (
+                    "SHA-256 revision returned by inspect_project. Required unless "
+                    "force=true was explicitly authorized."
+                ),
+            },
+            "operations": _operations_input_schema(),
+            "force": {"type": "boolean", "default": False},
+            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        },
+        ["project_path", "operations"],
+    )
+
+
+def _start_render_input_schema() -> dict[str, Any]:
+    schema = _object_schema(
+        {
+            "project_path": PATH,
+            "output_path": PATH,
+            "preset": {
+                "type": "string",
+                "enum": list(RENDER_PRESETS),
+                "default": "h264-high",
+            },
+            "consumer_properties": {
+                "type": "object",
+                "maxProperties": 50,
+                "propertyNames": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$",
+                },
+                "additionalProperties": {
+                    "anyOf": [
+                        {"type": "string", "maxLength": 500},
+                        {"type": "number"},
+                        {"type": "boolean"},
+                    ]
+                },
+            },
+            "in_frame": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Inclusive first project frame; requires out_frame.",
+            },
+            "out_frame": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Inclusive last project frame; requires in_frame.",
+            },
+            "marker_id": {
+                "type": "string",
+                "description": (
+                    "Range marker id from inspect_project; mutually exclusive with "
+                    "explicit frames."
+                ),
+            },
+            "overwrite": {"type": "boolean", "default": False},
+        },
+        ["project_path", "output_path"],
+    )
+    schema["oneOf"] = [
+        {
+            "properties": {
+                "in_frame": {"enum": [None]},
+                "out_frame": {"enum": [None]},
+                "marker_id": {"enum": [None]},
+            }
+        },
+        {
+            "required": ["in_frame", "out_frame"],
+            "properties": {"marker_id": {"enum": [None]}},
+        },
+        {
+            "required": ["marker_id"],
+            "properties": {
+                "in_frame": {"enum": [None]},
+                "out_frame": {"enum": [None]},
+            },
+        },
+    ]
+    return schema
+
+
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "shotcut_status",
@@ -871,7 +1042,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "shotcut_capabilities",
         "title": "Get editing capabilities",
-        "description": "Use before an unfamiliar edit. Returns the operation catalog and transactional guarantees; pass operation for its complete schema and example.",
+        "description": (
+            "Use before an unfamiliar edit. Omit operation for the catalog, presets, "
+            "compatibility, and workflow; pass operation for only its complete schema, "
+            "example, and transaction guarantees enforced by plan and edit."
+        ),
         "inputSchema": _object_schema(
             {
                 "operation": {
@@ -1008,18 +1183,15 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
-                "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                "operations": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 500,
-                    "items": {
-                        "type": "object",
-                        "properties": {"op": {"type": "string", "enum": OP_NAMES}},
-                        "required": ["op"],
-                        "additionalProperties": True,
-                    },
+                "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": (
+                        "Required SHA-256 revision returned by inspect_project; force "
+                        "is not supported by plan_project_edit."
+                    ),
                 },
+                "operations": _operations_input_schema(),
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
                 "max_diff_lines": {
                     "type": "integer",
@@ -1100,29 +1272,10 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Edit project transactionally",
         "description": (
             "Use only after inspect_project. Applies up to 500 related operations in one "
-            "validated atomic write; pass expected_revision and re-inspect on conflicts "
-            "instead of using force."
+            "validated atomic write, enforcing each focused operation schema; pass "
+            "expected_revision and re-inspect on conflicts instead of using force."
         ),
-        "inputSchema": _object_schema(
-            {
-                "project_path": PATH,
-                "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                "operations": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 500,
-                    "items": {
-                        "type": "object",
-                        "properties": {"op": {"type": "string", "enum": OP_NAMES}},
-                        "required": ["op"],
-                        "additionalProperties": True,
-                    },
-                },
-                "force": {"type": "boolean", "default": False},
-                "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
-            },
-            ["project_path", "operations"],
-        ),
+        "inputSchema": _edit_project_input_schema(),
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": True,
@@ -1407,34 +1560,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "start_render",
         "title": "Start render",
         "description": "Use when the user asks to export. Starts a durable background render for the full project, one inclusive frame range, or one Shotcut range marker; monitor the returned job_id with render_status.",
-        "inputSchema": _object_schema(
-            {
-                "project_path": PATH,
-                "output_path": PATH,
-                "preset": {
-                    "type": "string",
-                    "enum": list(RENDER_PRESETS),
-                    "default": "h264-high",
-                },
-                "consumer_properties": {"type": "object", "additionalProperties": True},
-                "in_frame": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Inclusive first project frame; requires out_frame.",
-                },
-                "out_frame": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Inclusive last project frame; requires in_frame.",
-                },
-                "marker_id": {
-                    "type": "string",
-                    "description": "Range marker id from inspect_project; mutually exclusive with explicit frames.",
-                },
-                "overwrite": {"type": "boolean", "default": False},
-            },
-            ["project_path", "output_path"],
-        ),
+        "inputSchema": _start_render_input_schema(),
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": True,
@@ -1454,7 +1580,14 @@ TOOLS: list[dict[str, Any]] = [
             {
                 "project_path": PATH,
                 "output_path": PATH,
-                "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": (
+                        "Optional SHA-256 revision returned by inspect_project. When "
+                        "supplied, export fails if the project has changed."
+                    ),
+                },
                 "include_range_markers": {"type": "boolean", "default": False},
                 "colors": {
                     "type": "array",
@@ -1543,12 +1676,19 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "restore_project_backup",
         "title": "Restore project backup",
-        "description": "Use after list_project_backups and confirmation of the selected revision. Validates and atomically restores it while backing up the current project.",
-        "inputSchema": _object_schema(
+        "description": "Use after list_project_backups and confirmation of the selected backup. Validates and atomically restores it while backing up the current project; pass the current expected_revision unless force=true was explicitly authorized.",
+        "inputSchema": _revision_guarded_input_schema(
             {
                 "project_path": PATH,
                 "backup_path": PATH,
-                "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": (
+                        "SHA-256 revision returned by inspect_project. Required unless "
+                        "force=true was explicitly authorized."
+                    ),
+                },
                 "force": {"type": "boolean", "default": False},
             },
             ["project_path", "backup_path"],
@@ -1567,7 +1707,7 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "project_path": "Existing authorized Shotcut .mlt or .xml project path, except when create_project creates it.",
     "output_path": "Authorized destination path. Omit only for single-frame or contact-sheet previews to use bounded managed output.",
     "operation": "Edit operation whose complete schema and example should be returned.",
-    "expected_revision": "SHA-256 revision returned by inspect_project. Required unless force is explicitly authorized.",
+    "expected_revision": "SHA-256 revision returned by inspect_project; the tool schema states whether it is required.",
     "operations": "One or more related edit operations. Query shotcut_capabilities for unfamiliar operation schemas.",
     "timeout_seconds": "Bounded timeout for local MLT processing.",
     "analyzers": "Quality checks to run; defaults to every analyzer supported by this tool.",
@@ -1617,7 +1757,7 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "refresh": "Ignore cached encoder results and run smoke tests again.",
     "fullscreen": "Ask Shotcut to open fullscreen.",
     "preset": "Named safe export preset returned by shotcut_capabilities.",
-    "consumer_properties": "Advanced MLT avformat properties; prefer a named preset unless the user supplied exact requirements.",
+    "consumer_properties": "Up to 50 scalar MLT avformat properties. Safe names are allowlisted unless the administrator enables unsafe properties; prefer a named preset.",
     "include_range_markers": "Include Shotcut range markers as chapters; point markers are included by default.",
     "colors": "Optional marker-color allowlist using Shotcut #RRGGBB values.",
     "job_id": "Durable render identifier returned by start_render or list_render_jobs.",
@@ -1664,71 +1804,956 @@ def _clone_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _result_schema(properties: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {
+def _result_schema(
+    properties: dict[str, Any] | None = None,
+    required: list[str] | None = None,
+    *,
+    additional_properties: bool = True,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "type": "object",
         "properties": properties or {},
-        "additionalProperties": True,
+        "additionalProperties": additional_properties,
     }
+    stable_fields = list(properties or {}) if required is None else required
+    if stable_fields:
+        result["required"] = stable_fields
+    return result
 
 
-OBJECT = {"type": "object"}
-ARRAY = {"type": "array"}
+def _output_object(
+    properties: dict[str, Any],
+    required: list[str],
+    *,
+    additional_properties: bool = False,
+    description: str | None = None,
+) -> dict[str, Any]:
+    result = _result_schema(
+        properties,
+        required,
+        additional_properties=additional_properties,
+    )
+    if description:
+        result["description"] = description
+    return result
+
+
+def _output_array(items: dict[str, Any], description: str) -> dict[str, Any]:
+    return {"type": "array", "items": items, "description": description}
+
+
 STRING = {"type": "string"}
 INTEGER = {"type": "integer"}
 BOOLEAN = {"type": "boolean"}
+NULLABLE_STRING = {"type": ["string", "null"]}
+NULLABLE_INTEGER = {"type": ["integer", "null"]}
+NULLABLE_NUMBER = {"type": ["number", "null"]}
+
+PROPERTY_BAG_SCHEMA = {
+    "type": "object",
+    "description": "Decoded MLT properties keyed by property name.",
+    "additionalProperties": {"type": ["string", "number", "boolean", "null"]},
+}
+FILTER_OUTPUT_SCHEMA = _output_object(
+    {
+        "filter_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based filter index on its host.",
+        },
+        "filter_id": {
+            "type": ["string", "null"],
+            "description": "Stable MLT filter id, when present.",
+        },
+        "service": {
+            "type": ["string", "null"],
+            "description": "Native MLT filter service name.",
+        },
+        "shotcut_filter": {
+            "type": ["string", "null"],
+            "description": "Shotcut filter identifier, when present.",
+        },
+        "enabled": {"type": "boolean", "description": "Whether the filter is enabled."},
+        "properties": PROPERTY_BAG_SCHEMA,
+    },
+    [
+        "filter_index",
+        "filter_id",
+        "service",
+        "shotcut_filter",
+        "enabled",
+        "properties",
+    ],
+    description="Filter summary returned by inspect_project.",
+)
+TIMELINE_ITEM_OUTPUT_SCHEMA = _output_object(
+    {
+        "item_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based item index within the track.",
+        },
+        "type": {
+            "type": "string",
+            "enum": ["clip", "gap", "transition"],
+            "description": "Timeline item kind.",
+        },
+        "start_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Inclusive zero-based project start frame.",
+        },
+        "duration_frames": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Timeline duration in frames.",
+        },
+        "end_frame": {
+            "type": "integer",
+            "minimum": -1,
+            "description": "Inclusive zero-based project end frame.",
+        },
+        "producer_id": {
+            "type": ["string", "null"],
+            "description": "Referenced MLT producer id for an entry.",
+        },
+        "in_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Inclusive source in frame for an entry.",
+        },
+        "out_frame": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Inclusive source out frame for an entry.",
+        },
+        "resource": {
+            "type": ["string", "null"],
+            "description": "Stored media resource for an entry.",
+        },
+        "caption": {
+            "type": ["string", "null"],
+            "description": "Shotcut clip caption, when present.",
+        },
+        "filters": _output_array(
+            FILTER_OUTPUT_SCHEMA,
+            "Clip-local filters in host order.",
+        ),
+    },
+    ["item_index", "type", "start_frame", "duration_frames", "end_frame"],
+    description="One gap, transition, or clip entry in a project track.",
+)
+TRACK_OUTPUT_SCHEMA = _output_object(
+    {
+        "track_id": {"type": "string", "description": "Stable MLT playlist id."},
+        "name": {"type": "string", "description": "Shotcut track name."},
+        "kind": {
+            "type": "string",
+            "enum": ["video", "audio"],
+            "description": "Shotcut track kind.",
+        },
+        "xml_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based track index in the main tractor.",
+        },
+        "duration_frames": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Track duration in project frames.",
+        },
+        "properties": PROPERTY_BAG_SCHEMA,
+        "filters": _output_array(
+            FILTER_OUTPUT_SCHEMA,
+            "Track-level filters in host order.",
+        ),
+        "items": _output_array(
+            TIMELINE_ITEM_OUTPUT_SCHEMA,
+            "Timeline items in playback order.",
+        ),
+    },
+    [
+        "track_id",
+        "name",
+        "kind",
+        "xml_index",
+        "duration_frames",
+        "properties",
+        "filters",
+        "items",
+    ],
+    description="Project track and its ordered timeline contents.",
+)
+MARKER_OUTPUT_SCHEMA = _output_object(
+    {
+        "marker_id": {
+            "type": ["string", "null"],
+            "description": "Marker id used by update, remove, chapter, and render tools.",
+        },
+        "text": {
+            "type": ["string", "null"],
+            "description": "Marker label.",
+        },
+        "start_frame": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Inclusive zero-based project start frame.",
+        },
+        "end_frame": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": (
+                "Exclusive zero-based marker end frame. A value equal to start_frame "
+                "identifies a point marker."
+            ),
+        },
+        "color": {
+            "type": ["string", "null"],
+            "description": "Shotcut marker color in #RRGGBB form.",
+        },
+    },
+    ["marker_id", "text", "start_frame", "end_frame", "color"],
+    description="Shotcut point or range marker.",
+)
+SUBTITLE_OUTPUT_SCHEMA = _output_object(
+    {
+        "name": {"type": ["string", "null"], "description": "Subtitle track name."},
+        "language": {
+            "type": ["string", "null"],
+            "description": "Subtitle language code, when present.",
+        },
+        "srt": {
+            "type": ["string", "null"],
+            "description": "Stored SRT subtitle text.",
+        },
+    },
+    ["name", "language", "srt"],
+    description="Editable Shotcut subtitle feed.",
+)
+EXPECTED_MEDIA_OUTPUT_SCHEMA = _output_object(
+    {
+        "duration_seconds": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "Expected media duration in seconds.",
+        },
+        "width": {
+            "type": ["string", "null"],
+            "description": "Expected media width from MLT metadata.",
+        },
+        "height": {
+            "type": ["string", "null"],
+            "description": "Expected media height from MLT metadata.",
+        },
+    },
+    ["duration_seconds", "width", "height"],
+    description="Media facts retained in the project for missing-resource matching.",
+)
+RESOURCE_OUTPUT_SCHEMA = _output_object(
+    {
+        "reference_id": {
+            "type": "string",
+            "description": "Stable owner-and-property reference identifier.",
+        },
+        "owner_id": {
+            "type": ["string", "null"],
+            "description": "MLT element id that owns the resource.",
+        },
+        "owner_tag": {"type": "string", "description": "Owning MLT element tag."},
+        "property": {"type": "string", "description": "Resource property name."},
+        "resource": {
+            "type": "string",
+            "description": "Resource value stored in the project.",
+        },
+        "decoded_resource": {
+            "type": "string",
+            "description": "Decoded resource value before path resolution.",
+        },
+        "resolved_path": {
+            "type": ["string", "null"],
+            "description": "Canonical local path when the resource is path-like.",
+        },
+        "exists": {
+            "type": ["boolean", "null"],
+            "description": "Whether the resolved local resource exists.",
+        },
+        "shotcut_hash": {
+            "type": ["string", "null"],
+            "description": "Shotcut media hash retained for relinking.",
+        },
+        "expected_media": EXPECTED_MEDIA_OUTPUT_SCHEMA,
+    },
+    [
+        "reference_id",
+        "owner_id",
+        "owner_tag",
+        "property",
+        "resource",
+        "decoded_resource",
+        "resolved_path",
+        "exists",
+        "shotcut_hash",
+        "expected_media",
+    ],
+    description="One media or data resource referenced by the project.",
+)
+LINK_OUTPUT_SCHEMA = _output_object(
+    {
+        "link_id": {
+            "type": ["string", "null"],
+            "description": "Stable MLT link id, when present.",
+        },
+        "service": {
+            "type": ["string", "null"],
+            "description": "Native MLT link service.",
+        },
+        "properties": PROPERTY_BAG_SCHEMA,
+    },
+    ["link_id", "service", "properties"],
+    description="MLT link summary.",
+)
+COLOR_WORKFLOW_OUTPUT_SCHEMA = _output_object(
+    {
+        "processing_mode": {
+            "type": "string",
+            "description": "Shotcut processing mode.",
+        },
+        "color_transfer": {
+            "type": ["string", "null"],
+            "description": "Project transfer characteristic.",
+        },
+        "colorspace": {
+            "type": ["string", "null"],
+            "description": "Project MLT colorspace value.",
+        },
+        "dynamic_range": {
+            "type": "string",
+            "enum": ["sdr", "hlg", "pq"],
+            "description": "Normalized project dynamic range.",
+        },
+    },
+    ["processing_mode", "color_transfer", "colorspace", "dynamic_range"],
+    description="Normalized Shotcut project color workflow.",
+)
+COUNT_NAMES = [
+    "producer",
+    "chain",
+    "playlist",
+    "tractor",
+    "filter",
+    "transition",
+    "link",
+]
+COUNTS_OUTPUT_SCHEMA = _output_object(
+    {
+        name: {
+            "type": "integer",
+            "minimum": 0,
+            "description": f"Number of {name} elements in the project.",
+        }
+        for name in COUNT_NAMES
+    },
+    COUNT_NAMES,
+    description="Counts of important MLT element kinds.",
+)
+PROFILE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fps": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Computed project frames per second.",
+        }
+    },
+    "required": ["fps"],
+    "additionalProperties": True,
+    "description": "MLT profile attributes plus computed fps.",
+}
+
+PATH_POLICY_OUTPUT_SCHEMA = _output_object(
+    {
+        "allowed_roots": {
+            "type": ["array", "null"],
+            "items": STRING,
+            "description": "Configured authorized data roots, or null when unrestricted.",
+        },
+        "require_absolute_paths": BOOLEAN,
+        "unsafe_consumer_properties": BOOLEAN,
+        "allow_network_resources": BOOLEAN,
+    },
+    [
+        "allowed_roots",
+        "require_absolute_paths",
+        "unsafe_consumer_properties",
+        "allow_network_resources",
+    ],
+    description="Effective server path and resource policy.",
+)
+EXECUTABLE_OUTPUT_SCHEMA = _output_object(
+    {
+        "found": BOOLEAN,
+        "path": NULLABLE_STRING,
+        "version": NULLABLE_STRING,
+        "version_error": NULLABLE_STRING,
+    },
+    ["found", "path", "version", "version_error"],
+    description="Executable discovery and version result.",
+)
+MELT_OUTPUT_SCHEMA = _output_object(
+    {
+        **EXECUTABLE_OUTPUT_SCHEMA["properties"],
+        "repository_ready": BOOLEAN,
+        "repository_error": NULLABLE_STRING,
+    },
+    [
+        "found",
+        "path",
+        "version",
+        "version_error",
+        "repository_ready",
+        "repository_error",
+    ],
+    description="Melt discovery, version, and repository readiness.",
+)
+VALIDATION_OUTPUT_SCHEMA = _output_object(
+    {
+        "valid": BOOLEAN,
+        "return_code": INTEGER,
+        "diagnostic": NULLABLE_STRING,
+    },
+    ["valid", "return_code", "diagnostic"],
+    description="Result of processing the project with local Melt.",
+)
+OPERATION_RESULT_OUTPUT_SCHEMA = _output_object(
+    {
+        "op": {
+            "type": "string",
+            "enum": OP_NAMES,
+            "description": "Operation that produced this result.",
+        }
+    },
+    ["op"],
+    additional_properties=True,
+    description="Operation-specific result; identifiers are suitable for later edits.",
+)
+INITIAL_OPERATION_RESULT_OUTPUT_SCHEMA = _output_object(
+    {
+        "track_id": STRING,
+        "name": STRING,
+        "kind": STRING,
+        "producer_id": NULLABLE_STRING,
+        "duration_frames": INTEGER,
+    },
+    ["track_id"],
+    description="Result of one initial add_track or add_clip operation.",
+)
+MEDIA_STREAM_OUTPUT_SCHEMA = _output_object(
+    {
+        "index": NULLABLE_INTEGER,
+        "type": NULLABLE_STRING,
+        "codec": NULLABLE_STRING,
+        "duration_seconds": NULLABLE_NUMBER,
+        "width": NULLABLE_INTEGER,
+        "height": NULLABLE_INTEGER,
+        "pixel_format": NULLABLE_STRING,
+        "pixel_bit_depth": NULLABLE_INTEGER,
+        "color_primaries": NULLABLE_STRING,
+        "color_transfer": NULLABLE_STRING,
+        "color_space": NULLABLE_STRING,
+        "color_range": NULLABLE_STRING,
+        "dynamic_range": NULLABLE_STRING,
+        "frame_rate": NULLABLE_NUMBER,
+        "sample_rate": NULLABLE_NUMBER,
+        "channels": NULLABLE_INTEGER,
+        "channel_layout": NULLABLE_STRING,
+    },
+    ["index", "type", "codec", "duration_seconds"],
+    description="Normalized FFprobe stream facts; media-kind fields are optional.",
+)
+MEDIA_SUMMARY_PROPERTIES = {
+    "path": STRING,
+    "size_bytes": INTEGER,
+    "duration_seconds": NULLABLE_NUMBER,
+    "format": NULLABLE_STRING,
+    "bit_rate": NULLABLE_NUMBER,
+    "streams": _output_array(
+        MEDIA_STREAM_OUTPUT_SCHEMA,
+        "Normalized audio, video, subtitle, and data streams.",
+    ),
+    "error": STRING,
+}
+MEDIA_SUMMARY_OUTPUT_SCHEMA = _output_object(
+    MEDIA_SUMMARY_PROPERTIES,
+    ["path", "size_bytes", "duration_seconds", "format", "bit_rate", "streams"],
+    description="Normalized media summary.",
+)
+MEDIA_OR_ERROR_OUTPUT_SCHEMA = _output_object(
+    MEDIA_SUMMARY_PROPERTIES,
+    ["path"],
+    description="Normalized media summary, or a bounded probe error.",
+)
+ISSUE_OUTPUT_SCHEMA = _output_object(
+    {"severity": STRING, "code": STRING, "message": STRING},
+    ["severity", "code", "message"],
+    description="Actionable compatibility finding.",
+)
+PREVIEW_RESULT_OUTPUT_SCHEMA = _output_object(
+    {
+        "created": BOOLEAN,
+        "path": STRING,
+        "frame": INTEGER,
+        "size_bytes": INTEGER,
+        "managed_output": BOOLEAN,
+        "error": STRING,
+    },
+    ["created", "path", "frame"],
+    description="One requested preview result; failure details appear in error.",
+)
+CONTACT_CELL_OUTPUT_SCHEMA = _output_object(
+    {"cell_index": INTEGER, "frame": INTEGER},
+    ["cell_index", "frame"],
+    description="Contact-sheet cell and its exact project frame.",
+)
+CHAPTER_OUTPUT_SCHEMA = _output_object(
+    {
+        "timecode": STRING,
+        "frame": INTEGER,
+        "text": STRING,
+        "marker_id": NULLABLE_STRING,
+    },
+    ["timecode", "frame", "text", "marker_id"],
+    description="One exported Shotcut-compatible chapter.",
+)
+BACKUP_OUTPUT_SCHEMA = _output_object(
+    {
+        "path": STRING,
+        "size_bytes": INTEGER,
+        "modified_at": {"type": "number"},
+        "revision": STRING,
+    },
+    ["path", "size_bytes", "modified_at", "revision"],
+    description="Project-owned backup returned by list_project_backups.",
+)
+RENDER_JOB_SUMMARY_OUTPUT_SCHEMA = _output_object(
+    {
+        "job_id": NULLABLE_STRING,
+        "status": NULLABLE_STRING,
+        "project_path": NULLABLE_STRING,
+        "output_path": NULLABLE_STRING,
+        "preset": NULLABLE_STRING,
+        "in_frame": NULLABLE_INTEGER,
+        "out_frame": NULLABLE_INTEGER,
+        "marker_id": NULLABLE_STRING,
+        "marker_text": NULLABLE_STRING,
+        "total_frames": NULLABLE_INTEGER,
+        "range_duration_frames": NULLABLE_INTEGER,
+        "frames_completed": NULLABLE_INTEGER,
+        "started_at": NULLABLE_NUMBER,
+        "updated_at": NULLABLE_NUMBER,
+        "finished_at": NULLABLE_NUMBER,
+        "elapsed_seconds": NULLABLE_NUMBER,
+        "progress_percent": NULLABLE_NUMBER,
+        "current_frame": NULLABLE_INTEGER,
+        "return_code": NULLABLE_INTEGER,
+        "output_size_bytes": NULLABLE_INTEGER,
+        "average_fps": NULLABLE_NUMBER,
+        "status_note": NULLABLE_STRING,
+    },
+    [
+        "job_id",
+        "status",
+        "project_path",
+        "output_path",
+        "preset",
+        "in_frame",
+        "out_frame",
+        "marker_id",
+        "marker_text",
+        "total_frames",
+        "range_duration_frames",
+        "frames_completed",
+        "started_at",
+        "updated_at",
+        "finished_at",
+        "elapsed_seconds",
+        "progress_percent",
+        "current_frame",
+        "return_code",
+        "output_size_bytes",
+        "average_fps",
+        "status_note",
+    ],
+    description="Bounded durable render-job history summary.",
+)
+HARDWARE_CANDIDATE_OUTPUT_SCHEMA = _output_object(
+    {
+        "codec": STRING,
+        "encoder": STRING,
+        "state": STRING,
+        "diagnostic": NULLABLE_STRING,
+    },
+    ["codec", "encoder", "state", "diagnostic"],
+    description="One advertised encoder and its smoke-test state.",
+)
+HARDWARE_SUGGESTION_OUTPUT_SCHEMA = _output_object(
+    {
+        "verified_hardware": _output_array(
+            STRING, "Hardware encoders that passed the smoke test."
+        ),
+        "recommended": STRING,
+        "software_fallback": STRING,
+    },
+    ["verified_hardware", "recommended", "software_fallback"],
+    description="Recommendation for one codec family.",
+)
+MLT_SERVICE_CHECK_OUTPUT_SCHEMA = _output_object(
+    {
+        "passed": BOOLEAN,
+        "expected": STRING,
+        "detected": NULLABLE_STRING,
+        "error": NULLABLE_STRING,
+        "preferred_service": STRING,
+        "services": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "kind": STRING,
+                    "name": STRING,
+                    "available": BOOLEAN,
+                    "metadata": NULLABLE_STRING,
+                    "error": STRING,
+                },
+                "required": ["available"],
+                "additionalProperties": False,
+            },
+        },
+        "note": STRING,
+    },
+    ["passed"],
+    description="One compatibility check; fields vary by check kind.",
+)
+OPERATION_DESCRIPTOR_OUTPUT_SCHEMA = _output_object(
+    {
+        "required": _output_array(STRING, "Required operation fields."),
+        "optional": _output_array(STRING, "Optional operation fields."),
+        "notes": STRING,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "type": STRING,
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": ["string", "array"],
+                                "items": STRING,
+                            },
+                            "description": STRING,
+                            "enum": {"type": "array", "items": {}},
+                            "minimum": {"type": "number"},
+                            "maximum": {"type": "number"},
+                            "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": True,
+                            },
+                        },
+                        "additionalProperties": True,
+                    },
+                },
+                "required": _output_array(STRING, "Required JSON object properties."),
+                "additionalProperties": BOOLEAN,
+            },
+            "required": ["type", "properties", "required", "additionalProperties"],
+            "additionalProperties": True,
+        },
+        "example": {
+            "type": "object",
+            "properties": {"op": STRING},
+            "required": ["op"],
+            "additionalProperties": True,
+        },
+    },
+    ["required"],
+    description="Edit-operation summary, with schema and example on focused queries.",
+)
+ANALYZER_STREAM_OUTPUT_SCHEMA = _output_object(
+    {"stream_index": NULLABLE_INTEGER, "status": STRING, "error": STRING},
+    ["stream_index", "status"],
+    additional_properties=True,
+    description="One analyzer result for one media stream.",
+)
+ANALYZER_OUTPUT_SCHEMA = _output_object(
+    {
+        "status": STRING,
+        "filter": STRING,
+        "streams": _output_array(
+            ANALYZER_STREAM_OUTPUT_SCHEMA,
+            "Per-stream analyzer measurements or failures.",
+        ),
+        "reason": STRING,
+    },
+    ["status", "filter", "streams"],
+    description="One requested quality analyzer result.",
+)
+MISSING_CANDIDATE_OUTPUT_SCHEMA = _output_object(
+    {
+        "candidate_id": STRING,
+        "path": STRING,
+        "score": INTEGER,
+        "match": STRING,
+        "verified": BOOLEAN,
+        "size_bytes": INTEGER,
+        "media": {
+            "type": ["object", "null"],
+            "properties": MEDIA_SUMMARY_PROPERTIES,
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    [
+        "candidate_id",
+        "path",
+        "score",
+        "match",
+        "verified",
+        "size_bytes",
+        "media",
+    ],
+    description="Ranked replacement candidate.",
+)
+MISSING_RESOURCE_OUTPUT_SCHEMA = _output_object(
+    {
+        "reference_id": STRING,
+        "missing_path": STRING,
+        "stored_resource": STRING,
+        "candidates": _output_array(
+            MISSING_CANDIDATE_OUTPUT_SCHEMA,
+            "Ranked authorized replacement candidates.",
+        ),
+        "candidate_count": INTEGER,
+        "candidates_truncated": BOOLEAN,
+    },
+    [
+        "reference_id",
+        "missing_path",
+        "stored_resource",
+        "candidates",
+        "candidate_count",
+        "candidates_truncated",
+    ],
+    description="One missing project resource and its candidates.",
+)
+PROJECT_RESULT_ITEM_OUTPUT_SCHEMA = _output_object(
+    {
+        "item_index": INTEGER,
+        "type": STRING,
+        "start_frame": INTEGER,
+        "duration_frames": INTEGER,
+    },
+    ["item_index", "type", "start_frame", "duration_frames"],
+    additional_properties=True,
+    description="Compact timeline item identity and timing.",
+)
+PROJECT_RESULT_TRACK_OUTPUT_SCHEMA = _output_object(
+    {
+        "track_id": STRING,
+        "name": STRING,
+        "kind": STRING,
+        "items": _output_array(
+            PROJECT_RESULT_ITEM_OUTPUT_SCHEMA,
+            "Timeline items with stable indexes and timing.",
+        ),
+    },
+    ["track_id", "name", "kind", "items"],
+    additional_properties=True,
+    description="Compact project track identity and contents.",
+)
+PROJECT_RESULT_OUTPUT_SCHEMA = _output_object(
+    {
+        "path": STRING,
+        "revision": STRING,
+        "duration_frames": INTEGER,
+        "tracks": _output_array(
+            PROJECT_RESULT_TRACK_OUTPUT_SCHEMA,
+            "Tracks carrying identifiers used by later edit operations.",
+        ),
+        "filters": _output_array(
+            FILTER_OUTPUT_SCHEMA,
+            "Project-level filters with stable filter identifiers.",
+        ),
+        "markers": _output_array(
+            MARKER_OUTPUT_SCHEMA,
+            "Markers with identifiers and exclusive end frames.",
+        ),
+    },
+    ["path", "revision", "duration_frames", "tracks", "filters", "markers"],
+    additional_properties=True,
+    description="Project snapshot; inspect_project publishes its complete schema.",
+)
 
 OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "shotcut_status": _result_schema(
         {
             "ready": BOOLEAN,
-            "shotcut": OBJECT,
-            "melt": OBJECT,
-            "ffmpeg": OBJECT,
-            "ffprobe": OBJECT,
+            "shotcut": EXECUTABLE_OUTPUT_SCHEMA,
+            "melt": MELT_OUTPUT_SCHEMA,
+            "ffmpeg": EXECUTABLE_OUTPUT_SCHEMA,
+            "ffprobe": EXECUTABLE_OUTPUT_SCHEMA,
+            "environment_overrides": {
+                "type": "object",
+                "additionalProperties": NULLABLE_STRING,
+            },
+            "path_policy": PATH_POLICY_OUTPUT_SCHEMA,
         }
     ),
     "shotcut_doctor": _result_schema(
-        {"compatible": BOOLEAN, "issues": ARRAY, "path_policy": OBJECT}
+        {
+            "compatible": BOOLEAN,
+            "validated_stack": _output_object(
+                {"shotcut": STRING, "mlt": STRING},
+                ["shotcut", "mlt"],
+                description="Validated Shotcut and MLT compatibility target.",
+            ),
+            "checks": {
+                "type": "object",
+                "additionalProperties": MLT_SERVICE_CHECK_OUTPUT_SCHEMA,
+            },
+            "path_policy": PATH_POLICY_OUTPUT_SCHEMA,
+        }
     ),
     "shotcut_capabilities": _result_schema(
         {
-            "compatibility": OBJECT,
-            "transaction_guarantees": ARRAY,
-            "operations": OBJECT,
+            "compatibility": _output_object(
+                {"shotcut": STRING, "mlt": STRING, "project_format": STRING},
+                ["shotcut", "mlt", "project_format"],
+                description="Validated editing stack and project format.",
+            ),
+            "transaction_guarantees": _output_array(
+                STRING,
+                "Safety and transaction guarantees that apply to edit operations.",
+            ),
+            "operations": {
+                "type": "object",
+                "additionalProperties": OPERATION_DESCRIPTOR_OUTPUT_SCHEMA,
+                "description": "Edit operations keyed by op name.",
+            },
             "operation_query": STRING,
-            "render_presets": OBJECT,
-            "feature_guidance": OBJECT,
-            "workflow": ARRAY,
-        }
+            "render_presets": {
+                "type": "object",
+                "additionalProperties": PROPERTY_BAG_SCHEMA,
+            },
+            "feature_guidance": {
+                "type": "object",
+                "additionalProperties": STRING,
+            },
+            "workflow": _output_array(STRING, "Recommended end-to-end workflow."),
+        },
+        ["transaction_guarantees", "operations"],
     ),
-    "probe_media": _result_schema(
-        {"path": STRING, "duration_seconds": {"type": "number"}, "streams": ARRAY}
-    ),
+    "probe_media": MEDIA_SUMMARY_OUTPUT_SCHEMA,
     "analyze_media_quality": _result_schema(
         {
             "path": STRING,
-            "media_duration_seconds": {"type": ["number", "null"]},
+            "media_duration_seconds": NULLABLE_NUMBER,
             "start_seconds": {"type": "number"},
-            "duration_seconds": {"type": ["number", "null"]},
-            "streams": OBJECT,
-            "requested_analyzers": ARRAY,
-            "analyzers": OBJECT,
+            "duration_seconds": NULLABLE_NUMBER,
+            "streams": _output_object(
+                {
+                    "audio_stream_index": NULLABLE_INTEGER,
+                    "video_stream_index": NULLABLE_INTEGER,
+                },
+                ["audio_stream_index", "video_stream_index"],
+                description="Selected global FFprobe stream indexes.",
+            ),
+            "requested_analyzers": _output_array(
+                STRING, "Analyzer names requested by the caller."
+            ),
+            "analyzers": {
+                "type": "object",
+                "additionalProperties": ANALYZER_OUTPUT_SCHEMA,
+            },
         }
     ),
     "inspect_project": _result_schema(
         {
-            "path": STRING,
-            "revision": STRING,
-            "profile": OBJECT,
-            "duration_frames": INTEGER,
-            "tracks": ARRAY,
-            "filters": ARRAY,
-            "markers": ARRAY,
-            "subtitles": ARRAY,
-            "resources": ARRAY,
-            "missing_resources": ARRAY,
-        }
+            "path": {
+                "type": "string",
+                "description": "Authorized project path that was inspected.",
+            },
+            "revision": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "SHA-256 revision to pass as expected_revision.",
+            },
+            "shotcut_editable": {
+                "type": "boolean",
+                "description": "Whether the main tractor is marked as Shotcut-editable.",
+            },
+            "profile": PROFILE_OUTPUT_SCHEMA,
+            "color_workflow": COLOR_WORKFLOW_OUTPUT_SCHEMA,
+            "notes": {
+                "type": ["string", "null"],
+                "description": "Project notes, when present.",
+            },
+            "duration_frames": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Project duration in frames.",
+            },
+            "tracks": _output_array(
+                TRACK_OUTPUT_SCHEMA,
+                "Project tracks in main-tractor order.",
+            ),
+            "filters": _output_array(
+                FILTER_OUTPUT_SCHEMA,
+                "Project-level filters in host order.",
+            ),
+            "links": _output_array(LINK_OUTPUT_SCHEMA, "MLT links in the project."),
+            "markers": _output_array(
+                MARKER_OUTPUT_SCHEMA,
+                "Shotcut point and range markers.",
+            ),
+            "subtitles": _output_array(
+                SUBTITLE_OUTPUT_SCHEMA,
+                "Shotcut subtitle feeds.",
+            ),
+            "resources": _output_array(
+                RESOURCE_OUTPUT_SCHEMA,
+                "Media and data resources referenced by the project.",
+            ),
+            "network_resources": _output_array(
+                STRING,
+                "Network resource values embedded in the project.",
+            ),
+            "missing_resources": _output_array(
+                STRING,
+                "Resolved local resource paths that do not exist.",
+            ),
+            "counts": COUNTS_OUTPUT_SCHEMA,
+        },
+        [
+            "path",
+            "revision",
+            "shotcut_editable",
+            "profile",
+            "color_workflow",
+            "notes",
+            "duration_frames",
+            "tracks",
+            "filters",
+            "links",
+            "markers",
+            "subtitles",
+            "resources",
+            "network_resources",
+            "missing_resources",
+            "counts",
+        ],
+        additional_properties=False,
     ),
     "plan_project_edit": _result_schema(
         {
@@ -1737,10 +2762,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "project_path": STRING,
             "base_revision": STRING,
             "prospective_revision": STRING,
-            "operation_results": ARRAY,
-            "validation": OBJECT,
-            "project": OBJECT,
+            "operation_results": _output_array(
+                OPERATION_RESULT_OUTPUT_SCHEMA,
+                "Results in the same order as the requested operations.",
+            ),
+            "validation": VALIDATION_OUTPUT_SCHEMA,
+            "project": PROJECT_RESULT_OUTPUT_SCHEMA,
             "unified_diff": STRING,
+            "diff_lines": INTEGER,
             "diff_truncated": BOOLEAN,
         }
     ),
@@ -1749,10 +2778,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "created": BOOLEAN,
             "path": STRING,
             "revision": STRING,
-            "backup_path": {"type": ["string", "null"]},
-            "validation": OBJECT,
-            "operation_results": ARRAY,
-            "project": OBJECT,
+            "previous_revision": NULLABLE_STRING,
+            "backup_path": NULLABLE_STRING,
+            "validation": VALIDATION_OUTPUT_SCHEMA,
+            "operation_results": _output_array(
+                INITIAL_OPERATION_RESULT_OUTPUT_SCHEMA,
+                "Results for initial track and clip operations.",
+            ),
+            "project": PROJECT_RESULT_OUTPUT_SCHEMA,
         }
     ),
     "edit_project": _result_schema(
@@ -1760,15 +2793,38 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "edited": BOOLEAN,
             "path": STRING,
             "revision": STRING,
-            "previous_revision": STRING,
-            "backup_path": {"type": ["string", "null"]},
-            "validation": OBJECT,
-            "operation_results": ARRAY,
-            "project": OBJECT,
+            "previous_revision": NULLABLE_STRING,
+            "backup_path": NULLABLE_STRING,
+            "validation": VALIDATION_OUTPUT_SCHEMA,
+            "operation_results": _output_array(
+                OPERATION_RESULT_OUTPUT_SCHEMA,
+                "Results in the same order as the requested operations.",
+            ),
+            "project": PROJECT_RESULT_OUTPUT_SCHEMA,
+        }
+    ),
+    "list_mlt_services": _result_schema(
+        {
+            "kind": STRING,
+            "count": INTEGER,
+            "services": _output_array(
+                STRING, "Installed MLT service names in sorted order."
+            ),
+        }
+    ),
+    "describe_mlt_service": _result_schema(
+        {
+            "kind": STRING,
+            "name": STRING,
+            "available": BOOLEAN,
+            "metadata": NULLABLE_STRING,
         }
     ),
     "validate_project": _result_schema(
-        {"valid": BOOLEAN, "project": OBJECT, "validator": STRING, "diagnostic": STRING}
+        {
+            "project": PROJECT_RESULT_OUTPUT_SCHEMA,
+            **VALIDATION_OUTPUT_SCHEMA["properties"],
+        }
     ),
     "render_preview": _result_schema(
         {
@@ -1783,18 +2839,77 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         {
             "project_path": STRING,
             "compatible": BOOLEAN,
-            "project_color_workflow": OBJECT,
-            "source_dynamic_ranges": ARRAY,
-            "media": ARRAY,
-            "issues": ARRAY,
+            "project_color_workflow": COLOR_WORKFLOW_OUTPUT_SCHEMA,
+            "source_dynamic_ranges": _output_array(
+                STRING, "Distinct detected source dynamic ranges."
+            ),
+            "media": _output_array(
+                MEDIA_OR_ERROR_OUTPUT_SCHEMA,
+                "Bounded source-media summaries or probe errors.",
+            ),
+            "issues": _output_array(
+                ISSUE_OUTPUT_SCHEMA, "Color-workflow compatibility findings."
+            ),
+            "media_truncated": BOOLEAN,
         }
     ),
     "diagnose_missing_media": _result_schema(
         {
             "project_path": STRING,
-            "resources": ARRAY,
+            "missing_count": INTEGER,
+            "resources": _output_array(
+                MISSING_RESOURCE_OUTPUT_SCHEMA,
+                "Missing resources and their ranked replacement candidates.",
+            ),
+            "search": _output_object(
+                {
+                    "roots": _output_array(STRING, "Authorized roots searched."),
+                    "files_examined": INTEGER,
+                    "files_limit_reached": BOOLEAN,
+                    "hash_bytes_read": INTEGER,
+                    "media_probes": INTEGER,
+                    "timed_out": BOOLEAN,
+                },
+                [
+                    "roots",
+                    "files_examined",
+                    "files_limit_reached",
+                    "hash_bytes_read",
+                    "media_probes",
+                    "timed_out",
+                ],
+                description="Bounded search telemetry.",
+            ),
             "commit_workflow": STRING,
-            "visual": OBJECT,
+            "visual": {
+                "type": ["object", "null"],
+                "properties": {
+                    "created": BOOLEAN,
+                    "error": STRING,
+                    "path": STRING,
+                    "size_bytes": INTEGER,
+                    "cells": _output_array(
+                        _output_object(
+                            {
+                                "cell_index": INTEGER,
+                                "candidate_id": STRING,
+                                "path": STRING,
+                            },
+                            ["cell_index", "candidate_id", "path"],
+                        ),
+                        "Visual candidate cells.",
+                    ),
+                    "skipped": _output_array(
+                        _output_object(
+                            {"candidate_id": STRING, "reason": STRING},
+                            ["candidate_id", "reason"],
+                        ),
+                        "Candidates that could not produce a frame.",
+                    ),
+                },
+                "required": ["created"],
+                "additionalProperties": False,
+            },
         }
     ),
     "render_preview_batch": _result_schema(
@@ -1802,7 +2917,10 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "requested": INTEGER,
             "created": INTEGER,
             "partial_completion_possible": BOOLEAN,
-            "results": ARRAY,
+            "results": _output_array(
+                PREVIEW_RESULT_OUTPUT_SCHEMA,
+                "Per-frame successes and bounded failures.",
+            ),
         }
     ),
     "render_contact_sheet": _result_schema(
@@ -1813,8 +2931,29 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "columns": INTEGER,
             "rows": INTEGER,
             "managed_output": BOOLEAN,
-            "cells": ARRAY,
+            "cells": _output_array(
+                CONTACT_CELL_OUTPUT_SCHEMA,
+                "Contact-sheet cells in display order.",
+            ),
         }
+    ),
+    "detect_hardware_encoders": _result_schema(
+        {
+            "ffmpeg_path": STRING,
+            "platform": STRING,
+            "candidates": _output_array(
+                HARDWARE_CANDIDATE_OUTPUT_SCHEMA,
+                "OS-appropriate hardware encoder smoke tests.",
+            ),
+            "suggestions": {
+                "type": "object",
+                "additionalProperties": HARDWARE_SUGGESTION_OUTPUT_SCHEMA,
+            },
+            "note": STRING,
+        }
+    ),
+    "open_in_shotcut": _result_schema(
+        {"opened": BOOLEAN, "path": STRING, "pid": INTEGER}
     ),
     "start_render": _result_schema(
         {
@@ -1823,14 +2962,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "project_path": STRING,
             "output_path": STRING,
             "preset": STRING,
-            "in_frame": {"type": ["integer", "null"]},
-            "out_frame": {"type": ["integer", "null"]},
-            "total_frames": {"type": ["integer", "null"]},
-            "range_duration_frames": {"type": ["integer", "null"]},
-            "source_duration_frames": {"type": ["integer", "null"]},
-            "project_revision": {"type": ["string", "null"]},
-            "marker_id": {"type": ["string", "null"]},
-            "marker_text": {"type": ["string", "null"]},
+            "in_frame": NULLABLE_INTEGER,
+            "out_frame": NULLABLE_INTEGER,
+            "total_frames": NULLABLE_INTEGER,
+            "range_duration_frames": NULLABLE_INTEGER,
+            "source_duration_frames": NULLABLE_INTEGER,
+            "project_revision": NULLABLE_STRING,
+            "marker_id": NULLABLE_STRING,
+            "marker_text": NULLABLE_STRING,
         }
     ),
     "export_marker_chapters": _result_schema(
@@ -1841,45 +2980,113 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "project_revision": STRING,
             "chapter_count": INTEGER,
             "marker_count": INTEGER,
+            "include_range_markers": BOOLEAN,
+            "colors": {
+                "type": ["array", "null"],
+                "items": STRING,
+                "description": "Applied marker-color allowlist.",
+            },
             "size_bytes": INTEGER,
-            "chapters": ARRAY,
+            "chapters": _output_array(
+                CHAPTER_OUTPUT_SCHEMA, "Exported chapters in playback order."
+            ),
         }
     ),
     "render_status": _result_schema(
         {
             "job_id": STRING,
             "status": STRING,
-            "progress_percent": {"type": ["number", "null"]},
-            "frames_completed": {"type": ["integer", "null"]},
-            "in_frame": {"type": ["integer", "null"]},
-            "out_frame": {"type": ["integer", "null"]},
-            "range_duration_frames": {"type": ["integer", "null"]},
+            "progress_percent": NULLABLE_NUMBER,
+            "frames_completed": NULLABLE_INTEGER,
+            "in_frame": NULLABLE_INTEGER,
+            "out_frame": NULLABLE_INTEGER,
+            "range_duration_frames": NULLABLE_INTEGER,
             "output_path": STRING,
             "output_exists": BOOLEAN,
-            "output_size_bytes": {"type": ["integer", "null"]},
+            "output_size_bytes": NULLABLE_INTEGER,
             "elapsed_seconds": {"type": "number"},
-            "eta_seconds": {"type": ["number", "null"]},
-            "eta_confidence": {"type": ["string", "null"]},
-            "log_tail": STRING,
-        }
+            "eta_seconds": NULLABLE_NUMBER,
+            "eta_confidence": NULLABLE_STRING,
+            "log_tail": NULLABLE_STRING,
+        },
+        [
+            "job_id",
+            "status",
+            "progress_percent",
+            "in_frame",
+            "out_frame",
+            "range_duration_frames",
+            "output_path",
+            "output_exists",
+            "output_size_bytes",
+            "elapsed_seconds",
+            "eta_seconds",
+            "eta_confidence",
+            "log_tail",
+        ],
     ),
     "list_render_jobs": _result_schema(
-        {"jobs": ARRAY, "next_cursor": {"type": ["string", "null"]}}
+        {
+            "jobs": _output_array(
+                RENDER_JOB_SUMMARY_OUTPUT_SCHEMA,
+                "Newest-first durable render summaries.",
+            ),
+            "count": INTEGER,
+            "next_cursor": NULLABLE_STRING,
+            "status_filter": NULLABLE_STRING,
+        }
     ),
     "cancel_render": _result_schema(
-        {"job_id": STRING, "status": STRING, "cancel_requested": BOOLEAN}
+        {
+            "job_id": STRING,
+            "status": STRING,
+            "progress_percent": NULLABLE_NUMBER,
+            "in_frame": NULLABLE_INTEGER,
+            "out_frame": NULLABLE_INTEGER,
+            "range_duration_frames": NULLABLE_INTEGER,
+            "output_path": STRING,
+            "output_exists": BOOLEAN,
+            "output_size_bytes": NULLABLE_INTEGER,
+            "elapsed_seconds": {"type": "number"},
+            "eta_seconds": NULLABLE_NUMBER,
+            "eta_confidence": NULLABLE_STRING,
+            "log_tail": NULLABLE_STRING,
+            "cancellation_requested": BOOLEAN,
+        },
+        [
+            "job_id",
+            "status",
+            "progress_percent",
+            "in_frame",
+            "out_frame",
+            "range_duration_frames",
+            "output_path",
+            "output_exists",
+            "output_size_bytes",
+            "elapsed_seconds",
+            "eta_seconds",
+            "eta_confidence",
+            "log_tail",
+        ],
     ),
     "list_project_backups": _result_schema(
-        {"project_path": STRING, "backup_count": INTEGER, "backups": ARRAY}
+        {
+            "project_path": STRING,
+            "backup_count": INTEGER,
+            "backups": _output_array(
+                BACKUP_OUTPUT_SCHEMA,
+                "Project-owned backups in newest-first order.",
+            ),
+        }
     ),
     "restore_project_backup": _result_schema(
         {
             "restored": BOOLEAN,
             "path": STRING,
             "revision": STRING,
-            "previous_revision": STRING,
-            "backup_path": STRING,
-            "validation": OBJECT,
+            "previous_revision": NULLABLE_STRING,
+            "backup_path": NULLABLE_STRING,
+            "validation": VALIDATION_OUTPUT_SCHEMA,
         }
     ),
 }

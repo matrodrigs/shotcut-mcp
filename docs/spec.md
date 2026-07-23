@@ -28,10 +28,16 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   server instructions and error messages.
 - Route common user intents through concise server instructions, including visual review,
   optimistic-conflict recovery, missing media, color diagnosis, export monitoring and backups.
-- Validate tool arguments against the published input schemas and shape responses for the
-  negotiated MCP protocol revision.
-- Publish output schemas for structured-content protocol revisions and omit them for legacy
-  clients that predate structured tool results.
+- Validate tool arguments against the published input contracts, including every operation's
+  focused `shotcut_capabilities` schema, revision-or-explicit-force guards for edits and restores,
+  and mutually exclusive full/range/marker render modes.
+- Publish required stable result fields and typed nested collections for every tool output,
+  including the complete project-inspection shape, for structured-content protocol revisions;
+  omit output schemas for legacy clients that predate structured tool results.
+- Return the full catalog, presets, compatibility, and workflow from an unfiltered
+  `shotcut_capabilities` call; when `operation` is supplied, return only that operation's complete
+  schema, example, and transaction guarantees. Enforce that same operation schema before planning
+  or applying a batch.
 - Propagate MCP cancellation notifications to subprocess-backed operations.
 - Provide a read-only plan/diff operation before transactional edits.
 - Render bounded preview batches and atomically promoted contact sheets at exact frames.
@@ -44,8 +50,9 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Analyze media quality with independently bounded FFmpeg silence, black, freeze, interlace,
   and EBU R128 loudness checks, returning partial structured results when a filter or stream is
   unavailable.
-- Render either the complete project, one explicit inclusive frame range, or one non-empty
-  Shotcut range marker while preserving the durable render-job lifecycle.
+- Render exactly one of the complete project, one explicit inclusive frame range, or one non-empty
+  Shotcut range marker while preserving the durable render-job lifecycle. Accept at most 50
+  scalar advanced consumer properties and keep the default safe single-file allowlist.
 - Export point markers in Shotcut's chapter text format, with opt-in range markers and marker-color
   filtering, through the same atomic output protection used by other generated files.
 - Emit strictly increasing request-scoped MCP progress notifications only when the caller provides

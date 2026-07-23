@@ -11,8 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from shotcut_mcp.errors import ConflictError, RequestCancelled, ToolError
-from shotcut_mcp.project import ProjectDocument
-from shotcut_mcp.protocol import cancellation_requested
+from shotcut_mcp.project import ProjectDocument, create_project
+from shotcut_mcp.protocol import cancellation_requested, schema_errors
 from shotcut_mcp.server import (
     HANDLERS,
     SERVER_INSTRUCTIONS,
@@ -20,7 +20,7 @@ from shotcut_mcp.server import (
     handle_request,
     serve,
 )
-from shotcut_mcp.tools import OPERATION_CATALOG, OPERATION_EXAMPLES
+from shotcut_mcp.tools import OPERATION_CATALOG, OPERATION_EXAMPLES, TOOLS
 
 
 def request(
@@ -53,6 +53,275 @@ class ProtocolValidationTests(unittest.TestCase):
         )
         self.assertEqual(response["error"]["code"], -32602)
         self.assertIn("path", response["error"]["data"]["validationErrors"][0])
+
+    def test_edit_project_schema_requires_revision_or_explicit_force(self) -> None:
+        base_arguments = {
+            "project_path": "C:/video/project.mlt",
+            "operations": [{"op": "set_notes", "notes": "Updated"}],
+        }
+        with patch.dict(
+            HANDLERS, {"edit_project": lambda _arguments: {"accepted": True}}
+        ):
+            missing = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "edit_project", "arguments": base_arguments},
+                )
+            )
+            force_false = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "edit_project",
+                        "arguments": {**base_arguments, "force": False},
+                    },
+                )
+            )
+            revision = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "edit_project",
+                        "arguments": {
+                            **base_arguments,
+                            "expected_revision": "a" * 64,
+                        },
+                    },
+                )
+            )
+            forced = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "edit_project",
+                        "arguments": {**base_arguments, "force": True},
+                    },
+                )
+            )
+
+        for response in (missing, force_false):
+            self.assertEqual(response["error"]["code"], -32602)
+            errors = " ".join(response["error"]["data"]["validationErrors"])
+            self.assertIn("expected_revision", errors)
+            self.assertIn("force", errors)
+        self.assertFalse(revision["result"]["isError"])
+        self.assertFalse(forced["result"]["isError"])
+
+    def test_edit_tools_enforce_published_operation_contracts_before_execution(
+        self,
+    ) -> None:
+        base_arguments = {
+            "project_path": "C:/video/project.mlt",
+            "expected_revision": "a" * 64,
+        }
+        invalid_operations = (
+            {"op": "set_notes", "notse": "Updated"},
+            {"op": "update_marker", "marker_id": "0"},
+            {
+                "op": "set_clip_speed",
+                "track": "V1",
+                "item_index": 0,
+                "speed": 0,
+            },
+            {"op": "trim_item", "track": "V1", "item_index": 0, "delta": 0},
+        )
+        with patch.dict(
+            HANDLERS,
+            {
+                "edit_project": lambda _arguments: {"accepted": True},
+                "plan_project_edit": lambda _arguments: {"accepted": True},
+            },
+        ):
+            for tool_name in ("edit_project", "plan_project_edit"):
+                for operation in invalid_operations:
+                    with self.subTest(tool=tool_name, operation=operation["op"]):
+                        response = handle_request(
+                            request(
+                                "tools/call",
+                                {
+                                    "name": tool_name,
+                                    "arguments": {
+                                        **base_arguments,
+                                        "operations": [operation],
+                                    },
+                                },
+                            )
+                        )
+                        self.assertEqual(response["error"]["code"], -32602)
+                        errors = " ".join(response["error"]["data"]["validationErrors"])
+                        self.assertIn("operations[0]", errors)
+
+            valid = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "edit_project",
+                        "arguments": {
+                            **base_arguments,
+                            "operations": [{"op": "set_notes", "notes": "Updated"}],
+                        },
+                    },
+                )
+            )
+        self.assertFalse(valid["result"]["isError"])
+
+    def test_restore_schema_requires_revision_or_explicit_force(self) -> None:
+        base_arguments = {
+            "project_path": "C:/video/project.mlt",
+            "backup_path": "C:/video/project.backup.mlt",
+        }
+        with patch.dict(
+            HANDLERS,
+            {"restore_project_backup": lambda _arguments: {"accepted": True}},
+        ):
+            missing = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "restore_project_backup", "arguments": base_arguments},
+                )
+            )
+            force_false = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "restore_project_backup",
+                        "arguments": {**base_arguments, "force": False},
+                    },
+                )
+            )
+            revision = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "restore_project_backup",
+                        "arguments": {
+                            **base_arguments,
+                            "expected_revision": "a" * 64,
+                        },
+                    },
+                )
+            )
+            forced = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "restore_project_backup",
+                        "arguments": {**base_arguments, "force": True},
+                    },
+                )
+            )
+
+        self.assertEqual(missing["error"]["code"], -32602)
+        self.assertEqual(force_false["error"]["code"], -32602)
+        self.assertFalse(revision["result"]["isError"])
+        self.assertFalse(forced["result"]["isError"])
+
+    def test_start_render_schema_enforces_one_range_mode(self) -> None:
+        base_arguments = {
+            "project_path": "C:/video/project.mlt",
+            "output_path": "C:/video/output.mp4",
+        }
+        invalid_variants = (
+            {**base_arguments, "in_frame": 0},
+            {**base_arguments, "out_frame": 30},
+            {
+                **base_arguments,
+                "in_frame": 0,
+                "out_frame": 30,
+                "marker_id": "1",
+            },
+        )
+        valid_variants = (
+            base_arguments,
+            {**base_arguments, "in_frame": 0, "out_frame": 30},
+            {**base_arguments, "marker_id": "1"},
+        )
+        with patch.dict(HANDLERS, {"start_render": lambda _arguments: {"ok": True}}):
+            for arguments in invalid_variants:
+                with self.subTest(invalid=arguments):
+                    response = handle_request(
+                        request(
+                            "tools/call",
+                            {"name": "start_render", "arguments": arguments},
+                        )
+                    )
+                    self.assertEqual(response["error"]["code"], -32602)
+            for arguments in valid_variants:
+                with self.subTest(valid=arguments):
+                    response = handle_request(
+                        request(
+                            "tools/call",
+                            {"name": "start_render", "arguments": arguments},
+                        )
+                    )
+                    self.assertFalse(response["result"]["isError"])
+
+    def test_start_render_schema_rejects_invalid_consumer_property_shapes(
+        self,
+    ) -> None:
+        base_arguments = {
+            "project_path": "C:/video/project.mlt",
+            "output_path": "C:/video/output.mp4",
+        }
+        with patch.dict(HANDLERS, {"start_render": lambda _arguments: {"ok": True}}):
+            invalid_value = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "start_render",
+                        "arguments": {
+                            **base_arguments,
+                            "consumer_properties": {"vcodec": ["libx264"]},
+                        },
+                    },
+                )
+            )
+            too_many = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "start_render",
+                        "arguments": {
+                            **base_arguments,
+                            "consumer_properties": {
+                                f"option_{index}": index for index in range(51)
+                            },
+                        },
+                    },
+                )
+            )
+            invalid_name = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "start_render",
+                        "arguments": {
+                            **base_arguments,
+                            "consumer_properties": {"bad option": "value"},
+                        },
+                    },
+                )
+            )
+            valid = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "start_render",
+                        "arguments": {
+                            **base_arguments,
+                            "consumer_properties": {
+                                "vcodec": "libx264",
+                                "bf": 3,
+                                "movflags": True,
+                            },
+                        },
+                    },
+                )
+            )
+
+        for response in (invalid_value, too_many, invalid_name):
+            self.assertEqual(response["error"]["code"], -32602)
+        self.assertFalse(valid["result"]["isError"])
 
     def test_cancellation_notification_reaches_an_inflight_tool(self) -> None:
         started = threading.Event()
@@ -275,7 +544,62 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertEqual(track_kind["description"], "Track kind.")
         render_status = by_name["render_status"]["outputSchema"]["properties"]
         self.assertEqual(render_status["progress_percent"]["type"], ["number", "null"])
-        self.assertEqual(render_status["log_tail"]["type"], "string")
+        self.assertEqual(render_status["log_tail"]["type"], ["string", "null"])
+        inspect_schema = by_name["inspect_project"]["outputSchema"]
+        self.assertIn("tracks", inspect_schema["required"])
+        track_schema = inspect_schema["properties"]["tracks"]["items"]
+        self.assertEqual(track_schema["properties"]["track_id"]["type"], "string")
+        self.assertEqual(
+            track_schema["properties"]["items"]["items"]["properties"]["item_index"][
+                "type"
+            ],
+            "integer",
+        )
+        self.assertEqual(
+            inspect_schema["properties"]["filters"]["items"]["properties"]["filter_id"][
+                "type"
+            ],
+            ["string", "null"],
+        )
+        marker_schema = inspect_schema["properties"]["markers"]["items"]
+        self.assertIn(
+            "exclusive",
+            marker_schema["properties"]["end_frame"]["description"].lower(),
+        )
+        self.assertTrue(schema_errors([42], inspect_schema["properties"]["tracks"]))
+
+        with tempfile.TemporaryDirectory() as directory:
+            document = ProjectDocument.new(
+                Path(directory) / "schema.mlt",
+                width=1920,
+                height=1080,
+                fps_num=30,
+                fps_den=1,
+                title="Output schema",
+            )
+            self.assertEqual(schema_errors(document.snapshot(), inspect_schema), [])
+
+    def test_revision_descriptions_match_each_tool_contract(self) -> None:
+        by_name = {tool["name"]: tool for tool in TOOLS}
+        plan = by_name["plan_project_edit"]["inputSchema"]["properties"][
+            "expected_revision"
+        ]["description"]
+        edit = by_name["edit_project"]["inputSchema"]["properties"][
+            "expected_revision"
+        ]["description"]
+        chapters = by_name["export_marker_chapters"]["inputSchema"]["properties"][
+            "expected_revision"
+        ]["description"]
+        restore = by_name["restore_project_backup"]["inputSchema"]["properties"][
+            "expected_revision"
+        ]["description"]
+
+        self.assertIn("required", plan.lower())
+        self.assertIn("force is not supported", plan.lower())
+        for description in (edit, restore):
+            self.assertIn("unless force=true", description.lower())
+        self.assertIn("optional", chapters.lower())
+        self.assertNotIn("force", chapters.lower())
 
     def test_capabilities_can_describe_one_operation_in_full(self) -> None:
         response = handle_request(
@@ -287,14 +611,158 @@ class ProtocolNegotiationTests(unittest.TestCase):
                 },
             )
         )
-        operation = response["result"]["structuredContent"]["operations"]["trim_item"]
+        focused = response["result"]["structuredContent"]
+        self.assertEqual(
+            set(focused),
+            {"operations", "transaction_guarantees"},
+        )
+        operation = focused["operations"]["trim_item"]
         self.assertEqual(operation["schema"]["properties"]["delta"]["type"], "integer")
         self.assertEqual(operation["example"]["op"], "trim_item")
-        guidance = handle_request(
+        full = handle_request(
             request("tools/call", {"name": "shotcut_capabilities", "arguments": {}})
-        )["result"]["structuredContent"]["feature_guidance"]
+        )["result"]["structuredContent"]
+        output_schema = next(
+            tool["outputSchema"]
+            for tool in TOOLS
+            if tool["name"] == "shotcut_capabilities"
+        )
+        self.assertEqual(schema_errors(focused, output_schema), [])
+        self.assertEqual(schema_errors(full, output_schema), [])
+        guidance = full["feature_guidance"]
+        self.assertIn("compatibility", full)
+        self.assertIn("render_presets", full)
+        self.assertIn("workflow", full)
         self.assertIn("duplicate_item", guidance["edit_primitives"])
         self.assertIn("render_status", guidance["progress"])
+
+    def test_marker_operation_schema_explains_exclusive_end(self) -> None:
+        response = handle_request(
+            request(
+                "tools/call",
+                {
+                    "name": "shotcut_capabilities",
+                    "arguments": {"operation": "add_marker"},
+                },
+            )
+        )
+        description = response["result"]["structuredContent"]["operations"][
+            "add_marker"
+        ]["schema"]["properties"]["end_frame"]["description"].lower()
+        self.assertIn("exclusive", description)
+        self.assertIn("point marker", description)
+        self.assertIn("greater than or equal", description)
+
+    def test_focused_operation_schemas_express_local_runtime_constraints(self) -> None:
+        cases = (
+            ("update_marker", {"op": "update_marker", "marker_id": "0"}),
+            (
+                "set_clip_speed",
+                {
+                    "op": "set_clip_speed",
+                    "track": "V1",
+                    "item_index": 0,
+                    "speed": 0,
+                },
+            ),
+            (
+                "trim_item",
+                {"op": "trim_item", "track": "V1", "item_index": 0, "delta": 0},
+            ),
+        )
+        for operation_name, operation in cases:
+            with self.subTest(operation=operation_name):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "shotcut_capabilities",
+                            "arguments": {"operation": operation_name},
+                        },
+                    )
+                )
+                schema = response["result"]["structuredContent"]["operations"][
+                    operation_name
+                ]["schema"]
+                self.assertTrue(schema_errors(operation, schema))
+
+    def test_output_schemas_describe_stable_fields_and_nested_collections(self) -> None:
+        def assert_nested_shapes(schema: object, path: str) -> None:
+            if isinstance(schema, list):
+                for index, child in enumerate(schema):
+                    assert_nested_shapes(child, f"{path}[{index}]")
+                return
+            if not isinstance(schema, dict):
+                return
+            child_types = schema.get("type")
+            types = child_types if isinstance(child_types, list) else [child_types]
+            if "array" in types:
+                self.assertIn("items", schema, path)
+            if "object" in types:
+                self.assertTrue(
+                    isinstance(schema.get("properties"), dict)
+                    or isinstance(schema.get("additionalProperties"), dict),
+                    path,
+                )
+            for name, child in schema.items():
+                assert_nested_shapes(child, f"{path}.{name}")
+
+        for tool in TOOLS:
+            with self.subTest(tool=tool["name"]):
+                schema = tool["outputSchema"]
+                properties = schema["properties"]
+                self.assertTrue(properties)
+                self.assertTrue(schema.get("required"))
+                self.assertTrue(set(schema["required"]).issubset(properties))
+                assert_nested_shapes(schema, tool["name"])
+
+    def test_validate_project_output_schema_matches_clean_result(self) -> None:
+        by_name = {tool["name"]: tool for tool in TOOLS}
+        schema = by_name["validate_project"]["outputSchema"]
+        with tempfile.TemporaryDirectory() as directory:
+            document = ProjectDocument.new(
+                Path(directory) / "project.mlt",
+                width=1920,
+                height=1080,
+                fps_num=30,
+                fps_den=1,
+                title="Output contract",
+            )
+            payload = {
+                "project": document.snapshot(),
+                "valid": True,
+                "return_code": 0,
+                "diagnostic": None,
+            }
+
+        self.assertEqual(schema_errors(payload, schema), [])
+        self.assertNotIn("validator", schema["properties"])
+        self.assertEqual(schema["properties"]["diagnostic"]["type"], ["string", "null"])
+
+    def test_create_project_result_matches_its_published_output_schema(self) -> None:
+        schema = next(
+            tool["outputSchema"] for tool in TOOLS if tool["name"] == "create_project"
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={
+                    "valid": True,
+                    "return_code": 0,
+                    "diagnostic": None,
+                },
+            ),
+        ):
+            payload = create_project(
+                {
+                    "project_path": str(Path(directory) / "project.mlt"),
+                    "tracks": [{"kind": "audio", "name": "Narration"}],
+                }
+            )
+
+        self.assertIn("track_id", payload["operation_results"][0])
+        self.assertEqual(schema_errors(payload, schema), [])
 
     def test_every_advertised_operation_has_a_complete_query_contract(self) -> None:
         self.assertEqual(set(OPERATION_EXAMPLES), set(OPERATION_CATALOG))
