@@ -1,5 +1,9 @@
 # Contributing
 
+Start with the [architecture overview](docs/architecture.md) for the repository layout and module
+responsibilities, and consult the [behavioral specification](docs/spec.md) for compatibility
+boundaries and verified behavior.
+
 - Support Python 3.10 or newer and use only the standard library at runtime.
 - Keep MCP stdout strictly newline-delimited UTF-8 JSON-RPC; diagnostics belong on stderr.
 - Treat an MLT project as user data: write atomically, keep backups, and preserve unknown XML.

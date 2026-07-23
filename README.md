@@ -15,9 +15,6 @@
 
 </div>
 
-> **Download:** MCPB-compatible clients can install the packaged server from the
-> [latest GitHub release](https://github.com/matrodrigs/shotcut-mcp/releases/latest).
-
 Shotcut MCP is a local [Model Context Protocol](https://modelcontextprotocol.io/) server for
 working with [Shotcut](https://www.shotcut.org/) projects stored as MLT XML. It gives an AI client
 structured tools for timeline editing while preserving Shotcut-specific project data.
@@ -63,6 +60,9 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 
 ## Quick start
 
+> **MCPB package:** compatible clients can install the
+> [latest packaged release](https://github.com/matrodrigs/shotcut-mcp/releases/latest).
+
 ### Requirements
 
 - Python 3.10 or newer
@@ -73,20 +73,8 @@ The current compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The
 is exercised on Windows; executable discovery also supports binaries available on `PATH` and common
 macOS locations.
 
-The stdio server negotiates MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`.
-Legacy clients receive only fields defined by their negotiated schema; structured tool output is
-included from `2025-06-18` onward.
-
-Clients that provide an MCP progress token receive strictly increasing progress notifications for
-longer synchronous work. `start_render` returns after starting its durable supervisor, so later
-render progress and ETA are deliberately reported by `render_status`, not by the completed request.
-
-The MCP performs a short, cached MLT repository preflight before validation, preview and render
-operations. This absorbs one-time cold module loading after a Windows install or portable
-extraction without disabling any MLT services or changing the Shotcut environment.
-`shotcut_doctor` separately verifies Shotcut/MLT versions and both RNNoise service forms because a
-successful repository preflight alone does not prove that RNNoise loaded. On MLT 7.40, the `link`
-form is preferred because it avoids the audio delay documented by MLT.
+Additional compatibility and runtime behavior, including progress, MLT startup, and RNNoise
+checks, are documented in the [behavioral specification](docs/spec.md).
 
 ### 1. Clone the repository
 
@@ -189,17 +177,12 @@ flowchart LR
 
 Every project edit uses the following safeguards:
 
-- Optimistic concurrency with a SHA-256 project revision
-- A per-project `.shotcut-mcp.lock` file
-- MLT validation of the temporary project before replacement
-- Per-project backup namespaces below `.shotcut-mcp/backups`
-- Atomic replacement only after validation succeeds
-- Retention of the 20 most recent backups per project
-- Preservation of unknown XML elements, attributes, and properties
-- Rejection of ambiguous third-party transition layouts and ambiguous basename relinks
-- Authorization of embedded media, timewarp, proxy, luma, and filter resources through the same
-  canonical allowed-root/network policy used for tool paths
-- Bounded project input, child-process output, render logs, history pages, search roots, and previews
+- SHA-256 revision checks and a per-project `.shotcut-mcp.lock`
+- Temporary-file MLT validation, an on-disk revision recheck, an isolated backup, and atomic replace
+- Retention of the 20 most recent backups in a project-specific namespace
+- Preservation of unknown XML and rejection of ambiguous transitions or basename relinks
+- One canonical allowed-root/network policy for tool paths and embedded project resources
+- Bounded project input, process output, render logs, history, searches, and previews
 
 Existing preview and render outputs are also protected: output is written to a temporary sibling,
 the target is checked again for concurrent changes, and promotion is atomic. A dedicated render
@@ -236,29 +219,14 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | `list_project_backups` | List retained project backups and revisions |
 | `restore_project_backup` | Validate and atomically restore a selected backup |
 
-### `edit_project` operations
+### Editing contract
 
-| Group | Operations |
-| --- | --- |
-| Tracks | `add_track`, `remove_track`, `update_track`, `move_track` |
-| Media and generators | `add_clip`, `duplicate_item`, `replace_item_media`, `add_generator`, `relink_media` |
-| Timeline | `remove_item`, `trim_item`, `roll_edit`, `slip_item`, `slide_item`, `split_item`, `move_item`, `insert_gap`, `remove_range` |
-| Speed | `set_clip_speed`, `set_clip_speed_map` |
-| Transitions | `add_transition`, `remove_transition` |
-| Filters | `add_filter`, `update_filter`, `move_filter`, `remove_filter` |
-| Metadata and color | `set_notes`, `add_marker`, `update_marker`, `remove_marker`, `set_profile`, `set_color_workflow` |
-| Subtitles | `set_subtitle_track`, `remove_subtitle_track` |
-
-`shotcut_capabilities` is the runtime source of truth for the accepted fields of each operation.
-Omit `operation` to receive the catalog, render presets, compatibility, and workflow guidance. Pass
-one operation name to receive only its complete schema, example, and the transaction guarantees.
-Both `plan_project_edit` and `edit_project` validate every operation against that same focused
-schema before loading or mutating the project, so unknown fields and missing required fields fail
-as invalid MCP parameters.
-
-For `add_marker` and `update_marker`, `end_frame` is exclusive. A value equal to `start_frame`
-creates a point marker; otherwise it must be greater than `start_frame`, and a range covers
-`start_frame` through `end_frame - 1`.
+- Query `shotcut_capabilities` for the complete catalog or one operation's schema and example.
+- `plan_project_edit` and `edit_project` enforce those same schemas before touching the project.
+- Inspect first and pass the returned `revision` as `expected_revision`; never retry a conflict
+  with `force` unless the user explicitly authorizes it.
+- Shotcut marker `end_frame` values are exclusive; equality with `start_frame` creates a point
+  marker.
 
 ### Transaction example
 
@@ -291,33 +259,21 @@ creates a point marker; otherwise it must be greater than `start_frame`, and a r
 }
 ```
 
-The `edit_project` input contract requires either `expected_revision` or an explicitly authorized
-`force: true`. The normal workflow always uses the revision returned by `inspect_project`; do not
-retry a revision conflict with `force`. `restore_project_backup` uses the same revision guard.
-`plan_project_edit` always requires `expected_revision` and does not accept `force`;
-`export_marker_chapters` accepts the revision optionally and checks it when supplied.
+`restore_project_backup` uses the same revision guard as `edit_project`. Exact requirements for
+planning, chapter export, and every operation remain discoverable through the published schemas.
 
 ## Rendering
 
-Built-in presets are provided for common delivery and intermediate formats:
+| Use | Presets |
+| --- | --- |
+| Delivery | `h264-high`, `h264-web`, `hevc`, `av1` |
+| HDR delivery | `hdr-hlg-hevc`, `hdr-pq-hevc` |
+| Intermediate | `prores`, `dnxhd` |
+| Audio | `audio-flac`, `audio-mp3` |
 
-- `h264-high`
-- `h264-web`
-- `hevc`
-- `hdr-hlg-hevc`
-- `hdr-pq-hevc`
-- `av1`
-- `prores`
-- `dnxhd`
-- `audio-flac`
-- `audio-mp3`
-
-The HDR presets use verified 10-bit software-encoder combinations; they do not claim display-HDR
-preview or hardware HDR10 metadata support. Advanced callers can supply up to 50 native
-`avformat` consumer properties with valid MLT names and scalar values. Those properties come from
-a safe single-file allowlist by default. Arbitrary properties, sidecar formats, and path-bearing
-options are rejected unless an administrator explicitly enables them. Codec and hardware
-availability still depend on the local Shotcut/FFmpeg build.
+HDR presets use verified 10-bit software encoders; codec and hardware availability still depend on
+the local build. Advanced callers may supply up to 50 scalar `avformat` properties from the safe
+single-file allowlist. Arbitrary or sidecar-producing properties require administrator opt-in.
 
 `start_render` accepts exactly one range mode: omit all range fields for the full project, supply
 both `in_frame` and `out_frame` as inclusive bounds, or supply one `marker_id` returned by
@@ -349,37 +305,9 @@ Network resources and unsafe consumer properties are denied by default. These va
 administrator policies: tools cannot override them per request. `shotcut_status` and
 `shotcut_doctor` report the active policy.
 
-## Project structure
-
-```text
-shotcut-mcp/
-├── .codex-plugin/plugin.json   # Codex plugin manifest
-├── .github/workflows/          # Cross-platform CI and verified registry publishing
-├── scripts/                    # Stdio entry point and release metadata checks
-├── shotcut_mcp/
-│   ├── media.py                # Cached FFprobe inspection and summaries
-│   ├── missing_media.py        # Bounded missing-resource search and scoring
-│   ├── mlt_xml.py              # Shared MLT XML primitive decoding
-│   ├── path_policy.py          # Canonical path and network-resource policy
-│   ├── platform.py             # Public Shotcut/MLT orchestration interface
-│   ├── processes.py            # Executable discovery and process supervision
-│   ├── project.py              # Transactional project workflow
-│   ├── project_document.py     # Structure-preserving MLT document model
-│   ├── project_snapshot.py     # Read-only MCP project projection
-│   ├── protocol.py             # Schema validation, cancellation, and progress context
-│   ├── render.py               # Public render-job interface
-│   ├── render_jobs.py          # Durable private job store
-│   ├── render_worker.py        # Restart-resilient render supervisor
-│   ├── server.py               # Concurrent JSON-RPC/MCP stdio transport
-│   ├── storage.py              # Locks, backups, and atomic output transactions
-│   └── tools.py                # Tool schemas and handlers
-├── tests/                      # Focused unit and real Shotcut integration tests
-└── docs/spec.md                # Behavioral and compatibility specification
-```
-
 ## Development
 
-Runtime code uses only the Python standard library. Development checks use Ruff and Mypy.
+Runtime code uses only the Python standard library. Run the local quality gate with:
 
 ```bash
 python -m ruff format --check .
@@ -389,32 +317,11 @@ python scripts/check_release.py
 python -m unittest discover -s tests -v
 ```
 
-Release tags are accepted only after the exact tagged commit has completed the full `main` CI
-matrix successfully. See [CONTRIBUTING.md](CONTRIBUTING.md) for the verified publishing sequence.
-
-Run the real Shotcut integration test explicitly:
-
-**Windows PowerShell**
-
-```powershell
-$env:SHOTCUT_MCP_INTEGRATION = "1"
-python -m unittest discover -s tests -v
-```
-
-**macOS or Linux**
-
-```bash
-SHOTCUT_MCP_INTEGRATION=1 python -m unittest discover -s tests -v
-```
-
-The integration test creates media, analyzes source quality, builds a two-clip timeline with a
-crossfade and title track, validates it through Melt, renders a PNG preview, and exports an H.264
-range.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [CHANGELOG.md](CHANGELOG.md)
-for release changes. For bugs or feature requests, use
-[GitHub Issues](https://github.com/matrodrigs/shotcut-mcp/issues); report vulnerabilities through
-the private process in [SECURITY.md](SECURITY.md).
+Real Shotcut integration is opt-in through `SHOTCUT_MCP_INTEGRATION=1`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development and verified release procedures, and
+[CHANGELOG.md](CHANGELOG.md) for release changes. Use
+[GitHub Issues](https://github.com/matrodrigs/shotcut-mcp/issues) for bugs or feature requests and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ## Limitations
 
