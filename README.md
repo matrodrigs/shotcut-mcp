@@ -11,7 +11,7 @@
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-active-39e6ca.svg)](https://registry.modelcontextprotocol.io/?search=io.github.matrodrigs%2Fshotcut-mcp)
 [![Project website](https://img.shields.io/badge/website-GitHub_Pages-39e6ca.svg)](https://matrodrigs.github.io/shotcut-mcp/)
 
-[Quick start](#quick-start) · [Features](#features) · [Tools](#mcp-tools) · [Safety](#transactional-safety) · [Development](#development)
+[Demo](#demonstration) · [Quick start](#quick-start) · [Features](#features) · [Tools](#mcp-tools) · [Safety](#transactional-safety) · [Development](#development)
 
 </div>
 
@@ -29,6 +29,12 @@ provides Melt, FFmpeg, FFprobe, codecs, filters, and render services.
 > [!NOTE]
 > This is an independent community project. It is not affiliated with or endorsed by Shotcut or
 > the MLT project.
+
+## Demonstration
+
+A short H.264 export created from a native Shotcut timeline edited through Shotcut MCP.
+
+https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 
 ## Why use it?
 

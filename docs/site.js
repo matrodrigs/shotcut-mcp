@@ -99,23 +99,31 @@
     });
   });
 
-  const timeline = document.querySelector("[data-timeline]");
-  const timelineInput = document.querySelector("[data-timeline-input]");
-  const timelineTime = document.querySelector("[data-timeline-time]");
+  const demoVideo = document.querySelector("[data-demo-video]");
+  const demoStatus = document.querySelector("[data-demo-status]");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  const updateTimeline = () => {
-    if (!timeline || !timelineInput) return;
-    const min = Number(timelineInput.min);
-    const max = Number(timelineInput.max);
-    const value = Number(timelineInput.value);
-    const progress = ((value - min) / (max - min)) * 100;
-    timeline.style.setProperty("--progress", `${progress}%`);
-    if (timelineTime) timelineTime.textContent = `00:${String(value).padStart(2, "0")}`;
+  const updateDemoStatus = () => {
+    if (!demoVideo || !demoStatus) return;
+    const state = demoVideo.ended ? "finished" : demoVideo.paused ? "paused" : "playing";
+    demoStatus.textContent = state === "finished" ? "Finished" : state === "paused" ? "Paused" : "Playing";
+    demoStatus.closest(".demo-status")?.setAttribute("data-demo-state", state);
   };
 
-  timelineInput?.addEventListener("input", updateTimeline);
-  timelineInput?.addEventListener("pointerdown", () => timeline?.classList.add("is-scrubbing"));
-  timelineInput?.addEventListener("pointerup", () => timeline?.classList.remove("is-scrubbing"));
-  timelineInput?.addEventListener("pointercancel", () => timeline?.classList.remove("is-scrubbing"));
-  updateTimeline();
+  const applyDemoMotionPreference = () => {
+    if (!demoVideo) return;
+    if (reducedMotion.matches) {
+      demoVideo.pause();
+      updateDemoStatus();
+      return;
+    }
+
+    demoVideo.play().catch(updateDemoStatus);
+  };
+
+  demoVideo?.addEventListener("play", updateDemoStatus);
+  demoVideo?.addEventListener("pause", updateDemoStatus);
+  demoVideo?.addEventListener("ended", updateDemoStatus);
+  reducedMotion.addEventListener?.("change", applyDemoMotionPreference);
+  applyDemoMotionPreference();
 })();

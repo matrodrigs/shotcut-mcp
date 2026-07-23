@@ -97,48 +97,39 @@
           </dl>
         </div>
 
-        <div class="product-demo" aria-label="Interactive example of a Shotcut MCP editing transaction">
+        <figure class="product-demo" aria-labelledby="demo-title">
           <div class="demo-toolbar">
             <div class="demo-window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
-            <p>documentary.mlt</p>
-            <span class="demo-status"><i aria-hidden="true"></i> Ready</span>
+            <p>shotcut-mcp-demo.mp4</p>
+            <span class="demo-status" data-demo-state="ready"><i aria-hidden="true"></i><span data-demo-status>Ready</span></span>
           </div>
 
-          <div class="demo-prompt">
-            <span class="demo-label">Request</span>
-            <p>Trim the pauses on V1, add an opening title, and render a preview at 00:27.</p>
+          <div class="demo-video-shell">
+            <video
+              class="demo-video"
+              controls
+              loop
+              muted
+              playsinline
+              preload="metadata"
+              poster="./assets/shotcut-mcp-demo-poster.jpg"
+              data-demo-video
+              aria-label="Shotcut MCP demonstration: Look Again"
+            >
+              <source src="./assets/shotcut-mcp-demo.mp4" type="video/mp4">
+              Your browser does not support embedded video.
+              <a href="./assets/shotcut-mcp-demo.mp4">Download the Shotcut MCP demonstration.</a>
+            </video>
           </div>
 
-          <div class="timeline" data-timeline style="--progress: 60%">
-            <div class="timeline-ruler" aria-hidden="true">
-              <span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span>
+          <figcaption class="demo-caption">
+            <div>
+              <strong id="demo-title">Shotcut MCP demonstration</strong>
+              <span>Native timeline edit to H.264 export</span>
             </div>
-            <div class="timeline-track">
-              <b>V2</b>
-              <div class="track-lane track-lane-title"><span class="clip clip-title">Opening title</span></div>
-            </div>
-            <div class="timeline-track">
-              <b>V1</b>
-              <div class="track-lane track-lane-video"><span class="clip clip-a">Intro.mov</span><span class="clip clip-b">B-roll.mp4</span></div>
-            </div>
-            <div class="timeline-track">
-              <b>A1</b>
-              <div class="track-lane"><span class="clip clip-audio" aria-label="Audio waveform"></span></div>
-            </div>
-            <div class="playhead" aria-hidden="true"><span></span></div>
-            <input class="timeline-input" id="timeline-scrubber" type="range" min="0" max="45" value="27" step="1" aria-label="Scrub the example timeline" data-timeline-input>
-          </div>
-
-          <div class="demo-result">
-            <div><span class="result-check" aria-hidden="true">✓</span><p><strong>7 operations applied</strong><small>revision 7c92… → b18a…</small></p></div>
-            <div><span class="result-check" aria-hidden="true">✓</span><p><strong>Validated with Melt</strong><small>backup retained</small></p></div>
-          </div>
-
-          <div class="demo-footer">
-            <span>Native .mlt output</span>
-            <output for="timeline-scrubber" data-timeline-time>00:27</output>
-          </div>
-        </div>
+            <span class="demo-duration">00:27</span>
+          </figcaption>
+        </figure>
       </div>
     </section>
 
