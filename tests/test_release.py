@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -86,6 +87,12 @@ class ReleaseBundleTests(unittest.TestCase):
         advertised = {tool["name"]: tool["description"] for tool in manifest["tools"]}
         runtime = {tool["name"]: tool["description"] for tool in TOOLS}
         self.assertEqual(advertised, runtime)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        tools_section = readme.split("## MCP tools", 1)[1].split("\n## ", 1)[0]
+        documented = set(
+            re.findall(r"^\| `([a-z][a-z0-9_]*)` \|", tools_section, re.MULTILINE)
+        )
+        self.assertEqual(documented, set(runtime))
         site = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
         self.assertIn(f"<dt>{len(TOOLS)}</dt><dd>MCP tools</dd>", site)
         self.assertIn(f"See all {len(TOOLS)} MCP tools", site)

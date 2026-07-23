@@ -5,9 +5,67 @@ from __future__ import annotations
 import ast
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _runtime_tool_catalog() -> dict[str, str]:
+    """Load the same public tool catalog served to MCP clients."""
+
+    sys.path.insert(0, str(ROOT))
+    try:
+        from shotcut_mcp.tools import TOOLS
+    finally:
+        del sys.path[0]
+    catalog: dict[str, str] = {}
+    for entry in TOOLS:
+        name = entry.get("name")
+        description = entry.get("description")
+        if not isinstance(name, str) or not isinstance(description, str):
+            raise RuntimeError("Tool names and descriptions must be strings")
+        if name in catalog:
+            raise RuntimeError(f"Duplicate runtime tool name: {name}")
+        catalog[name] = description
+    return catalog
+
+
+def _manifest_tool_catalog(entries: object) -> dict[str, str]:
+    """Validate and normalize the manifest's public tool declaration."""
+
+    if not isinstance(entries, list):
+        raise RuntimeError("manifest.json tools must be an array")
+    catalog: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("Every manifest tool must be an object")
+        name = entry.get("name")
+        description = entry.get("description")
+        if not isinstance(name, str) or not isinstance(description, str):
+            raise RuntimeError(
+                "Every manifest tool requires string name and description fields"
+            )
+        if name in catalog:
+            raise RuntimeError(f"Duplicate manifest tool name: {name}")
+        catalog[name] = description
+    return catalog
+
+
+def _readme_tool_names(source: str) -> set[str]:
+    """Read tool names from the human-facing MCP tool table."""
+
+    marker = "## MCP tools"
+    if marker not in source:
+        raise RuntimeError("README.md is missing the MCP tools section")
+    section = source.split(marker, 1)[1].split("\n## ", 1)[0]
+    documented = re.findall(r"^\| `([a-z][a-z0-9_]*)` \|", section, re.MULTILINE)
+    if not documented:
+        raise RuntimeError("README.md MCP tools table is empty")
+    names = set(documented)
+    if len(names) != len(documented):
+        raise RuntimeError("README.md MCP tools table contains duplicate names")
+    return names
 
 
 def package_version() -> str:
@@ -35,17 +93,39 @@ def main() -> int:
             "manifest.json version does not match shotcut_mcp.__version__"
         )
 
-    source = (ROOT / "shotcut_mcp" / "tools.py").read_text(encoding="utf-8")
-    catalog_names = set(
-        re.findall(r'^\s*"name": "([a-z][a-z0-9_]*)",$', source, re.MULTILINE)
-    )
-    manifest_names = {tool.get("name") for tool in manifest.get("tools", [])}
-    if catalog_names != manifest_names:
-        missing = sorted(catalog_names - manifest_names)
-        extra = sorted(manifest_names - catalog_names)
-        raise RuntimeError(
-            f"manifest tool catalog mismatch; missing={missing}, extra={extra}"
+    runtime_catalog = _runtime_tool_catalog()
+    manifest_catalog = _manifest_tool_catalog(manifest.get("tools"))
+    if runtime_catalog != manifest_catalog:
+        runtime_names = set(runtime_catalog)
+        manifest_names = set(manifest_catalog)
+        missing = sorted(runtime_names - manifest_names)
+        extra = sorted(manifest_names - runtime_names)
+        changed = sorted(
+            name
+            for name in runtime_names & manifest_names
+            if runtime_catalog[name] != manifest_catalog[name]
         )
+        raise RuntimeError(
+            "manifest tool catalog mismatch; "
+            f"missing={missing}, extra={extra}, changed={changed}"
+        )
+
+    readme_names = _readme_tool_names((ROOT / "README.md").read_text(encoding="utf-8"))
+    runtime_names = set(runtime_catalog)
+    if runtime_names != readme_names:
+        missing = sorted(runtime_names - readme_names)
+        extra = sorted(readme_names - runtime_names)
+        raise RuntimeError(
+            f"README tool catalog mismatch; missing={missing}, extra={extra}"
+        )
+
+    site = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+    count = len(runtime_catalog)
+    if (
+        f"<dt>{count}</dt><dd>MCP tools</dd>" not in site
+        or f"See all {count} MCP tools" not in site
+    ):
+        raise RuntimeError("site MCP tool count does not match the runtime catalog")
 
     package = server["packages"][0]
     server_version = server["version"]

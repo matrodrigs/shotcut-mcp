@@ -10,7 +10,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shotcut_mcp.errors import ConflictError, RequestCancelled
+from shotcut_mcp.errors import ConflictError, RequestCancelled, ToolError
+from shotcut_mcp.project import ProjectDocument
 from shotcut_mcp.protocol import cancellation_requested
 from shotcut_mcp.server import (
     HANDLERS,
@@ -311,6 +312,24 @@ class ProtocolNegotiationTests(unittest.TestCase):
                 details = response["result"]["structuredContent"]["operations"][name]
                 self.assertEqual(details["example"]["op"], name)
                 self.assertFalse(details["schema"]["additionalProperties"])
+
+    def test_every_advertised_operation_reaches_the_document_dispatcher(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in OPERATION_CATALOG:
+                with self.subTest(operation=name):
+                    document = ProjectDocument.new(
+                        root / f"{name}.mlt",
+                        width=1920,
+                        height=1080,
+                        fps_num=30,
+                        fps_den=1,
+                        title="Contract test",
+                    )
+                    try:
+                        document.apply_operation({"op": name})
+                    except ToolError as exc:
+                        self.assertNotIn("Unknown operation", str(exc))
 
     def test_conflicts_return_structured_recovery_context(self) -> None:
         def conflict(_arguments: dict[str, object]) -> dict[str, object]:
