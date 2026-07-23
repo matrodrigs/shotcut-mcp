@@ -4,6 +4,7 @@
   const header = document.querySelector("[data-site-header]");
   const menuToggle = document.querySelector("[data-menu-toggle]");
   const siteNav = document.querySelector("[data-site-nav]");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   const setMenuOpen = (open) => {
     if (!header || !menuToggle) return;
@@ -51,6 +52,72 @@
   desktopQuery.addEventListener?.("change", (event) => {
     if (event.matches) setMenuOpen(false);
   });
+
+  const initializeOneShotMotion = ({
+    targets,
+    pendingClass,
+    visibleClass,
+    threshold,
+    rootMargin,
+  }) => {
+    const elements = [...targets].filter(Boolean);
+    let observer = null;
+
+    const complete = (target) => {
+      target.classList.remove(pendingClass);
+      target.classList.add(visibleClass);
+      observer?.unobserve(target);
+    };
+
+    const completeAll = () => {
+      observer?.disconnect();
+      observer = null;
+      elements.forEach(complete);
+    };
+
+    if (!elements.length || reducedMotion.matches || !("IntersectionObserver" in window)) {
+      completeAll();
+      return completeAll;
+    }
+
+    elements.forEach((target) => target.classList.add(pendingClass));
+    observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) complete(entry.target);
+      });
+    }, { threshold, rootMargin });
+    elements.forEach((target) => observer.observe(target));
+
+    return completeAll;
+  };
+
+  const completeWorkflowMotion = initializeOneShotMotion({
+    targets: document.querySelectorAll("[data-workflow-sequence] > li"),
+    pendingClass: "is-workflow-pending",
+    visibleClass: "is-workflow-visible",
+    threshold: 0.45,
+    rootMargin: "0px 0px -8% 0px",
+  });
+  const completeSafetyMotion = initializeOneShotMotion({
+    targets: [document.querySelector("[data-flow-sequence]")],
+    pendingClass: "is-flow-pending",
+    visibleClass: "is-flow-visible",
+    threshold: 0.35,
+    rootMargin: "0px 0px -8% 0px",
+  });
+  const completeTerminalMotion = initializeOneShotMotion({
+    targets: [document.querySelector("[data-terminal-sequence]")],
+    pendingClass: "is-terminal-pending",
+    visibleClass: "is-terminal-visible",
+    threshold: 0.35,
+    rootMargin: "0px 0px -8% 0px",
+  });
+
+  const completeScrollMotion = () => {
+    completeWorkflowMotion();
+    completeSafetyMotion();
+    completeTerminalMotion();
+  };
 
   const writeClipboard = async (text) => {
     if (navigator.clipboard && window.isSecureContext) {
@@ -106,7 +173,8 @@
   const demoSound = document.querySelector("[data-demo-sound]");
   const demoSoundLabel = document.querySelector("[data-demo-sound-label]");
   const demoShell = demoVideo?.closest(".demo-video-shell");
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let demoInView = !("IntersectionObserver" in window);
+  let demoPausedByUser = false;
 
   if (demoVideo && demoPlay && demoShell) {
     demoVideo.controls = false;
@@ -136,8 +204,10 @@
   const toggleDemoPlayback = () => {
     if (!demoVideo) return;
     if (demoVideo.paused) {
+      demoPausedByUser = false;
       demoVideo.play().catch(updateDemoStatus);
     } else {
+      demoPausedByUser = true;
       demoVideo.pause();
     }
   };
@@ -150,14 +220,32 @@
 
   const applyDemoMotionPreference = () => {
     if (!demoVideo) return;
-    if (reducedMotion.matches) {
+    if (reducedMotion.matches || !demoInView) {
       demoVideo.pause();
       updateDemoStatus();
       return;
     }
 
-    demoVideo.play().catch(updateDemoStatus);
+    if (!demoPausedByUser) {
+      demoVideo.play().catch(updateDemoStatus);
+    } else {
+      updateDemoStatus();
+    }
   };
+
+  if (demoVideo && "IntersectionObserver" in window) {
+    const demoVisibilityObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        demoInView = entry.isIntersecting && entry.intersectionRatio >= 0.35;
+        applyDemoMotionPreference();
+      });
+    }, {
+      threshold: [0, 0.35, 1],
+    });
+    demoVisibilityObserver.observe(demoVideo);
+  } else {
+    applyDemoMotionPreference();
+  }
 
   demoVideo?.addEventListener("play", updateDemoStatus);
   demoVideo?.addEventListener("pause", updateDemoStatus);
@@ -165,10 +253,14 @@
   demoVideo?.addEventListener("click", toggleDemoPlayback);
   demoPlay?.addEventListener("click", toggleDemoPlayback);
   demoSound?.addEventListener("click", toggleDemoSound);
+  const handleMotionPreference = () => {
+    if (reducedMotion.matches) completeScrollMotion();
+    applyDemoMotionPreference();
+  };
+
   if (typeof reducedMotion.addEventListener === "function") {
-    reducedMotion.addEventListener("change", applyDemoMotionPreference);
+    reducedMotion.addEventListener("change", handleMotionPreference);
   } else {
-    reducedMotion.addListener?.(applyDemoMotionPreference);
+    reducedMotion.addListener?.(handleMotionPreference);
   }
-  applyDemoMotionPreference();
 })();

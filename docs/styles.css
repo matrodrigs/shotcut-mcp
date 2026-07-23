@@ -30,8 +30,14 @@
   --radius-sm: 0.5rem;
   --radius-md: 0.875rem;
   --radius-lg: 1.25rem;
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-flow: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --duration-flow: 900ms;
+  --stagger-flow: 80ms;
+  --duration-workflow: 720ms;
+  --duration-terminal: 420ms;
+  --stagger-terminal: 80ms;
 }
 
 * {
@@ -553,7 +559,7 @@ summary:active {
   .demo-video-shell.has-custom-controls .demo-controls {
     opacity: 1;
     transform: translateY(0);
-    transition: opacity 120ms ease, transform 120ms ease;
+    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
   }
 
   .demo-video-shell.has-custom-controls.is-playing:not(:hover):not(:has(:focus-visible)) .demo-controls {
@@ -757,6 +763,7 @@ summary:active {
 }
 
 .process-list li {
+  position: relative;
   min-height: 152px;
   display: grid;
   grid-template-columns: 5rem minmax(0, 1fr) minmax(13rem, 0.48fr);
@@ -766,11 +773,46 @@ summary:active {
   border-top: 1px solid var(--line);
 }
 
+.process-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 1px;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(90deg, var(--brand-bright), var(--brand-line) 58%, transparent);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.process-list li.is-workflow-visible::before {
+  opacity: 1;
+  transform: scaleX(1);
+  transition:
+    opacity 160ms ease,
+    transform var(--duration-workflow) var(--ease-flow);
+}
+
 .step-number {
   align-self: start;
   padding-top: 0.3rem;
   color: var(--brand-bright);
   font: 0.72rem ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.process-list li.is-workflow-pending .step-number {
+  opacity: 0.28;
+  transform: translateX(-0.35rem);
+}
+
+.process-list li.is-workflow-visible .step-number {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 360ms var(--ease-flow),
+    transform 360ms var(--ease-flow);
 }
 
 .process-list h3,
@@ -818,12 +860,21 @@ summary:active {
   font-size: 0.84rem;
   font-weight: 720;
   text-decoration: none;
-  transition: color 120ms ease, gap 160ms var(--ease-out), transform 90ms ease;
+  transition: color 120ms ease, transform 90ms ease;
 }
 
 .text-link:hover {
-  gap: 0.7rem;
   color: var(--text);
+}
+
+.text-link span {
+  transition: transform 160ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .text-link:hover span {
+    transform: translateX(0.2rem);
+  }
 }
 
 .safety-copy .text-link {
@@ -845,6 +896,16 @@ summary:active {
   bottom: 1rem;
   width: 1px;
   background: var(--line-strong);
+  transform: scaleY(1);
+  transform-origin: top;
+}
+
+.safety-pipeline.is-flow-pending::before {
+  transform: scaleY(0);
+}
+
+.safety-pipeline.is-flow-visible::before {
+  transition: transform var(--duration-flow) var(--ease-flow);
 }
 
 .safety-pipeline li {
@@ -868,6 +929,35 @@ summary:active {
   background: var(--success);
   font: 0.68rem ui-monospace, SFMono-Regular, Consolas, monospace;
   font-weight: 850;
+}
+
+.safety-pipeline.is-flow-pending li > span {
+  opacity: 0.18;
+  transform: scale(0.76);
+}
+
+.safety-pipeline.is-flow-visible li > span {
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    opacity 360ms var(--ease-flow) var(--flow-delay, 0ms),
+    transform 360ms var(--ease-flow) var(--flow-delay, 0ms);
+}
+
+.safety-pipeline li:nth-child(2) > span {
+  --flow-delay: var(--stagger-flow);
+}
+
+.safety-pipeline li:nth-child(3) > span {
+  --flow-delay: 160ms;
+}
+
+.safety-pipeline li:nth-child(4) > span {
+  --flow-delay: 240ms;
+}
+
+.safety-pipeline li:nth-child(5) > span {
+  --flow-delay: 320ms;
 }
 
 .safety-pipeline div {
@@ -1075,6 +1165,27 @@ summary:active {
   position: absolute;
   left: 0;
   color: var(--attention);
+}
+
+[data-terminal-sequence].is-terminal-pending .command {
+  opacity: 0.18;
+  transform: translateX(0.4rem);
+}
+
+[data-terminal-sequence].is-terminal-visible .command {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity var(--duration-terminal) var(--ease-flow) var(--terminal-delay, 0ms),
+    transform var(--duration-terminal) var(--ease-flow) var(--terminal-delay, 0ms);
+}
+
+[data-terminal-sequence] .command:nth-child(2) {
+  --terminal-delay: var(--stagger-terminal);
+}
+
+[data-terminal-sequence] .command:nth-child(3) {
+  --terminal-delay: 160ms;
 }
 
 .platform-details {
@@ -1701,7 +1812,9 @@ details[open]::details-content {
     animation-iteration-count: 1 !important;
   }
 
-  .demo-controls {
+  .demo-controls,
+  .safety-pipeline li > span,
+  [data-terminal-sequence] .command {
     transition-delay: 0s !important;
   }
 }
