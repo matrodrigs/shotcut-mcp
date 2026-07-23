@@ -36,6 +36,111 @@ def request(
     return message
 
 
+class SchemaValidationTests(unittest.TestCase):
+    def test_object_errors_preserve_keyword_and_property_order(self) -> None:
+        schema = {
+            "type": "object",
+            "minProperties": 3,
+            "required": ["missing"],
+            "propertyNames": {"type": "string", "pattern": "^[a-z]+$"},
+            "properties": {
+                "Bad name": {"type": "integer", "minimum": 1},
+            },
+            "additionalProperties": False,
+        }
+
+        self.assertEqual(
+            schema_errors({"Bad name": 0, "extra": "value"}, schema),
+            [
+                "$ must contain at least 3 properties.",
+                "$.missing is required.",
+                "$ property 'Bad name' does not match the required pattern.",
+                "$.Bad name must be at least 1.",
+                "$.extra is not allowed.",
+            ],
+        )
+
+    def test_array_errors_preserve_bounds_before_item_errors(self) -> None:
+        schema = {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 1,
+            "items": {"type": "integer", "minimum": 5},
+        }
+
+        self.assertEqual(
+            schema_errors(["value", 4], schema, "$.items"),
+            [
+                "$.items must contain at least 3 items.",
+                "$.items must contain at most 1 items.",
+                "$.items[0] must be of type integer.",
+                "$.items[1] must be at least 5.",
+            ],
+        )
+
+    def test_string_and_numeric_keywords_keep_their_existing_messages(self) -> None:
+        self.assertEqual(
+            schema_errors(
+                "x",
+                {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 0,
+                    "pattern": "^z",
+                },
+            ),
+            [
+                "$ must contain at least 2 characters.",
+                "$ must contain at most 0 characters.",
+                "$ does not match the required pattern.",
+            ],
+        )
+        self.assertEqual(
+            schema_errors(4, {"type": "integer", "minimum": 5, "maximum": 3}),
+            ["$ must be at least 5.", "$ must be at most 3."],
+        )
+
+    def test_composition_errors_preserve_alternative_details(self) -> None:
+        self.assertEqual(
+            schema_errors(
+                False,
+                {
+                    "anyOf": [
+                        {"type": "integer"},
+                        {"type": "string"},
+                    ]
+                },
+                "$.choice",
+            ),
+            [
+                "$.choice must match at least one schema in anyOf: "
+                "$.choice must be of type integer. OR "
+                "$.choice must be of type string."
+            ],
+        )
+        self.assertEqual(
+            schema_errors(
+                4,
+                {
+                    "oneOf": [
+                        {"type": "integer"},
+                        {"type": "number"},
+                    ]
+                },
+            ),
+            ["$ matches 2 schemas in oneOf; exactly one is required."],
+        )
+
+    def test_type_union_keeps_boolean_distinct_from_integer(self) -> None:
+        schema = {"type": ["integer", "null"]}
+
+        self.assertEqual(schema_errors(None, schema), [])
+        self.assertEqual(
+            schema_errors(True, schema),
+            ["$ must be of type ['integer', 'null']."],
+        )
+
+
 class ProtocolValidationTests(unittest.TestCase):
     def test_invalid_jsonrpc_envelope_is_rejected(self) -> None:
         response = handle_request({"jsonrpc": "1.0", "id": 1, "method": "ping"})

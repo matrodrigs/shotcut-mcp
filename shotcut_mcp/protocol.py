@@ -102,129 +102,154 @@ def _matches_type(value: Any, expected: str) -> bool:
     return True
 
 
-def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
+def _object_schema_errors(
+    value: dict[Any, Any], schema: dict[str, Any], path: str
+) -> list[str]:
     errors: list[str] = []
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    minimum_properties = schema.get("minProperties")
+    maximum_properties = schema.get("maxProperties")
+    if isinstance(minimum_properties, int) and len(value) < minimum_properties:
+        errors.append(f"{path} must contain at least {minimum_properties} properties.")
+    if isinstance(maximum_properties, int) and len(value) > maximum_properties:
+        errors.append(f"{path} must contain at most {maximum_properties} properties.")
+    if isinstance(required, list):
+        errors.extend(
+            f"{path}.{name} is required."
+            for name in required
+            if isinstance(name, str) and name not in value
+        )
+    property_names = schema.get("propertyNames")
+    if isinstance(properties, dict):
+        for name, item in value.items():
+            if isinstance(property_names, dict):
+                errors.extend(
+                    schema_errors(
+                        name,
+                        property_names,
+                        f"{path} property {name!r}",
+                    )
+                )
+            child_schema = properties.get(name)
+            if isinstance(child_schema, dict):
+                errors.extend(schema_errors(item, child_schema, f"{path}.{name}"))
+            elif schema.get("additionalProperties") is False:
+                errors.append(f"{path}.{name} is not allowed.")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                errors.extend(
+                    schema_errors(
+                        item,
+                        schema["additionalProperties"],
+                        f"{path}.{name}",
+                    )
+                )
+    return errors
+
+
+def _array_schema_errors(
+    value: list[Any], schema: dict[str, Any], path: str
+) -> list[str]:
+    errors: list[str] = []
+    minimum_items = schema.get("minItems")
+    maximum_items = schema.get("maxItems")
+    if isinstance(minimum_items, int) and len(value) < minimum_items:
+        errors.append(f"{path} must contain at least {minimum_items} items.")
+    if isinstance(maximum_items, int) and len(value) > maximum_items:
+        errors.append(f"{path} must contain at most {maximum_items} items.")
+    item_schema = schema.get("items")
+    if isinstance(item_schema, dict):
+        for index, item in enumerate(value):
+            errors.extend(schema_errors(item, item_schema, f"{path}[{index}]"))
+    return errors
+
+
+def _string_schema_errors(value: str, schema: dict[str, Any], path: str) -> list[str]:
+    errors: list[str] = []
+    minimum_length = schema.get("minLength")
+    maximum_length = schema.get("maxLength")
+    if isinstance(minimum_length, int) and len(value) < minimum_length:
+        errors.append(f"{path} must contain at least {minimum_length} characters.")
+    if isinstance(maximum_length, int) and len(value) > maximum_length:
+        errors.append(f"{path} must contain at most {maximum_length} characters.")
+    pattern = schema.get("pattern")
+    if isinstance(pattern, str) and re.search(pattern, value) is None:
+        errors.append(f"{path} does not match the required pattern.")
+    return errors
+
+
+def _number_schema_errors(
+    value: int | float, schema: dict[str, Any], path: str
+) -> list[str]:
+    errors: list[str] = []
+    minimum = schema.get("minimum")
+    maximum = schema.get("maximum")
+    if isinstance(minimum, (int, float)) and value < minimum:
+        errors.append(f"{path} must be at least {minimum}.")
+    if isinstance(maximum, (int, float)) and value > maximum:
+        errors.append(f"{path} must be at most {maximum}.")
+    return errors
+
+
+def _alternative_errors(value: Any, alternatives: object, path: str) -> list[list[str]]:
+    if not isinstance(alternatives, list):
+        return []
+    return [
+        schema_errors(value, alternative, path)
+        for alternative in alternatives
+        if isinstance(alternative, dict)
+    ]
+
+
+def _composition_schema_errors(
+    value: Any, schema: dict[str, Any], path: str
+) -> list[str]:
+    errors: list[str] = []
+    alternatives = _alternative_errors(value, schema.get("anyOf"), path)
+    if alternatives and all(alternative_errors for alternative_errors in alternatives):
+        details = " OR ".join(
+            "; ".join(alternative_errors) for alternative_errors in alternatives
+        )
+        errors.append(f"{path} must match at least one schema in anyOf: {details}")
+
+    alternatives = _alternative_errors(value, schema.get("oneOf"), path)
+    matches = sum(not alternative_errors for alternative_errors in alternatives)
+    if alternatives and matches != 1:
+        if matches == 0:
+            details = " OR ".join(
+                "; ".join(alternative_errors) for alternative_errors in alternatives
+            )
+            errors.append(f"{path} must match exactly one schema in oneOf: {details}")
+        else:
+            errors.append(
+                f"{path} matches {matches} schemas in oneOf; exactly one is required."
+            )
+    return errors
+
+
+def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
+    """Return violations from the JSON Schema subset published by this server."""
+
     expected = schema.get("type")
     expected_types = expected if isinstance(expected, list) else [expected]
     if expected and not any(
         isinstance(item, str) and _matches_type(value, item) for item in expected_types
     ):
-        errors.append(f"{path} must be of type {expected}.")
-        return errors
+        return [f"{path} must be of type {expected}."]
 
+    errors: list[str] = []
     allowed = schema.get("enum")
     if isinstance(allowed, list) and value not in allowed:
         errors.append(f"{path} must be one of {allowed!r}.")
 
     if isinstance(value, dict):
-        properties = schema.get("properties", {})
-        required = schema.get("required", [])
-        minimum_properties = schema.get("minProperties")
-        maximum_properties = schema.get("maxProperties")
-        if isinstance(minimum_properties, int) and len(value) < minimum_properties:
-            errors.append(
-                f"{path} must contain at least {minimum_properties} properties."
-            )
-        if isinstance(maximum_properties, int) and len(value) > maximum_properties:
-            errors.append(
-                f"{path} must contain at most {maximum_properties} properties."
-            )
-        if isinstance(required, list):
-            errors.extend(
-                f"{path}.{name} is required."
-                for name in required
-                if isinstance(name, str) and name not in value
-            )
-        property_names = schema.get("propertyNames")
-        if isinstance(properties, dict):
-            for name, item in value.items():
-                if isinstance(property_names, dict):
-                    errors.extend(
-                        schema_errors(
-                            name,
-                            property_names,
-                            f"{path} property {name!r}",
-                        )
-                    )
-                child_schema = properties.get(name)
-                if isinstance(child_schema, dict):
-                    errors.extend(schema_errors(item, child_schema, f"{path}.{name}"))
-                elif schema.get("additionalProperties") is False:
-                    errors.append(f"{path}.{name} is not allowed.")
-                elif isinstance(schema.get("additionalProperties"), dict):
-                    errors.extend(
-                        schema_errors(
-                            item,
-                            schema["additionalProperties"],
-                            f"{path}.{name}",
-                        )
-                    )
+        errors.extend(_object_schema_errors(value, schema, path))
+    elif isinstance(value, list):
+        errors.extend(_array_schema_errors(value, schema, path))
+    elif isinstance(value, str):
+        errors.extend(_string_schema_errors(value, schema, path))
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        errors.extend(_number_schema_errors(value, schema, path))
 
-    if isinstance(value, list):
-        minimum_items = schema.get("minItems")
-        maximum_items = schema.get("maxItems")
-        if isinstance(minimum_items, int) and len(value) < minimum_items:
-            errors.append(f"{path} must contain at least {minimum_items} items.")
-        if isinstance(maximum_items, int) and len(value) > maximum_items:
-            errors.append(f"{path} must contain at most {maximum_items} items.")
-        item_schema = schema.get("items")
-        if isinstance(item_schema, dict):
-            for index, item in enumerate(value):
-                errors.extend(schema_errors(item, item_schema, f"{path}[{index}]"))
-
-    if isinstance(value, str):
-        minimum_length = schema.get("minLength")
-        maximum_length = schema.get("maxLength")
-        if isinstance(minimum_length, int) and len(value) < minimum_length:
-            errors.append(f"{path} must contain at least {minimum_length} characters.")
-        if isinstance(maximum_length, int) and len(value) > maximum_length:
-            errors.append(f"{path} must contain at most {maximum_length} characters.")
-        pattern = schema.get("pattern")
-        if isinstance(pattern, str) and re.search(pattern, value) is None:
-            errors.append(f"{path} does not match the required pattern.")
-
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        minimum = schema.get("minimum")
-        maximum = schema.get("maximum")
-        if isinstance(minimum, (int, float)) and value < minimum:
-            errors.append(f"{path} must be at least {minimum}.")
-        if isinstance(maximum, (int, float)) and value > maximum:
-            errors.append(f"{path} must be at most {maximum}.")
-
-    any_of = schema.get("anyOf")
-    if isinstance(any_of, list):
-        alternatives = [
-            schema_errors(value, alternative, path)
-            for alternative in any_of
-            if isinstance(alternative, dict)
-        ]
-        if alternatives and all(
-            alternative_errors for alternative_errors in alternatives
-        ):
-            details = " OR ".join(
-                "; ".join(alternative_errors) for alternative_errors in alternatives
-            )
-            errors.append(f"{path} must match at least one schema in anyOf: {details}")
-
-    one_of = schema.get("oneOf")
-    if isinstance(one_of, list):
-        alternatives = [
-            schema_errors(value, alternative, path)
-            for alternative in one_of
-            if isinstance(alternative, dict)
-        ]
-        matches = sum(not alternative_errors for alternative_errors in alternatives)
-        if alternatives and matches != 1:
-            if matches == 0:
-                details = " OR ".join(
-                    "; ".join(alternative_errors) for alternative_errors in alternatives
-                )
-                errors.append(
-                    f"{path} must match exactly one schema in oneOf: {details}"
-                )
-            else:
-                errors.append(
-                    f"{path} matches {matches} schemas in oneOf; exactly one is required."
-                )
-
+    errors.extend(_composition_schema_errors(value, schema, path))
     return errors
