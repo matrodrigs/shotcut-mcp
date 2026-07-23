@@ -23,6 +23,8 @@
 
 - Retry transient Windows sharing violations when atomically updating render-job state, and record
   supervisor initialization failures instead of leaving jobs stuck as running.
+- Compare Windows media paths canonically, wait for durable render-job states in lifecycle tests,
+  and block releases unless the exact tagged `main` commit has passed CI.
 
 ## 1.2.0 (2026-07-22)
 

@@ -83,4 +83,5 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   bounded process/log output, render history/ETA, orphan cleanup and security policies.
 - Real ffmpeg/ffprobe/melt integration covering multitrack creation, editing, validation,
   preview, media-quality analysis, range rendering, and final render.
-- Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI.
+- Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI. Release tags
+  must point to a `main` commit whose exact SHA completed that CI successfully.

@@ -7,8 +7,10 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.build_release import ROOT, build_release, package_members
+from scripts.require_green_ci import require_green_ci
 from shotcut_mcp.tools import TOOLS
 
 
@@ -101,6 +103,55 @@ class ReleaseBundleTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "must be X.Y.Z"),
         ):
             build_release("next", Path(directory))
+
+
+class ReleaseCiGateTests(unittest.TestCase):
+    def test_successful_main_push_ci_allows_release(self) -> None:
+        runs = [
+            {
+                "databaseId": 1,
+                "headBranch": "feature",
+                "status": "completed",
+                "conclusion": "success",
+                "createdAt": "2026-07-22T12:00:00Z",
+            },
+            {
+                "databaseId": 2,
+                "headBranch": "main",
+                "status": "completed",
+                "conclusion": "success",
+                "createdAt": "2026-07-22T13:00:00Z",
+                "url": "https://github.example/actions/runs/2",
+            },
+        ]
+        with patch("scripts.require_green_ci._list_ci_runs", return_value=runs):
+            run = require_green_ci("owner/repository", "a" * 40, timeout_seconds=0)
+
+        self.assertEqual(run["databaseId"], 2)
+
+    def test_failed_main_push_ci_blocks_release(self) -> None:
+        runs = [
+            {
+                "databaseId": 3,
+                "headBranch": "main",
+                "status": "completed",
+                "conclusion": "failure",
+                "createdAt": "2026-07-22T13:00:00Z",
+                "url": "https://github.example/actions/runs/3",
+            }
+        ]
+        with (
+            patch("scripts.require_green_ci._list_ci_runs", return_value=runs),
+            self.assertRaisesRegex(RuntimeError, "concluded failure"),
+        ):
+            require_green_ci("owner/repository", "b" * 40, timeout_seconds=0)
+
+    def test_missing_main_push_ci_blocks_release(self) -> None:
+        with (
+            patch("scripts.require_green_ci._list_ci_runs", return_value=[]),
+            self.assertRaisesRegex(RuntimeError, "latest state: not found"),
+        ):
+            require_green_ci("owner/repository", "c" * 40, timeout_seconds=0)
 
 
 if __name__ == "__main__":

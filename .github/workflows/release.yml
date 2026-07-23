@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      actions: read
       contents: write
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -66,6 +67,14 @@ jobs:
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI for tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/require_green_ci.py \
+            "$GITHUB_REPOSITORY" \
+            "$(git rev-parse HEAD)"
 
       - name: Install pinned quality tools
         run: python -m pip install --disable-pip-version-check ruff==0.15.22 mypy==2.3.0

@@ -365,6 +365,9 @@ python -m mypy
 python -m unittest discover -s tests -v
 ```
 
+Release tags are accepted only after the exact tagged commit has completed the full `main` CI
+matrix successfully. See [CONTRIBUTING.md](CONTRIBUTING.md) for the verified publishing sequence.
+
 Run the real Shotcut integration test explicitly:
 
 **Windows PowerShell**

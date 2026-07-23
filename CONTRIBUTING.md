@@ -19,19 +19,22 @@
 1. Update `shotcut_mcp.__version__` and `manifest.json` to the same `X.Y.Z` version.
 2. Close the matching `CHANGELOG.md` section with its release date and commit the changes to
    `main`.
-3. Create and push an annotated `vX.Y.Z` tag that points to that commit:
+3. Wait for the complete `CI` workflow on that exact `main` commit to succeed.
+4. Create and push an annotated `vX.Y.Z` tag that points to that commit:
 
    ```bash
    git tag -a vX.Y.Z -m "Shotcut MCP X.Y.Z"
    git push origin vX.Y.Z
    ```
 
-The tag workflow runs the full static and unit checks, builds a deterministic MCPB from a strict
-runtime allowlist, uploads it with its SHA-256 checksum to a draft release, downloads and verifies
-the remote artifact, and then publishes the release. It directly invokes the reusable Registry
-workflow because GitHub does not emit recursive workflow runs for releases created with the
-repository token. After Registry publication succeeds, it records the published URL and checksum
-in `server.json` on `main`.
+The tag workflow first requires a successful `main` push CI run for the exact tagged commit. It
+then repeats the full static and unit checks, builds a deterministic MCPB from a strict runtime
+allowlist, uploads it with its SHA-256 checksum to a draft release, downloads and verifies the
+remote artifact, and publishes the release. It directly invokes the reusable Registry workflow
+because GitHub does not emit recursive workflow runs for releases created with the repository
+token. After Registry publication succeeds, it records the published URL and checksum in
+`server.json` on `main`.
 
 The same workflow can be dispatched manually for an existing, unpublished `vX.Y.Z` tag. It never
-creates a release from an untagged commit and refuses tags whose commit is not contained in `main`.
+creates a release from an untagged commit and refuses tags whose commit is not contained in `main`
+or lacks a successful CI run for that SHA.
