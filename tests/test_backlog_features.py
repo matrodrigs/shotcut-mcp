@@ -405,7 +405,9 @@ class BacklogProjectFeatureTests(unittest.TestCase):
                 ["volume", "brightness"],
             )
             self.assertEqual(items[0]["caption"], "New take")
-            self.assertEqual(items[0]["resource"], str(replacement).replace("\\", "/"))
+            self.assertEqual(
+                Path(items[0]["resource"]).resolve(), replacement.resolve()
+            )
             marker = changed["project"]["markers"][0]
             self.assertEqual(marker["marker_id"], marker_id)
             self.assertEqual(marker["start_frame"], 60)

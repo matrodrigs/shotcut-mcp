@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,6 +204,21 @@ class RenderJobPersistenceTests(unittest.TestCase):
 
 class RenderLifecycleTests(unittest.TestCase):
     @staticmethod
+    def _wait_for_status(
+        job_id: str, expected: str, timeout: float = 15
+    ) -> dict[str, object]:
+        deadline = time.monotonic() + timeout
+        latest = render_status(job_id)
+        while (
+            latest["status"] != expected
+            and latest["status"] not in render_jobs_module.TERMINAL_STATUSES
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.05)
+            latest = render_status(job_id)
+        return latest
+
+    @staticmethod
     def _start_with_python_renderer(
         renderer_path: Path, output_path: Path
     ) -> dict[str, object]:
@@ -269,8 +285,7 @@ class RenderLifecycleTests(unittest.TestCase):
                 active = render_status(str(job["job_id"]))
                 self.assertIn(active["status"], {"queued", "running", "completed"})
 
-                worker.wait(timeout=15)
-                status = render_status(str(job["job_id"]))
+                status = self._wait_for_status(str(job["job_id"]), "completed")
                 self.assertTrue(output_path.is_file())
                 self.assertEqual(status["status"], "completed")
             finally:
@@ -292,8 +307,7 @@ class RenderLifecycleTests(unittest.TestCase):
                 requested = cancel_render(str(job["job_id"]))
                 if requested["status"] != "cancelled":
                     self.assertTrue(requested.get("cancellation_requested"))
-                worker.wait(timeout=15)
-                cancelled = render_status(str(job["job_id"]))
+                cancelled = self._wait_for_status(str(job["job_id"]), "cancelled")
 
                 self.assertEqual(cancelled["status"], "cancelled")
                 self.assertFalse(output_path.exists())
