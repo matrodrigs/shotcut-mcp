@@ -11,6 +11,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -163,6 +164,107 @@ def _tool_error_payload(exc: ToolError) -> dict[str, Any]:
     return payload
 
 
+def _handle_initialize(
+    message: dict[str, Any],
+    session: ProtocolSession,
+    request_id: Any,
+) -> dict[str, Any]:
+    if session.enforce_lifecycle and session.initialized:
+        return _error(request_id, -32600, "Server is already initialized.")
+    raw_params = message.get("params")
+    if not isinstance(raw_params, dict):
+        return _error(request_id, -32602, "Invalid initialize parameters.")
+    requested = raw_params.get("protocolVersion")
+    if not isinstance(requested, str):
+        return _error(request_id, -32602, "protocolVersion must be a string.")
+    protocol = (
+        requested
+        if requested in SUPPORTED_PROTOCOL_VERSIONS
+        else LATEST_PROTOCOL_VERSION
+    )
+    session.protocol_version = protocol
+    session.initialized = True
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "protocolVersion": protocol,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": SERVER_NAME, "version": __version__},
+            "instructions": SERVER_INSTRUCTIONS,
+        },
+    }
+
+
+def _handle_tool_call(
+    message: dict[str, Any],
+    session: ProtocolSession,
+    request_id: Any,
+    progress_callback: Callable[[Any, float, float | None, str | None], None] | None,
+) -> dict[str, Any]:
+    call_params = message.get("params")
+    if not isinstance(call_params, dict):
+        return _error(request_id, -32602, "Invalid parameters.")
+    name = call_params.get("name")
+    handler = HANDLERS.get(name) if isinstance(name, str) else None
+    if handler is None:
+        return _error(request_id, -32602, f"Unknown tool: {name}")
+    arguments = call_params.get("arguments", {})
+    if not isinstance(arguments, dict):
+        return _error(request_id, -32602, "Tool arguments must be an object.")
+    raw_meta = call_params.get("_meta", {})
+    if not isinstance(raw_meta, dict):
+        return _error(request_id, -32602, "Tool _meta must be an object.")
+    progress_token = raw_meta.get("progressToken")
+    if "progressToken" in raw_meta and (
+        isinstance(progress_token, bool) or not isinstance(progress_token, (str, int))
+    ):
+        return _error(
+            request_id,
+            -32602,
+            "_meta.progressToken must be a string or integer.",
+        )
+    tool = next(item for item in TOOLS if item["name"] == name)
+    validation_errors = schema_errors(arguments, tool["inputSchema"])
+    if validation_errors:
+        return _error(
+            request_id,
+            -32602,
+            "Tool arguments do not match inputSchema.",
+            {"validationErrors": validation_errors},
+        )
+    try:
+        reporter = (
+            (
+                lambda progress, total, progress_message: progress_callback(
+                    progress_token, progress, total, progress_message
+                )
+            )
+            if progress_callback is not None and progress_token is not None
+            else None
+        )
+        with request_progress(reporter):
+            payload = handler(arguments)
+        result = _tool_result(payload, session.protocol_version, tool_name=name)
+    except RequestCancelled as exc:
+        return _error(request_id, -32800, str(exc) or "Request cancelled.")
+    except ToolError as exc:
+        result = _tool_result(
+            _tool_error_payload(exc),
+            session.protocol_version,
+            True,
+            name,
+        )
+    except Exception as exc:  # Keep the long-running stdio server alive.
+        print(f"Unexpected error in {name}: {exc!r}", file=sys.stderr, flush=True)
+        result = _tool_result(
+            {"error": f"Unexpected internal failure: {type(exc).__name__}: {exc}"},
+            session.protocol_version,
+            True,
+        )
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
 def handle_request(
     message: dict[str, Any],
     session: ProtocolSession | None = None,
@@ -189,32 +291,7 @@ def handle_request(
     ):
         return _error(request_id, -32002, "Server is not initialized.")
     if method == "initialize":
-        if active_session.enforce_lifecycle and active_session.initialized:
-            return _error(request_id, -32600, "Server is already initialized.")
-        raw_params = message.get("params")
-        if not isinstance(raw_params, dict):
-            return _error(request_id, -32602, "Invalid initialize parameters.")
-        params: dict[str, Any] = raw_params
-        requested = params.get("protocolVersion")
-        if not isinstance(requested, str):
-            return _error(request_id, -32602, "protocolVersion must be a string.")
-        protocol = (
-            requested
-            if requested in SUPPORTED_PROTOCOL_VERSIONS
-            else LATEST_PROTOCOL_VERSION
-        )
-        active_session.protocol_version = protocol
-        active_session.initialized = True
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "protocolVersion": protocol,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": SERVER_NAME, "version": __version__},
-                "instructions": SERVER_INSTRUCTIONS,
-            },
-        }
+        return _handle_initialize(message, active_session, request_id)
     if method in {"ping", "logging/setLevel"}:
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "tools/list":
@@ -227,70 +304,12 @@ def handle_request(
             "result": {"tools": _tools_for_version(active_session.protocol_version)},
         }
     if method == "tools/call":
-        call_params = message.get("params")
-        if not isinstance(call_params, dict):
-            return _error(request_id, -32602, "Invalid parameters.")
-        name = call_params.get("name")
-        handler = HANDLERS.get(name) if isinstance(name, str) else None
-        if handler is None:
-            return _error(request_id, -32602, f"Unknown tool: {name}")
-        arguments = call_params.get("arguments", {})
-        if not isinstance(arguments, dict):
-            return _error(request_id, -32602, "Tool arguments must be an object.")
-        raw_meta = call_params.get("_meta", {})
-        if not isinstance(raw_meta, dict):
-            return _error(request_id, -32602, "Tool _meta must be an object.")
-        progress_token = raw_meta.get("progressToken")
-        if "progressToken" in raw_meta and (
-            isinstance(progress_token, bool)
-            or not isinstance(progress_token, (str, int))
-        ):
-            return _error(
-                request_id,
-                -32602,
-                "_meta.progressToken must be a string or integer.",
-            )
-        tool = next(item for item in TOOLS if item["name"] == name)
-        validation_errors = schema_errors(arguments, tool["inputSchema"])
-        if validation_errors:
-            return _error(
-                request_id,
-                -32602,
-                "Tool arguments do not match inputSchema.",
-                {"validationErrors": validation_errors},
-            )
-        try:
-            reporter = (
-                (
-                    lambda progress, total, progress_message: progress_callback(
-                        progress_token, progress, total, progress_message
-                    )
-                )
-                if progress_callback is not None and progress_token is not None
-                else None
-            )
-            with request_progress(reporter):
-                payload = handler(arguments)
-            result = _tool_result(
-                payload, active_session.protocol_version, tool_name=name
-            )
-        except RequestCancelled as exc:
-            return _error(request_id, -32800, str(exc) or "Request cancelled.")
-        except ToolError as exc:
-            result = _tool_result(
-                _tool_error_payload(exc),
-                active_session.protocol_version,
-                True,
-                name,
-            )
-        except Exception as exc:  # Keep the long-running stdio server alive.
-            print(f"Unexpected error in {name}: {exc!r}", file=sys.stderr, flush=True)
-            result = _tool_result(
-                {"error": f"Unexpected internal failure: {type(exc).__name__}: {exc}"},
-                active_session.protocol_version,
-                True,
-            )
-        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+        return _handle_tool_call(
+            message,
+            active_session,
+            request_id,
+            progress_callback,
+        )
     return {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -340,21 +359,32 @@ def _message_size_limit() -> int:
     return max(1_024, min(16_777_216, configured))
 
 
-def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
-    session = ProtocolSession(enforce_lifecycle=True)
-    output_lock = threading.Lock()
-    pending_lock = threading.Lock()
-    pending: dict[
-        str | int | None, tuple[Future[Any], threading.Event, str | int | None]
-    ] = {}
-    active_progress_tokens: set[str | int] = set()
-    executor = ThreadPoolExecutor(
-        max_workers=_worker_count(), thread_name_prefix="shotcut-mcp"
-    )
-    pending_limit = _pending_limit()
-    message_size_limit = _message_size_limit()
+class _StdioRuntime:
+    """Own one stdio session's lifecycle, concurrency, and output serialization."""
 
-    def send_progress(
+    def __init__(self, output_stream: BinaryIO) -> None:
+        self.session = ProtocolSession(enforce_lifecycle=True)
+        self.output_stream = output_stream
+        self.output_lock = threading.Lock()
+        self.pending_lock = threading.Lock()
+        self.pending: dict[
+            str | int | None,
+            tuple[Future[Any], threading.Event, str | int | None],
+        ] = {}
+        self.active_progress_tokens: set[str | int] = set()
+        self.executor = ThreadPoolExecutor(
+            max_workers=_worker_count(), thread_name_prefix="shotcut-mcp"
+        )
+        self.pending_limit = _pending_limit()
+
+    def write(self, message: Any) -> None:
+        write_message(message, self.output_stream, self.output_lock)
+
+    def close(self) -> None:
+        self.executor.shutdown(wait=True, cancel_futures=False)
+
+    def _send_progress(
+        self,
         progress_token: Any,
         progress: float,
         total: float | None,
@@ -366,23 +396,21 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
         }
         if total is not None:
             params["total"] = total
-        if message and session.protocol_version != "2024-11-05":
+        if message and self.session.protocol_version != "2024-11-05":
             params["message"] = message
-        write_message(
+        self.write(
             {
                 "jsonrpc": "2.0",
                 "method": "notifications/progress",
                 "params": params,
-            },
-            output_stream,
-            output_lock,
+            }
         )
 
-    def complete(request_id: str | int | None, future: Future[Any]) -> None:
-        with pending_lock:
-            item = pending.pop(request_id, None)
+    def _complete(self, request_id: str | int | None, future: Future[Any]) -> None:
+        with self.pending_lock:
+            item = self.pending.pop(request_id, None)
             if item is not None and item[2] is not None:
-                active_progress_tokens.discard(item[2])
+                self.active_progress_tokens.discard(item[2])
         if future.cancelled():
             response = _error(request_id, -32800, "Request cancelled.")
         else:
@@ -398,14 +426,118 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 )
                 response = _error(request_id, -32603, "Internal error.")
         if response is not None:
-            write_message(response, output_stream, output_lock)
+            self.write(response)
 
-    def execute(
-        message: dict[str, Any], cancellation: threading.Event
+    def _execute(
+        self, message: dict[str, Any], cancellation: threading.Event
     ) -> dict[str, Any] | None:
         with request_cancellation(cancellation):
-            return handle_request(message, session, send_progress)
+            return handle_request(message, self.session, self._send_progress)
 
+    def _dispatch_batch(self, messages: list[Any]) -> None:
+        if not messages or self.session.protocol_version != "2025-03-26":
+            self.write(_error(None, -32600, "JSON-RPC batching is not supported."))
+            return
+        if len(messages) > self.pending_limit:
+            self.write(
+                _error(None, -32000, "JSON-RPC batch exceeds the request limit.")
+            )
+            return
+        batch_responses = [
+            handle_request(item, self.session, self._send_progress)
+            if isinstance(item, dict)
+            else _error(None, -32600, "Invalid Request in batch.")
+            for item in messages
+        ]
+        visible = [item for item in batch_responses if item is not None]
+        if visible:
+            self.write(visible)
+
+    def _cancel_notification(self, message: dict[str, Any]) -> bool:
+        if message.get("method") != "notifications/cancelled" or "id" in message:
+            return False
+        params = message.get("params")
+        request_id = params.get("requestId") if isinstance(params, dict) else None
+        with self.pending_lock:
+            item = self.pending.get(request_id)
+        if item is not None:
+            future, cancellation, _ = item
+            cancellation.set()
+            future.cancel()
+        return True
+
+    @staticmethod
+    def _progress_token(message: dict[str, Any]) -> str | int | None:
+        call_params = message.get("params")
+        raw_meta = call_params.get("_meta") if isinstance(call_params, dict) else None
+        raw_token = (
+            raw_meta.get("progressToken") if isinstance(raw_meta, dict) else None
+        )
+        return (
+            raw_token
+            if not isinstance(raw_token, bool) and isinstance(raw_token, (str, int))
+            else None
+        )
+
+    def _schedule_tool_call(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        if isinstance(request_id, bool) or not isinstance(
+            request_id, (str, int, type(None))
+        ):
+            self.write(_error(None, -32600, "Invalid Request: invalid id."))
+            return
+        progress_token = self._progress_token(message)
+        with self.pending_lock:
+            duplicate = request_id in self.pending
+            overloaded = len(self.pending) >= self.pending_limit
+            duplicate_progress = (
+                progress_token is not None
+                and progress_token in self.active_progress_tokens
+            )
+        if duplicate:
+            self.write(_error(request_id, -32600, "Duplicate in-flight request id."))
+            return
+        if overloaded:
+            self.write(_error(request_id, -32000, "Too many in-flight requests."))
+            return
+        if duplicate_progress:
+            self.write(
+                _error(
+                    request_id,
+                    -32602,
+                    "progressToken is already active on another request.",
+                )
+            )
+            return
+
+        cancellation = threading.Event()
+        future = self.executor.submit(self._execute, message, cancellation)
+        with self.pending_lock:
+            self.pending[request_id] = (future, cancellation, progress_token)
+            if progress_token is not None:
+                self.active_progress_tokens.add(progress_token)
+        future.add_done_callback(partial(self._complete, request_id))
+
+    def dispatch(self, message: Any) -> None:
+        if isinstance(message, list):
+            self._dispatch_batch(message)
+            return
+        if not isinstance(message, dict):
+            self.write(_error(None, -32600, "Invalid Request: expected a JSON object."))
+            return
+        if self._cancel_notification(message):
+            return
+        if message.get("method") == "tools/call" and "id" in message:
+            self._schedule_tool_call(message)
+            return
+        response = handle_request(message, self.session, self._send_progress)
+        if response is not None:
+            self.write(response)
+
+
+def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
+    runtime = _StdioRuntime(output_stream)
+    message_size_limit = _message_size_limit()
     try:
         while True:
             raw_line = input_stream.readline(message_size_limit + 1)
@@ -414,12 +546,10 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
             if len(raw_line) > message_size_limit:
                 while raw_line and not raw_line.endswith(b"\n"):
                     raw_line = input_stream.readline(message_size_limit + 1)
-                write_message(
+                runtime.write(
                     _error(
                         None, -32600, "MCP message exceeds the configured size limit."
-                    ),
-                    output_stream,
-                    output_lock,
+                    )
                 )
                 continue
             if not raw_line.strip():
@@ -427,144 +557,11 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
             try:
                 message = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                write_message(
-                    _error(None, -32700, f"Invalid JSON: {exc}"),
-                    output_stream,
-                    output_lock,
-                )
+                runtime.write(_error(None, -32700, f"Invalid JSON: {exc}"))
                 continue
-            if isinstance(message, list):
-                if not message or session.protocol_version != "2025-03-26":
-                    write_message(
-                        _error(None, -32600, "JSON-RPC batching is not supported."),
-                        output_stream,
-                        output_lock,
-                    )
-                    continue
-                if len(message) > pending_limit:
-                    write_message(
-                        _error(
-                            None, -32000, "JSON-RPC batch exceeds the request limit."
-                        ),
-                        output_stream,
-                        output_lock,
-                    )
-                    continue
-                batch_responses = [
-                    handle_request(item, session, send_progress)
-                    if isinstance(item, dict)
-                    else _error(None, -32600, "Invalid Request in batch.")
-                    for item in message
-                ]
-                visible = [item for item in batch_responses if item is not None]
-                if visible:
-                    write_message(visible, output_stream, output_lock)
-                continue
-            if not isinstance(message, dict):
-                write_message(
-                    _error(None, -32600, "Invalid Request: expected a JSON object."),
-                    output_stream,
-                    output_lock,
-                )
-                continue
-
-            if (
-                message.get("method") == "notifications/cancelled"
-                and "id" not in message
-            ):
-                params = message.get("params")
-                request_id = (
-                    params.get("requestId") if isinstance(params, dict) else None
-                )
-                with pending_lock:
-                    item = pending.get(request_id)
-                if item is not None:
-                    future, cancellation, _ = item
-                    cancellation.set()
-                    future.cancel()
-                continue
-
-            if message.get("method") == "tools/call" and "id" in message:
-                request_id = message.get("id")
-                if isinstance(request_id, bool) or not isinstance(
-                    request_id, (str, int, type(None))
-                ):
-                    write_message(
-                        _error(None, -32600, "Invalid Request: invalid id."),
-                        output_stream,
-                        output_lock,
-                    )
-                    continue
-                with pending_lock:
-                    duplicate = request_id in pending
-                    overloaded = len(pending) >= pending_limit
-                    call_params = message.get("params")
-                    raw_meta = (
-                        call_params.get("_meta")
-                        if isinstance(call_params, dict)
-                        else None
-                    )
-                    raw_token = (
-                        raw_meta.get("progressToken")
-                        if isinstance(raw_meta, dict)
-                        else None
-                    )
-                    progress_token = (
-                        raw_token
-                        if not isinstance(raw_token, bool)
-                        and isinstance(raw_token, (str, int))
-                        else None
-                    )
-                    duplicate_progress = (
-                        progress_token is not None
-                        and progress_token in active_progress_tokens
-                    )
-                if duplicate:
-                    write_message(
-                        _error(request_id, -32600, "Duplicate in-flight request id."),
-                        output_stream,
-                        output_lock,
-                    )
-                    continue
-                if overloaded:
-                    write_message(
-                        _error(request_id, -32000, "Too many in-flight requests."),
-                        output_stream,
-                        output_lock,
-                    )
-                    continue
-                if duplicate_progress:
-                    write_message(
-                        _error(
-                            request_id,
-                            -32602,
-                            "progressToken is already active on another request.",
-                        ),
-                        output_stream,
-                        output_lock,
-                    )
-                    continue
-                cancellation = threading.Event()
-                future = executor.submit(execute, message, cancellation)
-                with pending_lock:
-                    pending[request_id] = (future, cancellation, progress_token)
-                    if progress_token is not None:
-                        active_progress_tokens.add(progress_token)
-
-                def finish(
-                    completed: Future[Any],
-                    key: str | int | None = request_id,
-                ) -> None:
-                    complete(key, completed)
-
-                future.add_done_callback(finish)
-                continue
-
-            response = handle_request(message, session, send_progress)
-            if response is not None:
-                write_message(response, output_stream, output_lock)
+            runtime.dispatch(message)
     finally:
-        executor.shutdown(wait=True, cancel_futures=False)
+        runtime.close()
 
 
 def main() -> int:
