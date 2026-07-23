@@ -343,7 +343,7 @@ shotcut-mcp/
 │   ├── project.py              # Transactional project workflow
 │   ├── project_document.py     # Structure-preserving MLT document model
 │   ├── project_snapshot.py     # Read-only MCP project projection
-│   ├── protocol.py             # Input-schema validation and cancellation context
+│   ├── protocol.py             # Schema validation, cancellation, and progress context
 │   ├── render.py               # Public render-job interface
 │   ├── render_jobs.py          # Durable private job store
 │   ├── render_worker.py        # Restart-resilient render supervisor
@@ -362,6 +362,7 @@ Runtime code uses only the Python standard library. Development checks use Ruff 
 python -m ruff format --check .
 python -m ruff check .
 python -m mypy
+python scripts/check_release.py
 python -m unittest discover -s tests -v
 ```
 
