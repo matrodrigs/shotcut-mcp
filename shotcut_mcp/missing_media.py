@@ -21,7 +21,7 @@ from .platform import (
     shotcut_file_hash,
     summarize_media,
 )
-from .protocol import cancellation_requested
+from .protocol import cancellation_requested, report_progress
 
 
 @dataclass(frozen=True)
@@ -275,10 +275,13 @@ def diagnose_missing_resources(
     roots = _authorized_roots(arguments)
     limits = _SearchLimits.from_arguments(arguments)
     state = _SearchState(time.monotonic() + limits.timeout_seconds)
-    files = _discover_files(roots, limits, state)
     missing = [resource for resource in resources if resource.get("exists") is False]
+    progress_total = len(missing) + 2
+    report_progress(0, progress_total, "Scanning authorized roots for media.")
+    files = _discover_files(roots, limits, state)
+    report_progress(1, progress_total, f"Examined {len(files)} candidate files.")
     results: list[dict[str, Any]] = []
-    for reference in missing:
+    for index, reference in enumerate(missing, start=1):
         candidates = _rank_candidates(reference, files, limits, state)
         results.append(
             {
@@ -290,6 +293,13 @@ def diagnose_missing_resources(
                 "candidates_truncated": len(candidates) > limits.max_candidates,
             }
         )
+        report_progress(
+            index + 1,
+            progress_total,
+            f"Ranked candidates for missing resource {index} of {len(missing)}.",
+        )
+    visual = _visualize_candidates(results, arguments)
+    report_progress(progress_total, progress_total, "Missing-media diagnosis complete.")
     return {
         "missing_count": len(missing),
         "resources": results,
@@ -301,5 +311,5 @@ def diagnose_missing_resources(
             "media_probes": state.probe_count,
             "timed_out": state.timed_out,
         },
-        "visual": _visualize_candidates(results, arguments),
+        "visual": visual,
     }

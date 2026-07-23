@@ -8,6 +8,7 @@ from typing import Any
 
 from .errors import ToolError
 from .platform import (
+    analyze_media_quality,
     compatibility_doctor,
     describe_service,
     detect_hardware_encoders,
@@ -26,11 +27,13 @@ from .project import (
     diagnose_color_workflow,
     diagnose_missing_media,
     edit_project,
+    export_marker_chapters,
     list_backups,
     plan_project_edit,
     render_project_contact_sheet,
     restore_backup,
 )
+from .protocol import report_progress
 from .render import (
     RENDER_PRESETS,
     cancel_render,
@@ -64,6 +67,16 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
             "image_duration_seconds",
         ],
         "notes": "mode: insert|overwrite; omitting position_frame appends to the end",
+    },
+    "duplicate_item": {
+        "required": ["track", "item_index"],
+        "optional": ["target_track", "position_frame", "mode"],
+        "notes": "Clones the producer/filter chain; on the same track, omission places it after the source.",
+    },
+    "replace_item_media": {
+        "required": ["track", "item_index", "path"],
+        "optional": ["caption"],
+        "notes": "Preserves source range, placement, filters, and unknown producer properties.",
     },
     "add_generator": {
         "required": ["track", "generator", "duration_frames"],
@@ -140,11 +153,21 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         "optional": ["enabled", "in_frame", "out_frame", "properties"],
         "notes": "Set a property to null to remove it.",
     },
+    "move_filter": {
+        "required": ["filter_id"],
+        "optional": ["before_filter_id"],
+        "notes": "Moves before a sibling filter, or after the last sibling when omitted.",
+    },
     "remove_filter": {"required": ["filter_id"]},
     "set_notes": {"required": ["notes"]},
     "add_marker": {
         "required": ["start_frame"],
         "optional": ["end_frame", "text", "color"],
+    },
+    "update_marker": {
+        "required": ["marker_id"],
+        "optional": ["start_frame", "end_frame", "text", "color"],
+        "notes": "Updates marker fields without changing marker identity.",
     },
     "remove_marker": {"required": ["marker_id"]},
     "set_subtitle_track": {
@@ -485,6 +508,10 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "enum": ["blend", "nearest"],
         "description": "Timeremap frame interpolation mode.",
     },
+    "before_filter_id": {
+        "type": "string",
+        "description": "Sibling filter id that should follow the moved filter; omit to move last.",
+    },
 }
 
 OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
@@ -498,6 +525,19 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
         "path": "C:/media/clip.mp4",
         "position_frame": 0,
         "mode": "insert",
+    },
+    "duplicate_item": {
+        "op": "duplicate_item",
+        "track": "V1",
+        "item_index": 0,
+        "position_frame": 120,
+        "mode": "insert",
+    },
+    "replace_item_media": {
+        "op": "replace_item_media",
+        "track": "V1",
+        "item_index": 0,
+        "path": "C:/media/replacement.mp4",
     },
     "add_generator": {
         "op": "add_generator",
@@ -566,6 +606,11 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
         "properties": {"level": "0.1"},
     },
     "update_filter": {"op": "update_filter", "filter_id": "filter0", "enabled": False},
+    "move_filter": {
+        "op": "move_filter",
+        "filter_id": "filter1",
+        "before_filter_id": "filter0",
+    },
     "remove_filter": {"op": "remove_filter", "filter_id": "filter0"},
     "set_notes": {"op": "set_notes", "notes": "Rough cut approved"},
     "add_marker": {
@@ -573,6 +618,12 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
         "start_frame": 0,
         "text": "Intro",
         "color": "#00A0FF",
+    },
+    "update_marker": {
+        "op": "update_marker",
+        "marker_id": "0",
+        "text": "Approved intro",
+        "end_frame": 90,
     },
     "remove_marker": {"op": "remove_marker", "marker_id": "0"},
     "set_subtitle_track": {
@@ -658,13 +709,37 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
             "Pass operation to shotcut_capabilities for its complete schema and example."
         ),
         "render_presets": RENDER_PRESETS,
+        "feature_guidance": {
+            "quality_analysis": (
+                "Use analyze_media_quality for objective source measurements before "
+                "proposing cleanup edits; unavailable filters are reported per analyzer."
+            ),
+            "range_delivery": (
+                "start_render accepts either both inclusive in_frame/out_frame values "
+                "or one non-empty range marker_id from inspect_project."
+            ),
+            "chapters": (
+                "export_marker_chapters writes Shotcut chapter text from point markers; "
+                "range markers and color filtering are opt-in."
+            ),
+            "edit_primitives": (
+                "duplicate_item, replace_item_media, move_filter, and update_marker are "
+                "transactional operations and support plan_project_edit."
+            ),
+            "progress": (
+                "Request progress is emitted only when the caller supplies a progress "
+                "token; durable render progress continues through render_status."
+            ),
+        },
         "workflow": [
             "run shotcut_doctor after installing or upgrading Shotcut",
+            "use probe_media for stream facts and analyze_media_quality for source QC",
             "inspect_project to obtain revision and current item indexes",
             "optionally list_mlt_services/describe_mlt_service",
             "edit_project with expected_revision and one batch of operations",
             "render_preview or validate_project",
-            "start_render; render_status is optional for monitoring and logs",
+            "optionally export_marker_chapters from point markers",
+            "start_render for a full project, inclusive frame range, or range marker; use render_status for durable progress and logs",
         ],
     }
 
@@ -682,10 +757,13 @@ def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
         or not 1 <= timeout <= 300
     ):
         raise ToolError("timeout_seconds must be an integer between 1 and 300.")
-    return {
+    report_progress(0, 1, "Validating project with MLT.")
+    result = {
         "project": ProjectDocument.load(path).snapshot(),
         **validate_project_file(path, timeout),
     }
+    report_progress(1, 1, "Project validation complete.")
+    return result
 
 
 def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -698,12 +776,15 @@ def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     raw_output = arguments.get("output_path")
     if raw_output is not None and not isinstance(raw_output, str):
         raise ToolError("output_path must be a string when provided.")
-    return render_preview(
+    report_progress(0, 1, "Rendering preview frame.")
+    result = render_preview(
         expand_path(arguments.get("project_path", "")),
         expand_path(raw_output) if isinstance(raw_output, str) else None,
         frame,
         overwrite,
     )
+    report_progress(1, 1, "Preview frame rendered.")
+    return result
 
 
 def render_preview_batch_tool(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -811,6 +892,94 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Probe media",
         "description": "Use to understand a source file before editing. Reads duration, codecs, resolution, frame rate, color, and audio with per-file caching.",
         "inputSchema": _object_schema({"path": PATH}, ["path"]),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "analyze_media_quality",
+        "title": "Analyze media quality",
+        "description": (
+            "Use before proposing cleanup or delivery edits. Runs installed FFmpeg "
+            "analyzers for silence, black frames, freezes, interlacing, and loudness "
+            "and returns bounded structured measurements without changing the media."
+        ),
+        "inputSchema": _object_schema(
+            {
+                "path": PATH,
+                "analyzers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {
+                        "type": "string",
+                        "enum": ["silence", "black", "freeze", "interlace", "loudness"],
+                    },
+                },
+                "start_seconds": {"type": "number", "minimum": 0, "default": 0},
+                "duration_seconds": {"type": "number", "minimum": 0.001},
+                "audio_stream_index": {"type": "integer", "minimum": 0},
+                "video_stream_index": {"type": "integer", "minimum": 0},
+                "silence_threshold_db": {
+                    "type": "number",
+                    "minimum": -120,
+                    "maximum": 0,
+                    "default": -60,
+                },
+                "silence_min_duration_seconds": {
+                    "type": "number",
+                    "minimum": 0.05,
+                    "maximum": 3600,
+                    "default": 2,
+                },
+                "black_min_duration_seconds": {
+                    "type": "number",
+                    "minimum": 0.05,
+                    "maximum": 3600,
+                    "default": 2,
+                },
+                "black_pixel_threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "default": 0.1,
+                },
+                "black_picture_threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "default": 0.98,
+                },
+                "freeze_min_duration_seconds": {
+                    "type": "number",
+                    "minimum": 0.05,
+                    "maximum": 3600,
+                    "default": 2,
+                },
+                "freeze_noise_db": {
+                    "type": "number",
+                    "minimum": -120,
+                    "maximum": 0,
+                    "default": -60,
+                },
+                "dual_mono": {"type": "boolean", "default": False},
+                "max_intervals": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "default": 256,
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3600,
+                    "default": 300,
+                },
+            },
+            ["path"],
+        ),
         "annotations": {
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -1237,7 +1406,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "start_render",
         "title": "Start render",
-        "description": "Use when the user asks to export. Starts a durable background render and returns job_id; prefer a named preset over consumer_properties.",
+        "description": "Use when the user asks to export. Starts a durable background render for the full project, one inclusive frame range, or one Shotcut range marker; monitor the returned job_id with render_status.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
@@ -1248,6 +1417,20 @@ TOOLS: list[dict[str, Any]] = [
                     "default": "h264-high",
                 },
                 "consumer_properties": {"type": "object", "additionalProperties": True},
+                "in_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Inclusive first project frame; requires out_frame.",
+                },
+                "out_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Inclusive last project frame; requires in_frame.",
+                },
+                "marker_id": {
+                    "type": "string",
+                    "description": "Range marker id from inspect_project; mutually exclusive with explicit frames.",
+                },
                 "overwrite": {"type": "boolean", "default": False},
             },
             ["project_path", "output_path"],
@@ -1257,6 +1440,37 @@ TOOLS: list[dict[str, Any]] = [
             "destructiveHint": True,
             "idempotentHint": False,
             "openWorldHint": True,
+        },
+    },
+    {
+        "name": "export_marker_chapters",
+        "title": "Export marker chapters",
+        "description": (
+            "Use to create Shotcut-compatible chapter text from point markers. "
+            "Optionally includes range markers or selected marker colors and atomically "
+            "protects an existing output."
+        ),
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "output_path": PATH,
+                "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "include_range_markers": {"type": "boolean", "default": False},
+                "colors": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                },
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["project_path", "output_path"],
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": False,
         },
     },
     {
@@ -1356,6 +1570,20 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "expected_revision": "SHA-256 revision returned by inspect_project. Required unless force is explicitly authorized.",
     "operations": "One or more related edit operations. Query shotcut_capabilities for unfamiliar operation schemas.",
     "timeout_seconds": "Bounded timeout for local MLT processing.",
+    "analyzers": "Quality checks to run; defaults to every analyzer supported by this tool.",
+    "start_seconds": "Optional media offset in seconds where analysis begins.",
+    "duration_seconds": "Optional bounded media duration in seconds to analyze.",
+    "audio_stream_index": "Optional global FFprobe stream index for the audio checks.",
+    "video_stream_index": "Optional global FFprobe stream index for the video checks.",
+    "silence_threshold_db": "Audio level in dB at or below which a segment counts as silence.",
+    "silence_min_duration_seconds": "Minimum continuous silence duration to report.",
+    "black_min_duration_seconds": "Minimum continuous black-frame duration to report.",
+    "black_pixel_threshold": "Per-pixel luminance threshold used by FFmpeg blackdetect.",
+    "black_picture_threshold": "Fraction of qualifying dark pixels required for a black frame.",
+    "freeze_min_duration_seconds": "Minimum continuous frozen-video duration to report.",
+    "freeze_noise_db": "Frame-difference tolerance in dB used by FFmpeg freezedetect.",
+    "dual_mono": "Measure mono input as dual-mono when computing EBU R128 loudness.",
+    "max_intervals": "Maximum structured intervals retained per analyzer.",
     "max_diff_lines": "Maximum unified-diff lines returned by a dry run; zero suppresses diff text.",
     "width": "Project or contact-sheet width in pixels, depending on the tool.",
     "height": "Project height in pixels.",
@@ -1390,6 +1618,8 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "fullscreen": "Ask Shotcut to open fullscreen.",
     "preset": "Named safe export preset returned by shotcut_capabilities.",
     "consumer_properties": "Advanced MLT avformat properties; prefer a named preset unless the user supplied exact requirements.",
+    "include_range_markers": "Include Shotcut range markers as chapters; point markers are included by default.",
+    "colors": "Optional marker-color allowlist using Shotcut #RRGGBB values.",
     "job_id": "Durable render identifier returned by start_render or list_render_jobs.",
     "status": "Optional render state filter.",
     "cursor": "Opaque cursor returned by the preceding render-history page.",
@@ -1468,11 +1698,23 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "operations": OBJECT,
             "operation_query": STRING,
             "render_presets": OBJECT,
+            "feature_guidance": OBJECT,
             "workflow": ARRAY,
         }
     ),
     "probe_media": _result_schema(
         {"path": STRING, "duration_seconds": {"type": "number"}, "streams": ARRAY}
+    ),
+    "analyze_media_quality": _result_schema(
+        {
+            "path": STRING,
+            "media_duration_seconds": {"type": ["number", "null"]},
+            "start_seconds": {"type": "number"},
+            "duration_seconds": {"type": ["number", "null"]},
+            "streams": OBJECT,
+            "requested_analyzers": ARRAY,
+            "analyzers": OBJECT,
+        }
     ),
     "inspect_project": _result_schema(
         {
@@ -1580,16 +1822,45 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "status": STRING,
             "project_path": STRING,
             "output_path": STRING,
+            "preset": STRING,
+            "in_frame": {"type": ["integer", "null"]},
+            "out_frame": {"type": ["integer", "null"]},
+            "total_frames": {"type": ["integer", "null"]},
+            "range_duration_frames": {"type": ["integer", "null"]},
+            "source_duration_frames": {"type": ["integer", "null"]},
+            "project_revision": {"type": ["string", "null"]},
+            "marker_id": {"type": ["string", "null"]},
+            "marker_text": {"type": ["string", "null"]},
+        }
+    ),
+    "export_marker_chapters": _result_schema(
+        {
+            "created": BOOLEAN,
+            "path": STRING,
+            "project_path": STRING,
+            "project_revision": STRING,
+            "chapter_count": INTEGER,
+            "marker_count": INTEGER,
+            "size_bytes": INTEGER,
+            "chapters": ARRAY,
         }
     ),
     "render_status": _result_schema(
         {
             "job_id": STRING,
             "status": STRING,
-            "progress": {"type": "number"},
+            "progress_percent": {"type": ["number", "null"]},
+            "frames_completed": {"type": ["integer", "null"]},
+            "in_frame": {"type": ["integer", "null"]},
+            "out_frame": {"type": ["integer", "null"]},
+            "range_duration_frames": {"type": ["integer", "null"]},
             "output_path": STRING,
-            "output_size": INTEGER,
-            "log_tail": ARRAY,
+            "output_exists": BOOLEAN,
+            "output_size_bytes": {"type": ["integer", "null"]},
+            "elapsed_seconds": {"type": "number"},
+            "eta_seconds": {"type": ["number", "null"]},
+            "eta_confidence": {"type": ["string", "null"]},
+            "log_tail": STRING,
         }
     ),
     "list_render_jobs": _result_schema(
@@ -1631,6 +1902,9 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "probe_media": lambda arguments: summarize_media(
         expand_path(arguments.get("path", ""))
     ),
+    "analyze_media_quality": lambda arguments: analyze_media_quality(
+        expand_path(arguments.get("path", "")), arguments
+    ),
     "inspect_project": inspect_project,
     "diagnose_color_workflow": diagnose_color_workflow,
     "diagnose_missing_media": diagnose_missing_media,
@@ -1650,6 +1924,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     ),
     "open_in_shotcut": open_in_shotcut_tool,
     "start_render": start_render,
+    "export_marker_chapters": export_marker_chapters,
     "render_status": lambda arguments: render_status(arguments.get("job_id", "")),
     "list_render_jobs": list_render_jobs,
     "cancel_render": lambda arguments: cancel_render(arguments.get("job_id", "")),

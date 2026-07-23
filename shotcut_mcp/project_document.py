@@ -974,6 +974,131 @@ class ProjectDocument:
             "duration_frames": self.item_duration(entry),
         }
 
+    def duplicate_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+        source_track = self.find_track(operation.get("track"))
+        target_track = self.find_track(
+            operation.get("target_track", operation.get("track"))
+        )
+        sequence, index, item = self._item(source_track, operation.get("item_index"))
+        if item.tag != "entry" or self.is_transition(item):
+            raise ToolError("Only regular clips can be duplicated.")
+        if (index > 0 and self.is_transition(sequence[index - 1])) or (
+            index + 1 < len(sequence) and self.is_transition(sequence[index + 1])
+        ):
+            raise ToolError(
+                "Remove the adjacent transition before duplicating this clip."
+            )
+        original = self.id_map().get(item.get("producer", ""))
+        if original is None or original.tag not in {"producer", "chain"}:
+            raise ToolError("The selected clip service cannot be duplicated safely.")
+        clone = self.clone_service(original)
+        self.insert_root_before_main(clone)
+        duplicate = copy.deepcopy(item)
+        duplicate.set("producer", clone.get("id", ""))
+        raw_position = operation.get("position_frame")
+        position = (
+            _int(raw_position, "position_frame", 0)
+            if raw_position is not None
+            else sum(self.item_duration(node) for node in sequence[: index + 1])
+            if source_track.id == target_track.id
+            else None
+        )
+        mode = operation.get("mode", "insert")
+        self.place_item(target_track.playlist, duplicate, position, mode)
+        return {
+            "duplicated": True,
+            "producer_id": clone.get("id"),
+            "source_track": source_track.id,
+            "target_track": target_track.id,
+            "position_frame": position,
+            "duration_frames": self.item_duration(duplicate),
+            "mode": mode,
+        }
+
+    def replace_item_media(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        sequence, index, item = self._item(track, operation.get("item_index"))
+        if item.tag != "entry" or self.is_transition(item):
+            raise ToolError("Only regular clips can have their media replaced.")
+        original_id = item.get("producer", "")
+        original = self.id_map().get(original_id)
+        if original is None or original.tag != "producer":
+            raise ToolError(
+                "replace_item_media currently supports regular producer-backed clips only."
+            )
+        service = _property(original, "mlt_service")
+        if service not in {"avformat", "avformat-novalidate"}:
+            raise ToolError(
+                "replace_item_media supports avformat-backed media clips only."
+            )
+        if _property(original, "shotcut:proxy") or _property(
+            original, "shotcut:proxyResource"
+        ):
+            raise ToolError(
+                "Proxy-backed clips require a dedicated proxy-aware replacement."
+            )
+        if (index > 0 and self.is_transition(sequence[index - 1])) or (
+            index + 1 < len(sequence) and self.is_transition(sequence[index + 1])
+        ):
+            raise ToolError(
+                "Remove the adjacent transition before replacing this clip's media."
+            )
+        frame_in = _clock_to_frames(item.get("in"), self.fps) or 0
+        frame_out = _clock_to_frames(item.get("out"), self.fps)
+        if frame_out is None:
+            frame_out = frame_in + self.item_duration(item) - 1
+        raw_path = operation.get("path")
+        if not isinstance(raw_path, str):
+            raise ToolError("path must be a string.")
+        media_path = Path(os.path.expandvars(raw_path)).expanduser().resolve()
+        if not media_path.is_file():
+            raise ToolError(f"Media not found: {media_path}")
+        payload = probe_media_raw(media_path)
+        duration_seconds = media_duration(payload)
+        full_frames = (
+            max(1, math.ceil(duration_seconds * self.fps))
+            if duration_seconds is not None
+            else frame_out + 1
+        )
+        if frame_out >= full_frames:
+            raise ToolError(
+                f"Replacement media has {full_frames} frames; source frame {frame_out} is required."
+            )
+        producer = self.isolate_entry_service(item)
+        old_path = _property(producer, "resource")
+        producer.set("in", "0")
+        producer.set("out", str(full_frames - 1))
+        _set_property(producer, "length", full_frames)
+        _set_property(producer, "resource", str(media_path).replace("\\", "/"))
+        _set_property(producer, "mlt_service", "avformat-novalidate")
+        _set_property(producer, "seekable", 1)
+        _set_property(producer, "shotcut:skipConvert", 1)
+        _set_property(producer, "shotcut:hash", shotcut_file_hash(media_path))
+        caption = operation.get("caption", media_path.name)
+        if not isinstance(caption, str):
+            raise ToolError("caption must be a string.")
+        _set_property(producer, "shotcut:caption", caption)
+        for prop in list(producer.findall("property")):
+            name = prop.get("name", "")
+            if name in {
+                "audio_index",
+                "video_index",
+                "astream",
+                "vstream",
+            } or name.startswith("meta."):
+                producer.remove(prop)
+        return {
+            "replaced": True,
+            "producer_id": producer.get("id"),
+            "track_id": track.id,
+            "old_path": old_path,
+            "path": str(media_path),
+            "in_frame": frame_in,
+            "out_frame": frame_out,
+            "duration_frames": frame_out - frame_in + 1,
+            "shotcut_hash": _property(producer, "shotcut:hash"),
+        }
+
     def add_generator(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
         generator = operation.get("generator")
@@ -1612,6 +1737,67 @@ class ProjectDocument:
                 raise ToolError(f"properties.{name} must be a scalar or null.")
         return {"filter_id": filter_id, "updated": True}
 
+    def move_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
+        filter_id = operation.get("filter_id")
+        element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
+        if element is None or element.tag != "filter":
+            raise ToolError(f"Filter not found: {filter_id}")
+        parent = next(
+            (node for node in self.root.iter() if element in list(node)), None
+        )
+        if parent is None or parent.tag not in {
+            "producer",
+            "chain",
+            "playlist",
+            "tractor",
+        }:
+            raise ToolError("The filter is not attached to a supported filter host.")
+        filters = parent.findall("filter")
+        old_position = filters.index(element)
+        before_filter_id = operation.get("before_filter_id")
+        if before_filter_id is not None and not isinstance(before_filter_id, str):
+            raise ToolError("before_filter_id must be a string.")
+        if before_filter_id == filter_id:
+            return {
+                "filter_id": filter_id,
+                "moved": False,
+                "old_position": old_position,
+                "position": old_position,
+            }
+        before = (
+            self.id_map().get(before_filter_id)
+            if isinstance(before_filter_id, str)
+            else None
+        )
+        if before_filter_id is not None and (before is None or before.tag != "filter"):
+            raise ToolError(f"Filter not found: {before_filter_id}")
+        if before is not None and before not in filters:
+            raise ToolError("Both filters must belong to the same host.")
+        parent.remove(element)
+        remaining = parent.findall("filter")
+        if before is not None:
+            insertion_index = list(parent).index(before)
+        elif remaining:
+            insertion_index = list(parent).index(remaining[-1]) + 1
+        else:
+            insertion_index = next(
+                (
+                    index
+                    for index, child in enumerate(parent)
+                    if child.tag not in {"property", "properties"}
+                ),
+                len(parent),
+            )
+        parent.insert(insertion_index, element)
+        position = parent.findall("filter").index(element)
+        return {
+            "filter_id": filter_id,
+            "moved": True,
+            "old_position": old_position,
+            "position": position,
+            "host_id": parent.get("id"),
+        }
+
     def remove_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
         filter_id = operation.get("filter_id")
         element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
@@ -1677,24 +1863,77 @@ class ProjectDocument:
         _set_property(marker, "color", color.upper())
         return {"marker_id": str(key), "start_frame": start, "end_frame": end}
 
+    def _marker(self, marker_id: str) -> tuple[ET.Element, ET.Element]:
+        container = self.markers_container()
+        matches = (
+            [
+                item
+                for item in container.findall("properties")
+                if item.get("name") == marker_id
+            ]
+            if container is not None
+            else []
+        )
+        if len(matches) != 1 or container is None:
+            raise ToolError(f"Marker not found uniquely: {marker_id}")
+        return container, matches[0]
+
+    def update_marker(self, operation: dict[str, Any]) -> dict[str, Any]:
+        marker_id = str(operation.get("marker_id", ""))
+        mutable = {"start_frame", "end_frame", "text", "color"}
+        if not any(name in operation for name in mutable):
+            raise ToolError("update_marker requires at least one field to change.")
+        _, marker = self._marker(marker_id)
+        current_start = _clock_to_frames(_property(marker, "start"), self.fps) or 0
+        current_end = _clock_to_frames(_property(marker, "end"), self.fps)
+        if current_end is None:
+            current_end = current_start
+        start = _int(operation.get("start_frame", current_start), "start_frame", 0)
+        end_value = operation.get("end_frame", current_end)
+        if (
+            current_start == current_end
+            and "start_frame" in operation
+            and "end_frame" not in operation
+        ):
+            end_value = start
+        end = _int(end_value, "end_frame", 0)
+        if end < start:
+            raise ToolError("end_frame must be greater than or equal to start_frame.")
+        before = {
+            "text": _property(marker, "text"),
+            "start_frame": current_start,
+            "end_frame": current_end,
+            "color": _property(marker, "color"),
+        }
+        if "text" in operation:
+            text = operation["text"]
+            if not isinstance(text, str):
+                raise ToolError("text must be a string.")
+            _set_property(marker, "text", text)
+        if "color" in operation:
+            color = operation["color"]
+            if not isinstance(color, str) or not re.fullmatch(
+                r"#[0-9A-Fa-f]{6}", color
+            ):
+                raise ToolError("color must use #RRGGBB.")
+            _set_property(marker, "color", color.upper())
+        _set_property(marker, "start", _frames_to_clock(start, self.fps))
+        _set_property(marker, "end", _frames_to_clock(end, self.fps))
+        return {
+            "marker_id": marker_id,
+            "updated": True,
+            "before": before,
+            "after": {
+                "text": _property(marker, "text"),
+                "start_frame": start,
+                "end_frame": end,
+                "color": _property(marker, "color"),
+            },
+        }
+
     def remove_marker(self, operation: dict[str, Any]) -> dict[str, Any]:
         marker_id = str(operation.get("marker_id", ""))
-        container = self.markers_container()
-        marker = (
-            next(
-                (
-                    item
-                    for item in container.findall("properties")
-                    if item.get("name") == marker_id
-                ),
-                None,
-            )
-            if container is not None
-            else None
-        )
-        if marker is None:
-            raise ToolError(f"Marker not found: {marker_id}")
-        assert container is not None
+        container, marker = self._marker(marker_id)
         container.remove(marker)
         return {"marker_id": marker_id, "removed": True}
 
@@ -2124,6 +2363,8 @@ class ProjectDocument:
             "update_track": self.update_track,
             "move_track": self.move_track,
             "add_clip": self.add_clip,
+            "duplicate_item": self.duplicate_item,
+            "replace_item_media": self.replace_item_media,
             "add_generator": self.add_generator,
             "remove_item": self.remove_item,
             "trim_item": self.trim_item,
@@ -2138,9 +2379,11 @@ class ProjectDocument:
             "remove_transition": self.remove_transition,
             "add_filter": self.add_filter,
             "update_filter": self.update_filter,
+            "move_filter": self.move_filter,
             "remove_filter": self.remove_filter,
             "set_notes": self.set_notes,
             "add_marker": self.add_marker,
+            "update_marker": self.update_marker,
             "remove_marker": self.remove_marker,
             "set_subtitle_track": self.set_subtitle_track,
             "remove_subtitle_track": self.remove_subtitle_track,

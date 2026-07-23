@@ -2,14 +2,44 @@
 
 from __future__ import annotations
 
+import math
 import re
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
 _CANCELLATION_EVENT: ContextVar[threading.Event | None] = ContextVar(
     "shotcut_mcp_cancellation_event", default=None
+)
+ProgressCallback = Callable[[float, float | None, str | None], None]
+
+
+class _ProgressState:
+    """Keep one request's optional MCP progress stream monotonic."""
+
+    def __init__(self, callback: ProgressCallback) -> None:
+        self.callback = callback
+        self.last = -math.inf
+
+    def report(self, progress: float, total: float | None, message: str | None) -> None:
+        if not math.isfinite(progress) or progress < 0:
+            raise ValueError("Progress values must be finite and non-negative.")
+        if total is not None and (
+            not math.isfinite(total) or total <= 0 or progress > total
+        ):
+            raise ValueError("Progress total must be finite and at least progress.")
+        if message is not None and not isinstance(message, str):
+            raise ValueError("Progress message must be a string.")
+        if progress <= self.last:
+            return
+        self.last = progress
+        self.callback(progress, total, message[:500] if message else None)
+
+
+_PROGRESS_STATE: ContextVar[_ProgressState | None] = ContextVar(
+    "shotcut_mcp_progress_state", default=None
 )
 
 
@@ -25,6 +55,33 @@ def request_cancellation(event: threading.Event):
 def cancellation_requested() -> bool:
     event = _CANCELLATION_EVENT.get()
     return event is not None and event.is_set()
+
+
+@contextmanager
+def request_progress(callback: ProgressCallback | None):
+    """Install an optional request-local MCP progress sink."""
+
+    token = _PROGRESS_STATE.set(_ProgressState(callback) if callback else None)
+    try:
+        yield
+    finally:
+        _PROGRESS_STATE.reset(token)
+
+
+def report_progress(
+    progress: int | float,
+    total: int | float | None = None,
+    message: str | None = None,
+) -> bool:
+    """Emit progress when the caller supplied a progress token."""
+
+    state = _PROGRESS_STATE.get()
+    if state is None:
+        return False
+    numeric_progress = float(progress)
+    numeric_total = float(total) if total is not None else None
+    state.report(numeric_progress, numeric_total, message)
+    return True
 
 
 def _matches_type(value: Any, expected: str) -> bool:

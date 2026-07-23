@@ -83,7 +83,7 @@ class ProtocolTests(unittest.TestCase):
         ]
         self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-11-25")
         names = {item["name"] for item in responses[1]["result"]["tools"]}
-        self.assertEqual(len(names), 24)
+        self.assertEqual(len(names), 26)
         self.assertIn("edit_project", names)
         self.assertIn("shotcut_capabilities", names)
         self.assertIn("restore_project_backup", names)

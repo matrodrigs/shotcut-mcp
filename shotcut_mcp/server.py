@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any, BinaryIO
 
 from . import __version__
 from .errors import ConflictError, RequestCancelled, ToolError
-from .protocol import request_cancellation, schema_errors
+from .protocol import request_cancellation, request_progress, schema_errors
 from .tools import HANDLERS, TOOLS
 
 SERVER_NAME = "shotcut-mcp"
@@ -38,9 +39,13 @@ SERVER_INSTRUCTIONS = (
     "operations; never retry with force automatically. Use plan_project_edit for dry "
     "runs, uncertain edits, or user review before committing. For missing media, use "
     "diagnose_missing_media and let the user choose before relinking. For washed-out "
-    "color or HDR questions, use diagnose_color_workflow. For exports, use start_render "
-    "and its job_id; use list_render_jobs when the job_id is unknown. List backups "
-    "before restoring and confirm the selected revision."
+    "color or HDR questions, use diagnose_color_workflow. Use analyze_media_quality "
+    "before proposing cleanup for silence, black frames, freezes, interlacing, or "
+    "loudness. For exports, use start_render for the full project, explicit inclusive "
+    "frames, or one range marker; after it returns, monitor its job_id with "
+    "render_status. Use export_marker_chapters for Shotcut-compatible chapter text. "
+    "Use list_render_jobs when the job_id is unknown. List backups before restoring "
+    "and confirm the selected revision."
 )
 
 
@@ -159,7 +164,10 @@ def _tool_error_payload(exc: ToolError) -> dict[str, Any]:
 
 
 def handle_request(
-    message: dict[str, Any], session: ProtocolSession | None = None
+    message: dict[str, Any],
+    session: ProtocolSession | None = None,
+    progress_callback: Callable[[Any, float, float | None, str | None], None]
+    | None = None,
 ) -> dict[str, Any] | None:
     active_session = session or ProtocolSession()
     request_id = message.get("id")
@@ -229,6 +237,19 @@ def handle_request(
         arguments = call_params.get("arguments", {})
         if not isinstance(arguments, dict):
             return _error(request_id, -32602, "Tool arguments must be an object.")
+        raw_meta = call_params.get("_meta", {})
+        if not isinstance(raw_meta, dict):
+            return _error(request_id, -32602, "Tool _meta must be an object.")
+        progress_token = raw_meta.get("progressToken")
+        if "progressToken" in raw_meta and (
+            isinstance(progress_token, bool)
+            or not isinstance(progress_token, (str, int))
+        ):
+            return _error(
+                request_id,
+                -32602,
+                "_meta.progressToken must be a string or integer.",
+            )
         tool = next(item for item in TOOLS if item["name"] == name)
         validation_errors = schema_errors(arguments, tool["inputSchema"])
         if validation_errors:
@@ -239,8 +260,19 @@ def handle_request(
                 {"validationErrors": validation_errors},
             )
         try:
+            reporter = (
+                (
+                    lambda progress, total, progress_message: progress_callback(
+                        progress_token, progress, total, progress_message
+                    )
+                )
+                if progress_callback is not None and progress_token is not None
+                else None
+            )
+            with request_progress(reporter):
+                payload = handler(arguments)
             result = _tool_result(
-                handler(arguments), active_session.protocol_version, tool_name=name
+                payload, active_session.protocol_version, tool_name=name
             )
         except RequestCancelled as exc:
             return _error(request_id, -32800, str(exc) or "Request cancelled.")
@@ -312,16 +344,45 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
     session = ProtocolSession(enforce_lifecycle=True)
     output_lock = threading.Lock()
     pending_lock = threading.Lock()
-    pending: dict[str | int | None, tuple[Future[Any], threading.Event]] = {}
+    pending: dict[
+        str | int | None, tuple[Future[Any], threading.Event, str | int | None]
+    ] = {}
+    active_progress_tokens: set[str | int] = set()
     executor = ThreadPoolExecutor(
         max_workers=_worker_count(), thread_name_prefix="shotcut-mcp"
     )
     pending_limit = _pending_limit()
     message_size_limit = _message_size_limit()
 
+    def send_progress(
+        progress_token: Any,
+        progress: float,
+        total: float | None,
+        message: str | None,
+    ) -> None:
+        params: dict[str, Any] = {
+            "progressToken": progress_token,
+            "progress": progress,
+        }
+        if total is not None:
+            params["total"] = total
+        if message and session.protocol_version != "2024-11-05":
+            params["message"] = message
+        write_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": params,
+            },
+            output_stream,
+            output_lock,
+        )
+
     def complete(request_id: str | int | None, future: Future[Any]) -> None:
         with pending_lock:
-            pending.pop(request_id, None)
+            item = pending.pop(request_id, None)
+            if item is not None and item[2] is not None:
+                active_progress_tokens.discard(item[2])
         if future.cancelled():
             response = _error(request_id, -32800, "Request cancelled.")
         else:
@@ -343,7 +404,7 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
         message: dict[str, Any], cancellation: threading.Event
     ) -> dict[str, Any] | None:
         with request_cancellation(cancellation):
-            return handle_request(message, session)
+            return handle_request(message, session, send_progress)
 
     try:
         while True:
@@ -390,7 +451,7 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                     )
                     continue
                 batch_responses = [
-                    handle_request(item, session)
+                    handle_request(item, session, send_progress)
                     if isinstance(item, dict)
                     else _error(None, -32600, "Invalid Request in batch.")
                     for item in message
@@ -418,7 +479,7 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 with pending_lock:
                     item = pending.get(request_id)
                 if item is not None:
-                    future, cancellation = item
+                    future, cancellation, _ = item
                     cancellation.set()
                     future.cancel()
                 continue
@@ -437,6 +498,27 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 with pending_lock:
                     duplicate = request_id in pending
                     overloaded = len(pending) >= pending_limit
+                    call_params = message.get("params")
+                    raw_meta = (
+                        call_params.get("_meta")
+                        if isinstance(call_params, dict)
+                        else None
+                    )
+                    raw_token = (
+                        raw_meta.get("progressToken")
+                        if isinstance(raw_meta, dict)
+                        else None
+                    )
+                    progress_token = (
+                        raw_token
+                        if not isinstance(raw_token, bool)
+                        and isinstance(raw_token, (str, int))
+                        else None
+                    )
+                    duplicate_progress = (
+                        progress_token is not None
+                        and progress_token in active_progress_tokens
+                    )
                 if duplicate:
                     write_message(
                         _error(request_id, -32600, "Duplicate in-flight request id."),
@@ -451,10 +533,23 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                         output_lock,
                     )
                     continue
+                if duplicate_progress:
+                    write_message(
+                        _error(
+                            request_id,
+                            -32602,
+                            "progressToken is already active on another request.",
+                        ),
+                        output_stream,
+                        output_lock,
+                    )
+                    continue
                 cancellation = threading.Event()
                 future = executor.submit(execute, message, cancellation)
                 with pending_lock:
-                    pending[request_id] = (future, cancellation)
+                    pending[request_id] = (future, cancellation, progress_token)
+                    if progress_token is not None:
+                        active_progress_tokens.add(progress_token)
 
                 def finish(
                     completed: Future[Any],
@@ -465,7 +560,7 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
                 future.add_done_callback(finish)
                 continue
 
-            response = handle_request(message, session)
+            response = handle_request(message, session, send_progress)
             if response is not None:
                 write_message(response, output_stream, output_lock)
     finally:

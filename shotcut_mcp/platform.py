@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from .errors import RequestCancelled, ToolError
-from .media import media_duration, probe_media_raw, shotcut_file_hash, summarize_media
+from .media import (
+    analyze_media_quality,
+    media_duration,
+    probe_media_raw,
+    shotcut_file_hash,
+    summarize_media,
+)
 from .path_policy import (
     enforce_project_resource_policy,
     expand_path,
@@ -35,6 +41,7 @@ from .processes import (
     sys_platform,
     terminate_process,
 )
+from .protocol import report_progress
 from .storage import OutputTransaction, managed_preview_path
 
 _SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
@@ -47,6 +54,7 @@ _ENCODER_LOCK = threading.Lock()
 __all__ = [
     "MLT_ENVIRONMENT_KEYS",
     "Executables",
+    "analyze_media_quality",
     "compatibility_doctor",
     "creation_flags",
     "describe_service",
@@ -436,10 +444,13 @@ def render_preview_batch(
     normalized = [os.path.normcase(str(path.resolve())) for _, path in requests]
     if len(set(normalized)) != len(normalized):
         raise ToolError("Every preview batch output path must be unique.")
-    results = [
-        _preview_batch_item(project_path, output_path, frame, overwrite)
-        for frame, output_path in requests
-    ]
+    report_progress(0, len(requests), "Starting preview batch.")
+    results = []
+    for index, (frame, output_path) in enumerate(requests, start=1):
+        results.append(_preview_batch_item(project_path, output_path, frame, overwrite))
+        report_progress(
+            index, len(requests), f"Rendered preview {index} of {len(requests)}."
+        )
     return {
         "requested": len(requests),
         "created": sum(bool(item.get("created")) for item in results),
@@ -498,6 +509,8 @@ def render_contact_sheet(
         output_path, overwrite=overwrite, protected_paths=(project_path,)
     )
     rows = (len(frames) + columns - 1) // columns
+    progress_total = len(frames) + 1
+    report_progress(0, progress_total, "Starting contact sheet.")
     try:
         with tempfile.TemporaryDirectory(prefix="shotcut-mcp-sheet-") as directory:
             temporary_dir = Path(directory)
@@ -508,6 +521,11 @@ def render_contact_sheet(
                     frame,
                     False,
                 )
+                report_progress(
+                    index + 1,
+                    progress_total,
+                    f"Rendered contact-sheet frame {index + 1} of {len(frames)}.",
+                )
             _assemble_stills(
                 ffmpeg,
                 temporary_dir / "frame-%06d.png",
@@ -517,6 +535,7 @@ def render_contact_sheet(
                 cell_width=cell_width,
             )
             output.commit()
+            report_progress(progress_total, progress_total, "Contact sheet assembled.")
     finally:
         output.cleanup()
     return {

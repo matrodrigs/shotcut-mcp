@@ -4,7 +4,7 @@
   "display_name": "Shotcut MCP",
   "version": "1.2.0",
   "description": "Create, edit, validate, preview, and render Shotcut projects through AI clients.",
-  "long_description": "A local Model Context Protocol server for transactional editing of Shotcut MLT projects. Build multitrack timelines, apply effects and transitions, manage subtitles and markers, generate frame-accurate previews, and render finished media while preserving editable project output.",
+  "long_description": "A local Model Context Protocol server for transactional editing of Shotcut MLT projects. Analyze source quality, build multitrack timelines, apply effects and transitions, manage subtitles and markers, generate frame-accurate previews, export chapter files, and render full projects or selected ranges while preserving editable project output.",
   "author": {
     "name": "matrodrigs",
     "url": "https://github.com/matrodrigs"
@@ -32,6 +32,7 @@
     { "name": "shotcut_doctor", "description": "Use after installation, upgrade, or a setup failure. Verifies validated Shotcut/MLT versions, repository startup, RNNoise, and path policy." },
     { "name": "shotcut_capabilities", "description": "Use before an unfamiliar edit. Returns the operation catalog and transactional guarantees; pass operation for its complete schema and example." },
     { "name": "probe_media", "description": "Use to understand a source file before editing. Reads duration, codecs, resolution, frame rate, color, and audio with per-file caching." },
+    { "name": "analyze_media_quality", "description": "Use before proposing cleanup or delivery edits. Runs installed FFmpeg analyzers for silence, black frames, freezes, interlacing, and loudness and returns bounded structured measurements without changing the media." },
     { "name": "inspect_project", "description": "Use first to understand a timeline or before planning, editing, or restoring. Returns structural state and the SHA-256 revision; use render_contact_sheet for visual review." },
     { "name": "diagnose_color_workflow", "description": "Use for washed-out colors, HDR/SDR questions, or export compatibility. Reports normalized source color facts and Shotcut 26.6 issues." },
     { "name": "diagnose_missing_media", "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates; never relinks automatically, so let the user choose first." },
@@ -46,7 +47,8 @@
     { "name": "render_contact_sheet", "description": "Use for 'show me the edit', visual review, or a timeline overview. Renders exact frames or 12 evenly sampled frames into one image; omit output_path for managed output." },
     { "name": "detect_hardware_encoders", "description": "Use when choosing or troubleshooting hardware export. Lists advertised FFmpeg encoders and smoke-tests OS-appropriate candidates." },
     { "name": "open_in_shotcut", "description": "Use only when the user asks to open the GUI. Opens a project, media file, or folder in Shotcut; MCP edits do not require this." },
-    { "name": "start_render", "description": "Use when the user asks to export. Starts a durable background render and returns job_id; prefer a named preset over consumer_properties." },
+    { "name": "start_render", "description": "Use when the user asks to export. Starts a durable background render for the full project, one inclusive frame range, or one Shotcut range marker; monitor the returned job_id with render_status." },
+    { "name": "export_marker_chapters", "description": "Use to create Shotcut-compatible chapter text from point markers. Optionally includes range markers or selected marker colors and atomically protects an existing output." },
     { "name": "render_status", "description": "Use when job_id is known to report render state, progress, log tail, and output size. Use list_render_jobs when the id is unknown." },
     { "name": "list_render_jobs", "description": "Use for 'the latest render', render history, or when job_id is unknown. Returns bounded newest-first durable summaries." },
     { "name": "cancel_render", "description": "Use only when the user asks to stop an active render. Requests supervised cancellation, including after an MCP restart." },

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -8,9 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from shotcut_mcp import render as render_module
+from shotcut_mcp import render_jobs as render_jobs_module
+from shotcut_mcp import render_worker as render_worker_module
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import render_preview
 from shotcut_mcp.render import cancel_render, render_status, start_render
+from shotcut_mcp.storage import OutputTransaction
 
 
 class PreviewSafetyTests(unittest.TestCase):
@@ -125,6 +129,76 @@ class RenderPropertySafetyTests(unittest.TestCase):
                         },
                     }
                 )
+
+
+class RenderJobPersistenceTests(unittest.TestCase):
+    def test_job_state_retries_a_windows_sharing_violation(self) -> None:
+        class SharingViolation(PermissionError):
+            winerror = 32
+
+        with tempfile.TemporaryDirectory() as directory:
+            job_directory = Path(directory) / "jobs"
+            job_id = "a" * 32
+            metadata = {"job_id": job_id, "status": "queued"}
+            real_replace = os.replace
+            attempts = 0
+
+            def replace_after_contention(source: object, target: object) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise SharingViolation(13, "simulated sharing violation")
+                real_replace(source, target)
+
+            with (
+                patch.object(render_jobs_module, "JOB_DIR", job_directory),
+                patch.object(
+                    render_jobs_module.os,
+                    "replace",
+                    side_effect=replace_after_contention,
+                ),
+            ):
+                render_jobs_module.write_job(metadata)
+                stored = render_jobs_module.read_job(job_id)
+
+            self.assertEqual(stored, metadata)
+            self.assertEqual(attempts, 3)
+            self.assertEqual(list(job_directory.glob(".*.tmp")), [])
+
+    def test_worker_main_records_an_unhandled_initialization_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job_directory = Path(directory) / "jobs"
+            output = OutputTransaction.prepare(
+                Path(directory) / "output.mp4", overwrite=False
+            )
+            output.temporary.write_bytes(b"partial")
+            job_id = "b" * 32
+            metadata = {
+                "job_id": job_id,
+                "status": "running",
+                "output_transaction": output.serialize(),
+            }
+
+            with patch.object(render_jobs_module, "JOB_DIR", job_directory):
+                render_jobs_module.write_job(metadata)
+                render_jobs_module.release_gate(job_id)
+                with (
+                    patch.object(
+                        render_worker_module,
+                        "run_worker",
+                        side_effect=RuntimeError("simulated startup failure"),
+                    ),
+                    patch.object(sys, "argv", ["render_worker", job_id]),
+                ):
+                    return_code = render_worker_module.main()
+                stored = render_jobs_module.read_job(job_id)
+
+                self.assertFalse(render_jobs_module.gate_path(job_id).exists())
+
+            self.assertEqual(return_code, 1)
+            self.assertEqual(stored["status"], "failed")
+            self.assertIn("simulated startup failure", stored["status_note"])
+            self.assertFalse(output.temporary.exists())
 
 
 class RenderLifecycleTests(unittest.TestCase):

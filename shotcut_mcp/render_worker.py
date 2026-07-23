@@ -10,11 +10,13 @@ import sys
 import threading
 import time
 from collections import deque
+from contextlib import suppress
 from typing import Any, BinaryIO
 
 from .errors import ToolError
 from .platform import creation_flags, terminate_process
 from .render_jobs import (
+    TERMINAL_STATUSES,
     cancel_requested,
     clear_control_files,
     gate_path,
@@ -37,9 +39,18 @@ def _command(metadata: dict[str, Any], output: OutputTransaction) -> list[str]:
     properties = metadata.get("consumer_properties")
     if not isinstance(properties, dict):
         raise ValueError("Invalid consumer properties in render metadata.")
+    frame_range = []
+    if isinstance(metadata.get("in_frame"), int) and isinstance(
+        metadata.get("out_frame"), int
+    ):
+        frame_range = [
+            f"in={metadata['in_frame']}",
+            f"out={metadata['out_frame']}",
+        ]
     return [
         str(metadata["melt_path"]),
         str(metadata["project_path"]),
+        *frame_range,
         "-progress2",
         "-consumer",
         f"avformat:{output.temporary}",
@@ -96,6 +107,12 @@ def _observe_progress(metadata: dict[str, Any], line: str) -> bool:
             metadata["current_frame"] = frame
             changed = True
     if changed:
+        total_frames = metadata.get("total_frames")
+        progress_value = metadata.get("progress_percent")
+        if isinstance(total_frames, int) and isinstance(progress_value, int):
+            metadata["frames_completed"] = min(
+                total_frames, round(total_frames * progress_value / 100)
+            )
         now = time.time()
         samples = deque(
             metadata.get("progress_samples") or [], maxlen=MAX_PROGRESS_SAMPLES
@@ -194,16 +211,24 @@ def run_worker(job_id: str) -> int:
         started_at = float(metadata.get("started_at") or finished_at)
         elapsed = max(0.0, finished_at - started_at)
         current_frame = metadata.get("current_frame")
+        rendered_frames = metadata.get("frames_completed")
+        if metadata.get("total_frames") is not None and return_code == 0:
+            rendered_frames = metadata.get("total_frames")
         metadata.update(
             return_code=return_code,
             finished_at=finished_at,
             updated_at=finished_at,
             elapsed_seconds=elapsed,
             average_fps=(
-                current_frame / elapsed
+                rendered_frames / elapsed
+                if isinstance(rendered_frames, int)
+                and rendered_frames > 0
+                and elapsed > 0
+                else current_frame / elapsed
                 if isinstance(current_frame, int) and current_frame > 0 and elapsed > 0
                 else None
             ),
+            frames_completed=rendered_frames,
         )
         if cancel_requested(job_id):
             metadata["status"] = "cancelled"
@@ -244,12 +269,38 @@ def run_worker(job_id: str) -> int:
         clear_control_files(job_id)
 
 
+def _record_unhandled_failure(job_id: str, exc: Exception) -> None:
+    """Best-effort terminal state for failures before run_worker owns the job."""
+
+    try:
+        metadata = read_job(job_id)
+    except (OSError, ToolError):
+        return
+    if metadata.get("status") in TERMINAL_STATUSES:
+        return
+    with suppress(OSError, ToolError, TypeError, ValueError):
+        OutputTransaction.deserialize(metadata.get("output_transaction")).cleanup()
+    now = time.time()
+    metadata.update(
+        status="failed",
+        status_note=f"Render supervisor failed before initialization: {exc}",
+        finished_at=now,
+        updated_at=now,
+    )
+    with suppress(OSError, ToolError, TypeError, ValueError):
+        write_job(metadata)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         return 2
+    job_id = sys.argv[1]
     try:
-        return run_worker(sys.argv[1])
-    except Exception:
+        return run_worker(job_id)
+    except Exception as exc:
+        _record_unhandled_failure(job_id, exc)
+        with suppress(OSError, ToolError):
+            clear_control_files(job_id)
         return 1
 
 

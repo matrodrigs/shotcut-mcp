@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from shotcut_mcp.platform import (
+    analyze_media_quality,
     discover_executables,
     render_contact_sheet,
     render_preview,
@@ -61,6 +62,9 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             root = Path(directory)
             media = root / "source.mp4"
             self._create_media(executables.ffmpeg, media)
+            quality = analyze_media_quality(media, {"analyzers": ["black", "loudness"]})
+            self.assertEqual(quality["analyzers"]["black"]["status"], "ok")
+            self.assertEqual(quality["analyzers"]["loudness"]["status"], "ok")
             project = create_project(
                 {
                     "project_path": str(root / "timeline.mlt"),
@@ -96,6 +100,13 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                             "position_frame": 0,
                             "mode": "overwrite",
                         },
+                        {
+                            "op": "add_marker",
+                            "start_frame": 0,
+                            "end_frame": 20,
+                            "text": "Opening",
+                            "color": "#00A0FF",
+                        },
                     ],
                 }
             )
@@ -108,8 +119,10 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                     "project_path": edited["path"],
                     "output_path": str(root / "export.mp4"),
                     "preset": "h264-web",
+                    "marker_id": edited["operation_results"][-1]["marker_id"],
                 }
             )
+            self.assertEqual((job["in_frame"], job["out_frame"]), (0, 19))
             deadline = time.time() + 60
             while time.time() < deadline:
                 result = render_status(job["job_id"])

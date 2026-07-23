@@ -20,7 +20,8 @@ from .platform import (
     ensure_melt_ready,
     require_executable,
 )
-from .protocol import cancellation_requested
+from .project_snapshot import project_timing
+from .protocol import cancellation_requested, report_progress
 from .render_jobs import (
     TERMINAL_STATUSES,
     list_jobs,
@@ -219,8 +220,75 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError(f"Invalid preset. Options: {', '.join(RENDER_PRESETS)}")
     properties = dict(RENDER_PRESETS[preset])
     properties.update(_consumer_properties(arguments.get("consumer_properties")))
+    raw_in = arguments.get("in_frame")
+    raw_out = arguments.get("out_frame")
+    marker_id = arguments.get("marker_id")
+    if marker_id is not None and not isinstance(marker_id, str):
+        raise ToolError("marker_id must be a string.")
+    if marker_id is not None and (raw_in is not None or raw_out is not None):
+        raise ToolError("marker_id cannot be combined with in_frame or out_frame.")
+    if marker_id is None and (raw_in is None) != (raw_out is None):
+        raise ToolError("in_frame and out_frame must be provided together.")
+    in_frame: int | None = None
+    out_frame: int | None = None
+    source_duration_frames: int | None = None
+    project_revision: str | None = None
+    marker_text: str | None = None
+    if raw_in is not None or raw_out is not None or marker_id is not None:
+        timing = project_timing(project_path)
+        source_duration_frames = int(timing["duration_frames"])
+        project_revision = str(timing["revision"])
+        if source_duration_frames <= 0:
+            raise ToolError("The project has no renderable frames.")
+        if marker_id is not None:
+            markers = [
+                marker
+                for marker in timing["markers"]
+                if marker.get("marker_id") == marker_id
+            ]
+            if len(markers) != 1:
+                raise ToolError(f"Marker not found uniquely: {marker_id}")
+            marker = markers[0]
+            marker_text = (
+                str(marker.get("text")) if marker.get("text") is not None else None
+            )
+            marker_start = marker.get("start_frame")
+            marker_end = marker.get("end_frame")
+            if (
+                not isinstance(marker_start, int)
+                or not isinstance(marker_end, int)
+                or marker_end <= marker_start
+            ):
+                raise ToolError("marker_id must identify a non-empty range marker.")
+            raw_in = marker_start
+            raw_out = marker_end - 1
+        if raw_in is None:
+            in_frame = 0
+        elif isinstance(raw_in, bool) or not isinstance(raw_in, int):
+            raise ToolError("in_frame must be an integer.")
+        else:
+            in_frame = raw_in
+        if raw_out is None:
+            out_frame = source_duration_frames - 1
+        elif isinstance(raw_out, bool) or not isinstance(raw_out, int):
+            raise ToolError("out_frame must be an integer.")
+        else:
+            out_frame = raw_out
+        if in_frame < 0 or out_frame < in_frame:
+            raise ToolError("Render range must satisfy 0 <= in_frame <= out_frame.")
+        if out_frame >= source_duration_frames:
+            raise ToolError(
+                f"out_frame must be below the project duration ({source_duration_frames})."
+            )
+    total_frames = (
+        out_frame - in_frame + 1
+        if in_frame is not None and out_frame is not None
+        else None
+    )
+    report_progress(0, 3, "Preparing durable render job.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
+    report_progress(1, 3, "Render toolchain is ready.")
     output = OutputTransaction.prepare(
         output_path, overwrite=overwrite, protected_paths=(project_path,)
     )
@@ -240,6 +308,14 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "overwrite": overwrite,
         "preset": preset,
         "consumer_properties": properties,
+        "in_frame": in_frame,
+        "out_frame": out_frame,
+        "total_frames": total_frames,
+        "range_duration_frames": total_frames,
+        "source_duration_frames": source_duration_frames,
+        "project_revision": project_revision,
+        "marker_id": marker_id,
+        "marker_text": marker_text,
         "melt_path": str(melt),
         "log_path": str(log_path(job_id)),
         "started_at": time.time(),
@@ -250,6 +326,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "progress_samples": [],
     }
     write_job(metadata)
+    report_progress(2, 3, "Render job metadata persisted.")
     try:
         process = subprocess.Popen(
             [sys.executable, "-m", "shotcut_mcp.render_worker", job_id],
@@ -276,6 +353,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     metadata.update(pid=process.pid, worker_pid=process.pid, status="running")
     write_job(metadata)
     release_gate(job_id)
+    report_progress(3, 3, "Render supervisor started.")
     return metadata
 
 

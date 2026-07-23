@@ -19,6 +19,7 @@ from shotcut_mcp.server import (
     handle_request,
     serve,
 )
+from shotcut_mcp.tools import OPERATION_CATALOG, OPERATION_EXAMPLES
 
 
 def request(
@@ -181,6 +182,13 @@ class ProtocolNegotiationTests(unittest.TestCase):
             "overwrite",
         ):
             self.assertIn(phrase, first_window)
+        for phrase in (
+            "analyze_media_quality",
+            "inclusive frames",
+            "render_status",
+            "export_marker_chapters",
+        ):
+            self.assertIn(phrase, instructions)
 
     def test_2025_03_batch_requests_are_supported_only_after_negotiation(self) -> None:
         messages = (
@@ -264,6 +272,9 @@ class ProtocolNegotiationTests(unittest.TestCase):
             "items"
         ]["properties"]["kind"]
         self.assertEqual(track_kind["description"], "Track kind.")
+        render_status = by_name["render_status"]["outputSchema"]["properties"]
+        self.assertEqual(render_status["progress_percent"]["type"], ["number", "null"])
+        self.assertEqual(render_status["log_tail"]["type"], "string")
 
     def test_capabilities_can_describe_one_operation_in_full(self) -> None:
         response = handle_request(
@@ -278,6 +289,28 @@ class ProtocolNegotiationTests(unittest.TestCase):
         operation = response["result"]["structuredContent"]["operations"]["trim_item"]
         self.assertEqual(operation["schema"]["properties"]["delta"]["type"], "integer")
         self.assertEqual(operation["example"]["op"], "trim_item")
+        guidance = handle_request(
+            request("tools/call", {"name": "shotcut_capabilities", "arguments": {}})
+        )["result"]["structuredContent"]["feature_guidance"]
+        self.assertIn("duplicate_item", guidance["edit_primitives"])
+        self.assertIn("render_status", guidance["progress"])
+
+    def test_every_advertised_operation_has_a_complete_query_contract(self) -> None:
+        self.assertEqual(set(OPERATION_EXAMPLES), set(OPERATION_CATALOG))
+        for name in OPERATION_CATALOG:
+            with self.subTest(operation=name):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "shotcut_capabilities",
+                            "arguments": {"operation": name},
+                        },
+                    )
+                )
+                details = response["result"]["structuredContent"]["operations"][name]
+                self.assertEqual(details["example"]["op"], name)
+                self.assertFalse(details["schema"]["additionalProperties"])
 
     def test_conflicts_return_structured_recovery_context(self) -> None:
         def conflict(_arguments: dict[str, object]) -> dict[str, object]:

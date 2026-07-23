@@ -19,6 +19,7 @@ from shotcut_mcp.project import (
     create_project,
     diagnose_missing_media,
     edit_project,
+    plan_project_edit,
 )
 from shotcut_mcp.tools import render_contact_sheet_tool
 
@@ -305,6 +306,161 @@ class BacklogProjectFeatureTests(unittest.TestCase):
                     {"project_path": str(project_path), "sample_count": 1}
                 )
             self.assertIsNone(render.call_args.args[1])
+
+    def test_duplicate_replace_filter_order_and_marker_update_are_transactional(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            root = Path(directory)
+            source = root / "source.mp4"
+            replacement = root / "replacement.mp4"
+            source.write_bytes(b"source")
+            replacement.write_bytes(b"replacement")
+            project_path = root / "primitives.mlt"
+            created = create_project(
+                {"project_path": str(project_path), "clips": [{"path": str(source)}]}
+            )
+            prepared = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_filter",
+                            "target": "clip",
+                            "track": "V1",
+                            "item_index": 0,
+                            "service": "brightness",
+                        },
+                        {
+                            "op": "add_filter",
+                            "target": "clip",
+                            "track": "V1",
+                            "item_index": 0,
+                            "service": "volume",
+                        },
+                        {
+                            "op": "add_marker",
+                            "start_frame": 30,
+                            "text": "Draft",
+                            "color": "#00A0FF",
+                        },
+                    ],
+                }
+            )
+            first_filter = prepared["operation_results"][0]["filter_id"]
+            second_filter = prepared["operation_results"][1]["filter_id"]
+            marker_id = prepared["operation_results"][2]["marker_id"]
+            operations = [
+                {
+                    "op": "move_filter",
+                    "filter_id": second_filter,
+                    "before_filter_id": first_filter,
+                },
+                {"op": "duplicate_item", "track": "V1", "item_index": 0},
+                {
+                    "op": "replace_item_media",
+                    "track": "V1",
+                    "item_index": 0,
+                    "path": str(replacement),
+                    "caption": "New take",
+                },
+                {
+                    "op": "update_marker",
+                    "marker_id": marker_id,
+                    "start_frame": 60,
+                    "text": "Approved",
+                    "color": "#FF8800",
+                },
+            ]
+            before_plan = project_path.read_bytes()
+            planned = plan_project_edit(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": prepared["revision"],
+                    "operations": operations,
+                }
+            )
+            self.assertTrue(planned["planned"])
+            self.assertEqual(project_path.read_bytes(), before_plan)
+            changed = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": prepared["revision"],
+                    "operations": operations,
+                }
+            )
+            items = changed["project"]["tracks"][0]["items"]
+            self.assertEqual(len(items), 2)
+            self.assertNotEqual(items[0]["producer_id"], items[1]["producer_id"])
+            self.assertEqual(
+                [item["service"] for item in items[0]["filters"]],
+                ["volume", "brightness"],
+            )
+            self.assertEqual(
+                [item["filter_index"] for item in items[0]["filters"]], [0, 1]
+            )
+            self.assertEqual(
+                [item["service"] for item in items[1]["filters"]],
+                ["volume", "brightness"],
+            )
+            self.assertEqual(items[0]["caption"], "New take")
+            self.assertEqual(items[0]["resource"], str(replacement).replace("\\", "/"))
+            marker = changed["project"]["markers"][0]
+            self.assertEqual(marker["marker_id"], marker_id)
+            self.assertEqual(marker["start_frame"], 60)
+            self.assertEqual(marker["end_frame"], 60)
+            self.assertEqual(marker["text"], "Approved")
+            self.assertEqual(marker["color"], "#FF8800")
+
+    def test_media_replacement_rejects_adjacent_transition_without_writing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            root = Path(directory)
+            first = root / "first.mp4"
+            second = root / "second.mp4"
+            replacement = root / "replacement.mp4"
+            for path in (first, second, replacement):
+                path.write_bytes(path.name.encode())
+            project_path = root / "transition-replace.mlt"
+            created = create_project(
+                {
+                    "project_path": str(project_path),
+                    "clips": [{"path": str(first)}, {"path": str(second)}],
+                }
+            )
+            transitioned = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_transition",
+                            "track": "V1",
+                            "left_item_index": 0,
+                            "duration_frames": 10,
+                        }
+                    ],
+                }
+            )
+            before = project_path.read_bytes()
+            with self.assertRaisesRegex(ToolError, "adjacent transition"):
+                edit_project(
+                    {
+                        "project_path": str(project_path),
+                        "expected_revision": transitioned["revision"],
+                        "operations": [
+                            {
+                                "op": "replace_item_media",
+                                "track": "V1",
+                                "item_index": 0,
+                                "path": str(replacement),
+                            }
+                        ],
+                    }
+                )
+            self.assertEqual(project_path.read_bytes(), before)
 
 
 class BacklogPlatformFeatureTests(unittest.TestCase):

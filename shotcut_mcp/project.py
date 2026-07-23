@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,8 +39,9 @@ from .project_document import (
     ProjectDocument as MltProjectDocument,
 )
 from .project_snapshot import build_project_snapshot
-from .protocol import cancellation_requested
+from .protocol import cancellation_requested, report_progress
 from .storage import (
+    OutputTransaction,
     fsync_directory,
     is_project_backup,
     list_project_backups,
@@ -61,6 +63,7 @@ __all__ = [
     "diagnose_color_workflow",
     "diagnose_missing_media",
     "edit_project",
+    "export_marker_chapters",
     "list_backups",
     "plan_project_edit",
     "render_project_contact_sheet",
@@ -222,7 +225,13 @@ def _authorize_operation_paths(operation: dict[str, Any]) -> dict[str, Any]:
 
     result = dict(operation)
     name = result.get("op")
-    field = "path" if name == "add_clip" else "to" if name == "relink_media" else None
+    field = (
+        "path"
+        if name in {"add_clip", "replace_item_media"}
+        else "to"
+        if name == "relink_media"
+        else None
+    )
     if field is not None and field in result:
         value = result[field]
         if not isinstance(value, str):
@@ -260,6 +269,8 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
             )
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
+    progress_total = len(operations) + 1
+    report_progress(0, progress_total, "Preparing project edit.")
     for index, raw_operation in enumerate(operations):
         if cancellation_requested():
             raise RequestCancelled("Project edit cancelled by the MCP client.")
@@ -268,6 +279,11 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
                 raise ToolError("Each operation must be an object.")
             operation = _authorize_operation_paths(raw_operation)
             results.append(document.apply_operation(operation))
+            report_progress(
+                index + 1,
+                progress_total,
+                f"Applied {index + 1} of {len(operations)} operations in memory.",
+            )
         except ToolError as exc:
             raise ToolError(f"Operation {index} failed: {exc}") from exc
     document.update_main_duration()
@@ -324,6 +340,11 @@ def plan_project_edit(arguments: dict[str, Any]) -> dict[str, Any]:
     shown_lines = diff_lines[:maximum_lines]
     candidate.document.source = data
     candidate.document.revision = prospective_revision
+    report_progress(
+        len(candidate.operation_results) + 1,
+        len(candidate.operation_results) + 1,
+        "Planned project edit validated.",
+    )
     return {
         "planned": True,
         "changed": data != candidate.original,
@@ -349,12 +370,125 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
         timeout=candidate.timeout,
         create_backup=True,
     )
+    report_progress(
+        len(candidate.operation_results) + 1,
+        len(candidate.operation_results) + 1,
+        "Project edit validated and committed.",
+    )
     updated = ProjectDocument.load(candidate.path)
     return {
         "edited": True,
         **saved,
         "operation_results": candidate.operation_results,
         "project": updated.snapshot(),
+    }
+
+
+def _chapter_timecode(frame: int, fps: float) -> str:
+    total_seconds = max(0, int(frame / fps))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return (
+        f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        if hours
+        else f"{minutes:02d}:{seconds:02d}"
+    )
+
+
+def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Export Shotcut-compatible chapter text through a protected output transaction."""
+
+    project_path = expand_path(arguments.get("project_path", ""))
+    output_path = expand_path(arguments.get("output_path", ""))
+    overwrite = _boolean(arguments.get("overwrite", False), "overwrite")
+    include_ranges = _boolean(
+        arguments.get("include_range_markers", False), "include_range_markers"
+    )
+    raw_colors = arguments.get("colors")
+    if raw_colors is not None and (
+        not isinstance(raw_colors, list)
+        or not 1 <= len(raw_colors) <= 16
+        or any(
+            not isinstance(item, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", item)
+            for item in raw_colors
+        )
+    ):
+        raise ToolError("colors must contain between 1 and 16 #RRGGBB values.")
+    colors = (
+        {item.upper() for item in raw_colors} if isinstance(raw_colors, list) else None
+    )
+    expected_revision = arguments.get("expected_revision")
+    if expected_revision is not None and not isinstance(expected_revision, str):
+        raise ToolError("expected_revision must be a SHA-256 string.")
+    document = ProjectDocument.load(project_path)
+    if expected_revision is not None and expected_revision != document.revision:
+        raise ConflictError(
+            "The project changed before chapters were exported.",
+            expected_revision=expected_revision,
+            current_revision=document.revision,
+        )
+    snapshot = document.snapshot()
+    selected = []
+    for marker in snapshot["markers"]:
+        start = marker.get("start_frame")
+        end = marker.get("end_frame")
+        marker_color = marker.get("color")
+        if not isinstance(start, int) or not isinstance(end, int):
+            continue
+        if not include_ranges and end != start:
+            continue
+        if colors is not None and str(marker_color).upper() not in colors:
+            continue
+        selected.append(marker)
+    selected.sort(key=lambda marker: (marker["start_frame"], marker["marker_id"]))
+    chapters = [
+        {
+            "timecode": _chapter_timecode(marker["start_frame"], document.fps),
+            "frame": marker["start_frame"],
+            "text": " ".join(str(marker.get("text") or "Chapter").splitlines()).strip()
+            or "Chapter",
+            "marker_id": marker["marker_id"],
+        }
+        for marker in selected
+    ]
+    if not any(chapter["frame"] == 0 for chapter in chapters):
+        chapters.insert(
+            0,
+            {"timecode": "00:00", "frame": 0, "text": "Intro", "marker_id": None},
+        )
+    data = "".join(
+        f"{chapter['timecode']} {chapter['text']}\n" for chapter in chapters
+    ).encode("utf-8")
+    output = OutputTransaction.prepare(
+        output_path, overwrite=overwrite, protected_paths=(project_path,)
+    )
+    try:
+        with output.temporary.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        with project_lock(project_path):
+            latest_revision = ProjectDocument.load(project_path).revision
+            if latest_revision != document.revision:
+                raise ConflictError(
+                    "The project changed while chapters were being exported.",
+                    expected_revision=document.revision,
+                    current_revision=latest_revision,
+                )
+            output.commit()
+    finally:
+        output.cleanup()
+    return {
+        "created": True,
+        "path": str(output_path),
+        "project_path": str(project_path),
+        "project_revision": document.revision,
+        "chapter_count": len(chapters),
+        "marker_count": len(selected),
+        "include_range_markers": include_ranges,
+        "colors": sorted(colors) if colors is not None else None,
+        "size_bytes": output_path.stat().st_size,
+        "chapters": chapters,
     }
 
 

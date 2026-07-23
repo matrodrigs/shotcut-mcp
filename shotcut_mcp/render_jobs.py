@@ -32,6 +32,9 @@ TERMINAL_STATUSES = {
     "promotion_failed",
 }
 ALL_STATUSES = TERMINAL_STATUSES | {"queued", "running"}
+_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33}
+_REPLACE_RETRY_SECONDS = 1.0
+_REPLACE_RETRY_INTERVAL = 0.01
 
 
 def ensure_job_directory() -> Path:
@@ -69,6 +72,26 @@ def release_gate(job_id: str) -> None:
     os.close(descriptor)
 
 
+def _replace_job_metadata(temporary: Path, path: Path) -> None:
+    """Promote job state atomically despite short-lived Windows reader locks."""
+
+    deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(temporary, path)
+            return
+        except OSError as exc:  # noqa: PERF203 - retry is the purpose of this loop
+            # Windows readers can briefly deny the delete-sharing permission required
+            # by os.replace. Keep retrying the same complete temporary file; never fall
+            # back to an in-place write that could expose partial JSON to another process.
+            if (
+                getattr(exc, "winerror", None) not in _WINDOWS_TRANSIENT_REPLACE_ERRORS
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(_REPLACE_RETRY_INTERVAL)
+
+
 def write_job(metadata: dict[str, Any]) -> None:
     path = metadata_path(metadata.get("job_id", ""))
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -79,7 +102,7 @@ def write_job(metadata: dict[str, Any]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        _replace_job_metadata(temporary, path)
         fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
@@ -177,6 +200,13 @@ def list_jobs(
         "project_path",
         "output_path",
         "preset",
+        "in_frame",
+        "out_frame",
+        "marker_id",
+        "marker_text",
+        "total_frames",
+        "range_duration_frames",
+        "frames_completed",
         "started_at",
         "updated_at",
         "finished_at",

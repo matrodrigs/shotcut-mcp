@@ -26,13 +26,14 @@ def _resource_path(document: ProjectDocument, resource: str) -> Path | None:
 def _filter_summaries(host: Element) -> list[dict[str, Any]]:
     return [
         {
+            "filter_index": index,
             "filter_id": child.get("id"),
             "service": property_value(child, "mlt_service"),
             "shotcut_filter": property_value(child, "shotcut:filter"),
             "enabled": property_value(child, "disable") != "1",
             "properties": properties(child),
         }
-        for child in host.findall("filter")
+        for index, child in enumerate(host.findall("filter"))
     ]
 
 
@@ -206,4 +207,19 @@ def build_project_snapshot(document: ProjectDocument) -> dict[str, Any]:
                 "link",
             )
         },
+    }
+
+
+def project_timing(path: Path) -> dict[str, Any]:
+    """Load only the stable timing facts needed by render orchestration."""
+
+    from .project_document import ProjectDocument
+
+    document = ProjectDocument.load(path)
+    snapshot = build_project_snapshot(document)
+    return {
+        "revision": document.revision,
+        "fps": document.fps,
+        "duration_frames": snapshot["duration_frames"],
+        "markers": snapshot["markers"],
     }
