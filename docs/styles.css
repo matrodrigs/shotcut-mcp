@@ -553,14 +553,14 @@ summary:active {
   .demo-video-shell.has-custom-controls .demo-controls {
     opacity: 1;
     transform: translateY(0);
-    transition: opacity 160ms ease, transform 160ms ease;
+    transition: opacity 120ms ease, transform 120ms ease;
   }
 
   .demo-video-shell.has-custom-controls.is-playing:not(:hover):not(:has(:focus-visible)) .demo-controls {
     opacity: 0;
     pointer-events: none;
     transform: translateY(4px);
-    transition-delay: 700ms;
+    transition-delay: 0s;
   }
 }
 
