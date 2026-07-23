@@ -108,6 +108,8 @@
             <video
               class="demo-video"
               controls
+              controlslist="nofullscreen nodownload noremoteplayback"
+              disablepictureinpicture
               loop
               muted
               playsinline
@@ -120,6 +122,20 @@
               Your browser does not support embedded video.
               <a href="./assets/shotcut-mcp-demo.mp4">Download the Shotcut MCP demonstration.</a>
             </video>
+            <div class="demo-controls">
+              <button class="demo-control demo-control-play" type="button" data-demo-play>
+                <span class="demo-play-icon" aria-hidden="true"></span>
+                <span class="sr-only" data-demo-play-label>Pause</span>
+              </button>
+              <button class="demo-control demo-control-sound" type="button" data-demo-sound>
+                <svg class="demo-sound-icon" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M3 8h3l4-3v10l-4-3H3z" fill="currentColor"></path>
+                  <path class="demo-sound-waves" d="M12.5 7.2a4 4 0 0 1 0 5.6M14.6 5a7 7 0 0 1 0 10" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"></path>
+                  <path class="demo-sound-slash" d="m12.5 8 4 4m0-4-4 4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"></path>
+                </svg>
+                <span class="sr-only" data-demo-sound-label>Turn sound on</span>
+              </button>
+            </div>
           </div>
 
           <figcaption class="demo-caption">
@@ -127,7 +143,6 @@
               <strong id="demo-title">Shotcut MCP demonstration</strong>
               <span>Native timeline edit to H.264 export</span>
             </div>
-            <span class="demo-duration">00:27</span>
           </figcaption>
         </figure>
       </div>

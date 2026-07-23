@@ -101,13 +101,51 @@
 
   const demoVideo = document.querySelector("[data-demo-video]");
   const demoStatus = document.querySelector("[data-demo-status]");
+  const demoPlay = document.querySelector("[data-demo-play]");
+  const demoPlayLabel = document.querySelector("[data-demo-play-label]");
+  const demoSound = document.querySelector("[data-demo-sound]");
+  const demoSoundLabel = document.querySelector("[data-demo-sound-label]");
+  const demoShell = demoVideo?.closest(".demo-video-shell");
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  if (demoVideo && demoPlay && demoShell) {
+    demoVideo.controls = false;
+    demoShell.classList.add("has-custom-controls");
+  }
 
   const updateDemoStatus = () => {
     if (!demoVideo || !demoStatus) return;
     const state = demoVideo.ended ? "finished" : demoVideo.paused ? "paused" : "playing";
     demoStatus.textContent = state === "finished" ? "Finished" : state === "paused" ? "Paused" : "Playing";
     demoStatus.closest(".demo-status")?.setAttribute("data-demo-state", state);
+    demoShell?.classList.toggle("is-playing", state === "playing");
+    if (demoPlay) {
+      const action = demoVideo.paused ? "Play" : "Pause";
+      demoPlay.dataset.playing = String(!demoVideo.paused);
+      demoPlay.setAttribute("aria-label", `${action} demonstration`);
+      if (demoPlayLabel) demoPlayLabel.textContent = action;
+    }
+    if (demoSound) {
+      const action = demoVideo.muted ? "Turn sound on" : "Mute";
+      demoSound.dataset.muted = String(demoVideo.muted);
+      demoSound.setAttribute("aria-label", action);
+      if (demoSoundLabel) demoSoundLabel.textContent = action;
+    }
+  };
+
+  const toggleDemoPlayback = () => {
+    if (!demoVideo) return;
+    if (demoVideo.paused) {
+      demoVideo.play().catch(updateDemoStatus);
+    } else {
+      demoVideo.pause();
+    }
+  };
+
+  const toggleDemoSound = () => {
+    if (!demoVideo) return;
+    demoVideo.muted = !demoVideo.muted;
+    updateDemoStatus();
   };
 
   const applyDemoMotionPreference = () => {
@@ -124,6 +162,13 @@
   demoVideo?.addEventListener("play", updateDemoStatus);
   demoVideo?.addEventListener("pause", updateDemoStatus);
   demoVideo?.addEventListener("ended", updateDemoStatus);
-  reducedMotion.addEventListener?.("change", applyDemoMotionPreference);
+  demoVideo?.addEventListener("click", toggleDemoPlayback);
+  demoPlay?.addEventListener("click", toggleDemoPlayback);
+  demoSound?.addEventListener("click", toggleDemoSound);
+  if (typeof reducedMotion.addEventListener === "function") {
+    reducedMotion.addEventListener("change", applyDemoMotionPreference);
+  } else {
+    reducedMotion.addListener?.(applyDemoMotionPreference);
+  }
   applyDemoMotionPreference();
 })();

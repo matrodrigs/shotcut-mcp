@@ -518,6 +518,7 @@ summary:active {
 }
 
 .demo-video-shell {
+  position: relative;
   aspect-ratio: 16 / 9;
   overflow: hidden;
   background: var(--bg-deep);
@@ -534,6 +535,113 @@ summary:active {
 .demo-video:focus-visible {
   outline: 2px solid var(--brand-bright);
   outline-offset: -3px;
+}
+
+.demo-controls {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  display: none;
+  gap: 0.5rem;
+}
+
+.demo-video-shell.has-custom-controls .demo-controls {
+  display: flex;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .demo-video-shell.has-custom-controls .demo-controls {
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+
+  .demo-video-shell.has-custom-controls.is-playing:not(:hover):not(:has(:focus-visible)) .demo-controls {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition-delay: 700ms;
+  }
+}
+
+.demo-control {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  background: rgba(8, 11, 16, 0.66);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: background-color 100ms ease, border-color 100ms ease, transform 90ms ease;
+}
+
+.demo-control:hover {
+  border-color: rgba(255, 255, 255, 0.38);
+  background: rgba(15, 20, 27, 0.84);
+}
+
+.demo-control:active {
+  transform: scale(0.96);
+}
+
+.demo-control:focus-visible {
+  outline: 2px solid var(--brand-bright);
+  outline-offset: 2px;
+}
+
+.demo-play-icon {
+  position: relative;
+  width: 13px;
+  height: 14px;
+}
+
+.demo-control-play[data-playing="true"] .demo-play-icon::before,
+.demo-control-play[data-playing="true"] .demo-play-icon::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 3px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.demo-control-play[data-playing="true"] .demo-play-icon::before {
+  left: 1px;
+}
+
+.demo-control-play[data-playing="true"] .demo-play-icon::after {
+  right: 1px;
+}
+
+.demo-control-play[data-playing="false"] .demo-play-icon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-style: solid;
+  border-width: 7px 0 7px 11px;
+  border-color: transparent transparent transparent currentColor;
+  transform: translateX(1px);
+}
+
+.demo-sound-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.demo-control-sound[data-muted="true"] .demo-sound-waves,
+.demo-control-sound[data-muted="false"] .demo-sound-slash {
+  display: none;
 }
 
 .demo-caption {
@@ -567,14 +675,6 @@ summary:active {
   color: var(--text-muted);
   font-size: 0.64rem;
   line-height: 1.35;
-}
-
-.demo-duration {
-  flex: 0 0 auto;
-  color: var(--brand-bright);
-  font-size: 0.66rem;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
 }
 
 .compatibility-bar {
@@ -1600,6 +1700,10 @@ details[open]::details-content {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
   }
+
+  .demo-controls {
+    transition-delay: 0s !important;
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -1610,10 +1714,34 @@ details[open]::details-content {
     backdrop-filter: none;
   }
 
+  .demo-controls {
+    background: transparent;
+  }
+
+  .demo-control {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
   .capability-grid article {
     background: var(--surface-raised);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+}
+
+@media (any-pointer: coarse) {
+  .demo-video-shell.has-custom-controls.is-playing:not(:hover):not(:has(:focus-visible)) .demo-controls {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+    transition-delay: 0s;
+  }
+
+  .demo-control {
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -1638,6 +1766,13 @@ details[open]::details-content {
   .capability-grid article {
     background: var(--surface-raised);
     border-color: var(--line-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .demo-control {
+    border-color: var(--line-strong);
+    background: var(--bg);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
