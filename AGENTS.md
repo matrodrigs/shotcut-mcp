@@ -183,7 +183,8 @@ integration stays opt-in and must use temporary projects and outputs.
 - Older clients must not receive fields introduced only by newer MCP protocol versions.
 - Notifications never receive JSON-RPC responses.
 - Tool schemas, handlers, `manifest.json`, documentation, and release metadata must agree.
-- Keep `shotcut_mcp.__version__` and `manifest.json` aligned.
+- Keep `shotcut_mcp.__version__`, `manifest.json`, and the base version before `+` in
+  `.codex-plugin/plugin.json` aligned. The plugin suffix is only a local-install cachebuster.
 - `server.json` describes the latest published artifact, not unreleased source state.
 - Pin release tooling by version and checksum; never publish an unverified MCPB.
 - Release only an existing `vX.Y.Z` tag contained in `main`; its version must match the package

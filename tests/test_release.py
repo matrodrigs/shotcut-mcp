@@ -97,6 +97,13 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertIn(f"<dt>{len(TOOLS)}</dt><dd>MCP tools</dd>", site)
         self.assertIn(f"See all {len(TOOLS)} MCP tools", site)
 
+    def test_plugin_base_version_matches_runtime_release(self) -> None:
+        plugin = json.loads(
+            (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        plugin_version = plugin["version"]
+        self.assertEqual(plugin_version.split("+", 1)[0], self.version)
+
     def test_release_bundle_rejects_a_version_mismatch(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,

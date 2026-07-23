@@ -86,11 +86,23 @@ def package_version() -> str:
 
 def main() -> int:
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    plugin = json.loads(
+        (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
     server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
     version = package_version()
     if manifest.get("version") != version:
         raise RuntimeError(
             "manifest.json version does not match shotcut_mcp.__version__"
+        )
+    plugin_version = plugin.get("version")
+    if (
+        not isinstance(plugin_version, str)
+        or plugin_version.split("+", 1)[0] != version
+    ):
+        raise RuntimeError(
+            ".codex-plugin/plugin.json base version does not match "
+            "shotcut_mcp.__version__"
         )
 
     runtime_catalog = _runtime_tool_catalog()

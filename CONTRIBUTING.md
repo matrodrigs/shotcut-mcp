@@ -11,12 +11,15 @@
 - Add a failing regression test before each bug fix and keep real Shotcut integration opt-in.
 - Run `ruff format --check .`, `ruff check .`, `mypy`, `python scripts/check_release.py`, and
   `python -B -m unittest discover -s tests -v` before publishing changes.
-- Keep runtime and `manifest.json` versions aligned. `server.json` records the latest published
-  artifact; the release workflow derives the next URL and checksum from the attached MCPB.
+- Keep runtime, `manifest.json`, and the base version before `+` in
+  `.codex-plugin/plugin.json` aligned. The plugin suffix is only a local-install cachebuster.
+  `server.json` records the latest published artifact; the release workflow derives the next URL
+  and checksum from the attached MCPB.
 
 ## Releasing
 
-1. Update `shotcut_mcp.__version__` and `manifest.json` to the same `X.Y.Z` version.
+1. Update `shotcut_mcp.__version__`, `manifest.json`, and the base version before `+` in
+   `.codex-plugin/plugin.json` to the same `X.Y.Z` version.
 2. Close the matching `CHANGELOG.md` section with its release date and commit the changes to
    `main`.
 3. Wait for the complete `CI` workflow on that exact `main` commit to succeed.
