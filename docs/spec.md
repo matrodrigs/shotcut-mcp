@@ -19,7 +19,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Support video and audio tracks, gaps, clips, explicit ripple/non-ripple trim, roll, slip,
   slide, constant timewarp, positive timeremap speed maps, split, move, ripple/overwrite edits,
   crossfades, generic MLT filters, keyframed properties, text/color/tone generators,
-  markers, project notes, subtitle feeds and media relinking.
+  markers, project notes, subtitle feeds, media relinking, clip duplication, safe source
+  replacement, filter ordering, and marker updates.
 - Expose MLT service discovery so callers can use filters, transitions and links installed with
   the user's Shotcut build instead of relying on a hard-coded catalog.
 - Keep project inspection and render-job management from the original MCP.
@@ -40,6 +41,15 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Smoke-test hardware encoders instead of trusting FFmpeg's advertised encoder list.
 - Persist bounded progress samples, elapsed time, ETA inputs, terminal metrics, and paginated history.
 - Diagnose missing media with bounded Shotcut-hash/basename search and require an explicit relink edit.
+- Analyze media quality with independently bounded FFmpeg silence, black, freeze, interlace,
+  and EBU R128 loudness checks, returning partial structured results when a filter or stream is
+  unavailable.
+- Render either the complete project, one explicit inclusive frame range, or one non-empty
+  Shotcut range marker while preserving the durable render-job lifecycle.
+- Export point markers in Shotcut's chapter text format, with opt-in range markers and marker-color
+  filtering, through the same atomic output protection used by other generated files.
+- Emit strictly increasing request-scoped MCP progress notifications only when the caller provides
+  a token. Keep durable post-return render progress in `render_status`.
 
 ## Compatibility boundary
 
@@ -52,6 +62,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Work on saved `.mlt`/MLT XML projects. Unsaved GUI state is out of scope.
 - Preserve unsupported structures, but reject an edit when a target is ambiguous or when
   modifying it would require guessing about an unknown transition layout.
+- Preserve Shotcut's exclusive marker end convention and translate it to MLT's inclusive render
+  `out` value. Reject source replacement next to transitions rather than guessing at tractor rewiring.
 - Generic filters accept native MLT properties; the MCP does not promise that every third-party
   filter is available or renderable on every machine.
 - Deny network resources and sidecar/path-bearing consumer properties by default. Administrators
@@ -64,10 +76,11 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 ## Verification
 
 - MCP negotiation, schema-validation, batching and cancellation tests.
+- Protocol-version tests for token-scoped, monotonic progress notifications.
 - Unit tests through public project, preview and render APIs.
 - Regression tests for preservation, optimistic concurrency, backup ownership, atomic output,
   shared producers, advanced timeline edits, speed/color annotations, assisted relinking,
   bounded process/log output, render history/ETA, orphan cleanup and security policies.
 - Real ffmpeg/ffprobe/melt integration covering multitrack creation, editing, validation,
-  preview and final render.
+  preview, media-quality analysis, range rendering, and final render.
 - Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI.

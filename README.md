@@ -46,13 +46,13 @@ provides Melt, FFmpeg, FFprobe, codecs, filters, and render services.
 | Area | Capabilities |
 | --- | --- |
 | Tracks | Add, remove, rename, reorder, lock, hide, mute, and configure composition for video and audio tracks |
-| Timeline | Add media or generators, insert gaps, overwrite, explicit ripple/non-ripple trim, roll, slip, slide, constant speed, positive speed maps, split, move, and remove ranges |
+| Timeline | Add, duplicate, replace, split, and move media or generators; insert gaps, overwrite, remove ranges, trim, roll, slip, slide, and apply constant or variable speed |
 | Transitions | Shotcut-compatible nested crossfades with selectable MLT video services and optional audio mixing |
-| Effects | Add, update, and remove MLT filters on a clip, track, or project; native keyframe property strings are supported |
+| Effects | Add, update, reorder, and remove MLT filters on a clip, track, or project; native keyframe property strings are supported |
 | Generators | Color, dynamic text, tone, and noise |
-| Project data | Profiles, semantic SDR/HLG/PQ workflows, notes, markers, subtitles, assisted hash-based relinking, and unknown XML preservation |
-| Review | Compatibility doctor, color diagnosis, inspection, read-only edit plans/diffs, MLT validation, preview batches, and atomic contact sheets |
-| Export | Hardware-encoder smoke detection and restart-resilient renders with ETA/history for SDR, HLG/PQ HEVC, H.264, HEVC, AV1, ProRes, DNxHD, FLAC, and MP3 |
+| Project data | Profiles, semantic SDR/HLG/PQ workflows, notes, editable markers, subtitles, assisted hash-based relinking, and unknown XML preservation |
+| Review | Compatibility doctor, source-quality and color analysis, inspection, read-only edit plans/diffs, MLT validation, preview batches, and atomic contact sheets |
+| Export | Atomic chapter files and restart-resilient full/range/marker renders with ETA/history, safe presets, and hardware-encoder smoke detection |
 | Recovery | Per-project isolated backups, revision conflict detection, backup listing, and validated restore |
 
 ## Quick start
@@ -70,6 +70,10 @@ macOS locations.
 The stdio server negotiates MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`.
 Legacy clients receive only fields defined by their negotiated schema; structured tool output is
 included from `2025-06-18` onward.
+
+Clients that provide an MCP progress token receive strictly increasing progress notifications for
+longer synchronous work. `start_render` returns after starting its durable supervisor, so later
+render progress and ETA are deliberately reported by `render_status`, not by the completed request.
 
 The MCP performs a short, cached MLT repository preflight before validation, preview and render
 operations. This absorbs one-time cold module loading after a Windows install or portable
@@ -132,19 +136,32 @@ Add these Portuguese subtitles, burn them in using a readable bottom-center styl
 then render an H.264 web export. Monitor the job until it completes.
 ```
 
+```text
+Analyze interview.mov for silence, frozen or black video, interlacing, and EBU R128 loudness.
+Return the measurements before proposing any cleanup edits.
+```
+
+```text
+Inspect documentary.mlt, export its point markers as chapters.txt, then render only the range
+marker named "Trailer" with the H.264 web preset.
+```
+
 ## Recommended workflow
 
 1. Call `shotcut_status` and `shotcut_doctor` to verify the local toolchain and compatibility.
-2. Create a project or call `inspect_project` to obtain its SHA-256 `revision`.
-3. Read `shotcut_capabilities` for operation parameters.
-4. Optionally call `plan_project_edit` to validate the candidate and review its snapshot/XML diff
+2. Call `probe_media` for stream facts and `analyze_media_quality` when cleanup decisions depend on
+   measured silence, black frames, freezes, interlacing, or loudness.
+3. Create a project or call `inspect_project` to obtain its SHA-256 `revision`.
+4. Read `shotcut_capabilities` for operation parameters.
+5. Optionally call `plan_project_edit` to validate the candidate and review its snapshot/XML diff
    without changing the project.
-5. Submit related changes together through `edit_project`, passing the revision as
+6. Submit related changes together through `edit_project`, passing the revision as
    `expected_revision`.
-6. For a broad visual review, call `render_contact_sheet`; use `render_preview` for one exact
+7. For a broad visual review, call `render_contact_sheet`; use `render_preview` for one exact
    moment or `render_preview_batch` for separate exact-frame files. Single previews and contact
    sheets can omit `output_path` to use bounded server-managed output.
-7. Start a render. The supervisor promotes it without polling; use `render_status` for ETA/progress,
+8. Optionally call `export_marker_chapters` for chapter text, or start a render for the full project,
+   one inclusive frame range, or one non-empty range marker. Use `render_status` for ETA/progress,
    `list_render_jobs` for history, or `cancel_render` to stop it after an MCP restart.
 
 Do not save the same project from the Shotcut GUI while the MCP is editing it. For manual visual
@@ -190,6 +207,7 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | `shotcut_doctor` | Verify Shotcut 26.6.25, MLT 7.40.x, repository startup, RNNoise, and path policy |
 | `shotcut_capabilities` | Return edit operations, render presets, compatibility, and workflow guidance |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
+| `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
 | `inspect_project` | Return revision, profile, tracks, items, filters, markers, subtitles, and resources |
 | `diagnose_color_workflow` | Report normalized media color facts and Shotcut 26.6 HDR constraints |
 | `diagnose_missing_media` | Search bounded roots by Shotcut hash/basename and optionally render a visual candidate sheet |
@@ -204,7 +222,8 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | `render_contact_sheet` | Render exact or evenly sampled frames into one atomic review image |
 | `detect_hardware_encoders` | Distinguish built, advertised, and smoke-tested FFmpeg hardware encoders |
 | `open_in_shotcut` | Open a project or media path in the Shotcut GUI |
-| `start_render` | Start a monitored background render |
+| `start_render` | Start a durable full-project, inclusive-frame-range, or range-marker render |
+| `export_marker_chapters` | Atomically export point markers as Shotcut chapter text |
 | `render_status` | Return render state, progress, output information, and log tail |
 | `list_render_jobs` | Return bounded newest-first render history with cursor pagination |
 | `cancel_render` | Cancel a supervised render, including after an MCP server restart |
@@ -216,12 +235,12 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | Group | Operations |
 | --- | --- |
 | Tracks | `add_track`, `remove_track`, `update_track`, `move_track` |
-| Media and generators | `add_clip`, `add_generator`, `relink_media` |
+| Media and generators | `add_clip`, `duplicate_item`, `replace_item_media`, `add_generator`, `relink_media` |
 | Timeline | `remove_item`, `trim_item`, `roll_edit`, `slip_item`, `slide_item`, `split_item`, `move_item`, `insert_gap`, `remove_range` |
 | Speed | `set_clip_speed`, `set_clip_speed_map` |
 | Transitions | `add_transition`, `remove_transition` |
-| Filters | `add_filter`, `update_filter`, `remove_filter` |
-| Metadata and color | `set_notes`, `add_marker`, `remove_marker`, `set_profile`, `set_color_workflow` |
+| Filters | `add_filter`, `update_filter`, `move_filter`, `remove_filter` |
+| Metadata and color | `set_notes`, `add_marker`, `update_marker`, `remove_marker`, `set_profile`, `set_color_workflow` |
 | Subtitles | `set_subtitle_track`, `remove_subtitle_track` |
 
 `shotcut_capabilities` is the runtime source of truth for the accepted fields of each operation.
@@ -277,6 +296,12 @@ preview or hardware HDR10 metadata support. Advanced callers can supply native `
 allowlist. Arbitrary properties, sidecar formats, and path-bearing options are rejected unless an
 administrator explicitly enables them. Codec and hardware availability still depend on the local
 Shotcut/FFmpeg build.
+
+`start_render` accepts both `in_frame` and `out_frame` as inclusive bounds, or one `marker_id`
+returned by `inspect_project`. Shotcut stores a range marker's end as exclusive; the MCP converts it
+to MLT's inclusive `out` value and records the resolved frames in the durable job. Point markers do
+not define a render range. `export_marker_chapters` follows Shotcut's `<timecode> <text>` format,
+includes point markers by default, and can opt into range markers or selected colors.
 
 ## Configuration
 
@@ -355,8 +380,9 @@ python -m unittest discover -s tests -v
 SHOTCUT_MCP_INTEGRATION=1 python -m unittest discover -s tests -v
 ```
 
-The integration test creates media, builds a two-clip timeline with a crossfade and title track,
-validates it through Melt, renders a PNG preview, and exports H.264 video.
+The integration test creates media, analyzes source quality, builds a two-clip timeline with a
+crossfade and title track, validates it through Melt, renders a PNG preview, and exports an H.264
+range.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [CHANGELOG.md](CHANGELOG.md)
 for release changes. For bugs or feature requests, use
@@ -368,6 +394,8 @@ the private process in [SECURITY.md](SECURITY.md).
 - The MCP edits the latest project state saved to disk; it cannot see unsaved GUI changes.
 - Unknown MLT XML is preserved, but edits are rejected when a target cannot be identified safely.
 - Third-party filters, GPU/OpenGL services, codecs, and fonts vary by Shotcut installation.
+- Quality analysis depends on filters present in the installed FFmpeg build. Checks run
+  independently and report `unavailable` or `not_applicable` instead of failing the whole analysis.
 - Speed maps currently accept positive, non-zero maps only and reject third-party/ambiguous links;
   reverse or zero-crossing ramps require additional Shotcut round-trip fixtures.
 - Cross-track ripple trim remains rejected until locked-track and marker fixtures establish the

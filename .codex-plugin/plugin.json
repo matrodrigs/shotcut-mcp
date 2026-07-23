@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Shotcut MCP",
     "shortDescription": "Edit complete Shotcut timelines with transactional safety.",
-    "longDescription": "Local Shotcut and MLT integration for multitrack editing, clips, transitions, filters, text, markers, subtitles, previews, backups, and monitored rendering.",
+    "longDescription": "Local Shotcut and MLT integration for source-quality analysis, multitrack editing, clips, transitions, filters, markers, subtitles, previews, chapter files, backups, and monitored full or range rendering.",
     "developerName": "matrodrigs",
     "category": "Productivity",
     "capabilities": [
@@ -30,7 +30,9 @@
       "Check whether Shotcut is ready to use.",
       "Show me how the current edit looks and summarize the timeline.",
       "Build a complete Shotcut project from these media files.",
-      "Edit this timeline and generate a preview for review."
+      "Analyze this media for silence, black frames, freezes, interlacing, and loudness.",
+      "Edit this timeline, generate a preview, and export one selected range for review.",
+      "Export this project's point markers as a Shotcut chapter file."
     ]
   }
 }

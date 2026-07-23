@@ -84,6 +84,9 @@ class ReleaseBundleTests(unittest.TestCase):
         advertised = {tool["name"]: tool["description"] for tool in manifest["tools"]}
         runtime = {tool["name"]: tool["description"] for tool in TOOLS}
         self.assertEqual(advertised, runtime)
+        site = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+        self.assertIn(f"<dt>{len(TOOLS)}</dt><dd>MCP tools</dd>", site)
+        self.assertIn(f"See all {len(TOOLS)} MCP tools", site)
 
     def test_release_bundle_rejects_a_version_mismatch(self) -> None:
         with (

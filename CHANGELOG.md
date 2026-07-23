@@ -7,11 +7,22 @@
 - Agent-facing MCP workflow instructions, described input parameters, operation-specific schemas
   and examples, structured output contracts, recoverable conflict context, and bounded inline
   preview images.
+- Structured FFmpeg analysis for silence, black frames, frozen video, interlacing, and EBU R128
+  loudness with bounded partial results.
+- Full-project, inclusive-frame-range, and Shotcut range-marker renders plus atomic marker chapter
+  exports.
+- Transactional clip duplication, safe source replacement, filter reordering, marker updates, and
+  token-scoped MCP progress notifications.
 
 ### Changed
 
 - Single-frame previews and contact sheets can use bounded server-managed output when callers omit
   a destination path, and local-only tools now advertise closed-world behavior.
+
+### Fixed
+
+- Retry transient Windows sharing violations when atomically updating render-job state, and record
+  supervisor initialization failures instead of leaving jobs stuck as running.
 
 ## 1.2.0 (2026-07-22)
 

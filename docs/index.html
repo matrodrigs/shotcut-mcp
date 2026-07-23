@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Shotcut MCP — Native timeline editing through MCP</title>
-  <meta name="description" content="A local, open-source MCP server for creating, editing, validating, previewing, and rendering native Shotcut projects.">
+  <meta name="description" content="A local, open-source MCP server for analyzing media and creating, editing, validating, previewing, and rendering native Shotcut projects.">
   <meta name="author" content="Matheus Rodrigues">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="theme-color" content="#080b10">
@@ -29,7 +29,7 @@
     "@type": "SoftwareSourceCode",
     "name": "Shotcut MCP",
     "alternateName": "Shotcut Model Context Protocol Server",
-    "description": "A local, open-source MCP server for creating, editing, validating, previewing, and rendering native Shotcut projects.",
+    "description": "A local, open-source MCP server for analyzing media and creating, editing, validating, previewing, and rendering native Shotcut projects.",
     "codeRepository": "https://github.com/matrodrigs/shotcut-mcp",
     "url": "https://matrodrigs.github.io/shotcut-mcp/",
     "programmingLanguage": "Python",
@@ -90,7 +90,7 @@
           </div>
 
           <dl class="proof-list" aria-label="Project highlights">
-            <div><dt>24</dt><dd>MCP tools</dd></div>
+            <div><dt>26</dt><dd>MCP tools</dd></div>
             <div><dt>500</dt><dd>operations per transaction</dd></div>
             <div><dt>0</dt><dd>runtime packages</dd></div>
             <div><dt>Local</dt><dd>stdio transport</dd></div>
@@ -220,10 +220,10 @@
             <span class="capability-code">TIMELINE</span>
             <h3>Build and revise</h3>
             <ul>
-              <li>Tracks, clips, gaps, ripple, roll, slip, and slide</li>
+              <li>Tracks, clip duplication/replacement, gaps, ripple, roll, slip, and slide</li>
               <li>Constant speed, timewarp, and variable speed maps</li>
-              <li>Transitions, filters, and keyframes</li>
-              <li>Titles, generators, markers, and subtitles</li>
+              <li>Transitions, ordered filters, and keyframes</li>
+              <li>Titles, generators, editable markers, and subtitles</li>
             </ul>
           </article>
           <article>
@@ -231,6 +231,7 @@
             <h3>Inspect and recover</h3>
             <ul>
               <li>Structured project snapshots</li>
+              <li>Silence, black, freeze, interlace, and loudness analysis</li>
               <li>Validated read-only edit plans and XML diffs</li>
               <li>Batch previews and deterministic contact sheets</li>
               <li>Assisted missing-media discovery and visual relink review</li>
@@ -244,13 +245,14 @@
               <li>Installed MLT service discovery</li>
               <li>SDR, HLG, and PQ workflow diagnostics</li>
               <li>Smoke-tested hardware encoder detection</li>
-              <li>Restart-resilient renders with ETA and history</li>
+              <li>Full, frame-range, and marker renders with ETA and history</li>
+              <li>Atomic Shotcut chapter-text exports</li>
               <li>H.264, HEVC, AV1, ProRes, and more</li>
             </ul>
           </article>
         </div>
 
-        <a class="text-link tools-link" href="https://github.com/matrodrigs/shotcut-mcp#mcp-tools">See all 24 MCP tools <span aria-hidden="true">→</span></a>
+        <a class="text-link tools-link" href="https://github.com/matrodrigs/shotcut-mcp#mcp-tools">See all 26 MCP tools <span aria-hidden="true">→</span></a>
       </div>
     </section>
 
