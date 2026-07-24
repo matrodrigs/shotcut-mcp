@@ -1211,7 +1211,12 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "create_project",
         "title": "Create multitrack Shotcut project",
-        "description": "Use to create a new editable Shotcut 26.6 project. Builds MLT XML with a background, V1, optional add_track-shaped tracks, and add_clip-shaped clips.",
+        "description": (
+            "Use to create a new editable Shotcut 26.6 project. If dimensions or frame "
+            "rate were not requested, probe representative source media before choosing "
+            "the profile; do not treat defaults as user intent. Tracks and clips use the "
+            "same shapes as add_track and add_clip."
+        ),
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,

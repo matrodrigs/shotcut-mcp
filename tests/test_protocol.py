@@ -562,6 +562,8 @@ class ProtocolNegotiationTests(unittest.TestCase):
             "inclusive frames",
             "render_status",
             "export_marker_chapters",
+            "saved on disk",
+            "avoid concurrent saves",
         ):
             self.assertIn(phrase, instructions)
 
@@ -647,6 +649,9 @@ class ProtocolNegotiationTests(unittest.TestCase):
             "items"
         ]["properties"]["kind"]
         self.assertEqual(track_kind["description"], "Track kind.")
+        create_description = by_name["create_project"]["description"]
+        self.assertIn("probe representative source media", create_description)
+        self.assertIn("defaults as user intent", create_description)
         render_status = by_name["render_status"]["outputSchema"]["properties"]
         self.assertEqual(render_status["progress_percent"]["type"], ["number", "null"])
         self.assertEqual(render_status["log_tail"]["type"], ["string", "null"])

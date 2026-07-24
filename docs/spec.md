@@ -28,6 +28,10 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   server instructions and error messages.
 - Route common user intents through concise server instructions, including visual review,
   optimistic-conflict recovery, missing media, color diagnosis, export monitoring and backups.
+- When the user mentions recent GUI edits or an open Shotcut session, explain that the MCP sees
+  only the project saved on disk, ask them to save first, and avoid concurrent saves.
+- When dimensions or frame rate were not requested for a new project, guide callers to probe
+  representative source media before choosing the profile instead of treating defaults as intent.
 - Validate tool arguments against the published input contracts, including every operation's
   focused `shotcut_capabilities` schema, revision-or-explicit-force guards for edits and restores,
   and mutually exclusive full/range/marker render modes.
