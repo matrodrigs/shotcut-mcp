@@ -161,7 +161,7 @@
       <div class="shell">
         <div class="section-heading">
           <div>
-            <p class="overline">Actual workflow</p>
+            <p class="overline">Editing workflow</p>
             <h2>From intent to an editable project.</h2>
           </div>
           <p>Shotcut MCP operates on the project format itself. It does not imitate mouse clicks or hide the changes behind a hosted service.</p>
@@ -175,18 +175,18 @@
           </li>
           <li>
             <span class="step-number">02</span>
-            <div><h3>Plan, then apply one transaction</h3><p>Preview a validated XML diff when useful, group related operations, and reject the edit if the project changed underneath it.</p></div>
-            <code>edit_project × 1…500</code>
+            <div><h3>Plan when useful, then apply</h3><p>Dry-run the operations, review the XML diff and Melt validation result, then submit up to 500 related operations as one atomic edit.</p></div>
+            <code>plan → edit × 1…500</code>
           </li>
           <li>
             <span class="step-number">03</span>
-            <div><h3>Validate and recheck</h3><p>Validate the temporary project with Melt, recheck the on-disk revision, create an isolated backup, then atomically replace the original.</p></div>
-            <code>validate → backup → save</code>
+            <div><h3>Validate, recheck, and commit</h3><p>Validate the temporary project with Melt, recheck the on-disk revision, create an isolated backup, then atomically replace the original.</p></div>
+            <code>validate → recheck → save</code>
           </li>
           <li>
             <span class="step-number">04</span>
-            <div><h3>Continue in Shotcut</h3><p>Preview, render, or open the native project for any final hands-on adjustment.</p></div>
-            <code>render_preview → .png</code>
+            <div><h3>Review, render, or continue in Shotcut</h3><p>Review the result visually, start a durable export, or open the native project for hands-on adjustments. Reinspect after saving in Shotcut.</p></div>
+            <code>preview | render | open</code>
           </li>
         </ol>
       </div>
@@ -197,16 +197,17 @@
         <div class="safety-copy">
           <p class="overline">Project safety</p>
           <h2>Edits fail safely or complete cleanly.</h2>
-          <p>Revision checks prevent stale writes. Locks prevent concurrent MCP edits. Backups and atomic promotion keep a valid project on disk throughout the transaction.</p>
+          <p>Revision checks reject stale candidates. A per-project lock serializes MCP commits. Melt validation, isolated backups, and atomic replacement keep the last valid project on disk until the new one is ready.</p>
           <a class="text-link" href="https://github.com/matrodrigs/shotcut-mcp#transactional-safety">Read the safety model <span aria-hidden="true">→</span></a>
         </div>
 
         <ol class="safety-pipeline" aria-label="Transactional edit pipeline" data-flow-sequence>
-          <li><span>1</span><div><strong>Check revision</strong><small>Reject stale state</small></div></li>
-          <li><span>2</span><div><strong>Acquire lock</strong><small>One writer at a time</small></div></li>
-          <li><span>3</span><div><strong>Edit in memory</strong><small>Preserve unknown XML</small></div></li>
-          <li><span>4</span><div><strong>Validate with Melt</strong><small>Test the temporary file</small></div></li>
-          <li><span>5</span><div><strong>Backup and promote</strong><small>Atomic replacement</small></div></li>
+          <li><span>1</span><div><strong>Check base revision</strong><small>Reject stale input</small></div></li>
+          <li><span>2</span><div><strong>Edit in memory</strong><small>Preserve unknown XML</small></div></li>
+          <li><span>3</span><div><strong>Acquire lock and recheck</strong><small>One MCP commit at a time</small></div></li>
+          <li><span>4</span><div><strong>Validate with Melt</strong><small>Test the temporary project</small></div></li>
+          <li><span>5</span><div><strong>Recheck on-disk revision</strong><small>Detect external changes</small></div></li>
+          <li><span>6</span><div><strong>Backup and promote</strong><small>Atomic replacement</small></div></li>
         </ol>
       </div>
     </section>
@@ -216,9 +217,9 @@
         <div class="section-heading">
           <div>
             <p class="overline">Tool coverage</p>
-            <h2>What the server can actually change.</h2>
+            <h2>What the server can actually do.</h2>
           </div>
-          <p>Use specific MCP tools for discovery, editing, review, rendering, and recovery. Native MLT services remain available when you need lower-level control.</p>
+          <p>Use focused MCP tools for discovery, editing, review, rendering, and recovery. Inspect locally installed MLT services when a filter or transition needs lower-level control.</p>
         </div>
 
         <div class="capability-grid">
@@ -226,34 +227,35 @@
             <span class="capability-code">TIMELINE</span>
             <h3>Build and revise</h3>
             <ul>
-              <li>Tracks, clip duplication/replacement, gaps, ripple, roll, slip, and slide</li>
-              <li>Constant speed, timewarp, and variable speed maps</li>
-              <li>Transitions, ordered filters, and keyframes</li>
+              <li>Tracks, clips, gaps, splits, moves, trims, roll, slip, and slide</li>
+              <li>Clip duplication/replacement and ripple or overwrite placement</li>
+              <li>Constant clip speed and positive, non-zero variable speed maps</li>
+              <li>Transitions, ordered filters, and native MLT keyframe strings</li>
               <li>Titles, generators, editable markers, and subtitles</li>
             </ul>
           </article>
           <article>
             <span class="capability-code">REVIEW</span>
-            <h3>Inspect and recover</h3>
+            <h3>Inspect, review, and recover</h3>
             <ul>
               <li>Structured project snapshots</li>
               <li>Silence, black, freeze, interlace, and loudness analysis</li>
-              <li>Validated read-only edit plans and XML diffs</li>
-              <li>Batch previews and deterministic contact sheets</li>
+              <li>Read-only edit plans with Melt validation results and XML diffs</li>
+              <li>Exact-frame preview batches and contact sheets</li>
               <li>Assisted missing-media discovery and visual relink review</li>
-              <li>Revision history and validated restore</li>
+              <li>Isolated backup history and validated restore</li>
             </ul>
           </article>
           <article>
             <span class="capability-code">DELIVERY</span>
-            <h3>Validate and render</h3>
+            <h3>Validate and deliver</h3>
             <ul>
-              <li>Installed MLT service discovery</li>
+              <li>Technical MLT validation and installed-service discovery</li>
               <li>SDR, HLG, and PQ workflow diagnostics</li>
               <li>Smoke-tested hardware encoder detection</li>
-              <li>Full, frame-range, and marker renders with ETA and history</li>
+              <li>Full, frame-range, and range-marker renders with ETA and history</li>
               <li>Atomic Shotcut chapter-text exports</li>
-              <li>H.264, HEVC, AV1, ProRes, and more</li>
+              <li>H.264, HEVC, AV1, ProRes, DNxHD, and audio presets, subject to local availability</li>
             </ul>
           </article>
         </div>
