@@ -11,7 +11,7 @@
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-active-39e6ca.svg)](https://registry.modelcontextprotocol.io/?search=io.github.matrodrigs%2Fshotcut-mcp)
 [![Project website](https://img.shields.io/badge/website-GitHub_Pages-39e6ca.svg)](https://matrodrigs.github.io/shotcut-mcp/)
 
-[Demo](#demonstration) · [Quick start](#quick-start) · [Features](#features) · [Tools](#mcp-tools) · [Safety](#transactional-safety) · [Development](#development)
+[Demo](#demonstration) · [Quick start](#quick-start) · [Features](#features) · [Examples](#example-prompts) · [Safety](#transactional-safety) · [Reference](#mcp-tools)
 
 </div>
 
@@ -110,8 +110,8 @@ Ask your MCP client:
 > Check whether Shotcut MCP is ready and report the detected Shotcut, Melt, FFmpeg, and FFprobe
 > versions.
 
-The client should call `shotcut_status`, then `shotcut_doctor`, and return the discovered paths,
-versions, repository state, RNNoise state, and active path policy.
+A healthy setup reports the discovered paths, versions, repository state, RNNoise availability,
+and active path policy. If anything is missing, the response should explain what needs attention.
 
 ## Example prompts
 
@@ -142,25 +142,19 @@ marker named "Trailer" with the H.264 web preset.
 
 ## Recommended workflow
 
-1. Call `shotcut_status` and `shotcut_doctor` to verify the local toolchain and compatibility.
-2. Call `probe_media` for stream facts and `analyze_media_quality` when cleanup decisions depend on
-   measured silence, black frames, freezes, interlacing, or loudness.
-3. Create a project or call `inspect_project` to obtain its SHA-256 `revision`.
-4. Read `shotcut_capabilities` for operation parameters.
-5. Optionally call `plan_project_edit` to validate the candidate and review its snapshot/XML diff
-   without changing the project.
-6. Submit related changes together through `edit_project`, passing the revision as
-   `expected_revision`.
-7. For a broad visual review, call `render_contact_sheet`; use `render_preview` for one exact
-   moment or `render_preview_batch` for separate exact-frame files. Single previews and contact
-   sheets can omit `output_path` to use bounded server-managed output.
-8. Optionally call `export_marker_chapters` for chapter text, or start a render for the full project,
-   one inclusive frame range, or one non-empty range marker. Use `render_status` for ETA/progress,
-   `list_render_jobs` for history, or `cancel_render` to stop it after an MCP restart.
+Describe the result you want in ordinary language. The MCP client receives tool-specific guidance
+at runtime, so you do not need to know individual tool names or request schemas.
 
-Do not save the same project from the Shotcut GUI while the MCP is editing it. For manual visual
-adjustments, let the MCP finish a batch, save in Shotcut, and inspect the new revision before
-continuing.
+1. Start by asking the client to check that Shotcut MCP and the local media tools are ready.
+2. Share the saved `.mlt` project and source media you want to use, then describe the intended edit.
+3. For cleanup work, ask for measurements such as silence, black frames, freezes, interlacing, or
+   loudness before deciding what to change.
+4. For a large or sensitive edit, ask to review the proposed changes before they are applied.
+5. Review representative frames or a contact sheet, and request adjustments if needed.
+6. Export the full project or a named range, then ask the client to monitor the render to completion.
+
+Let an MCP edit finish before saving the same project from the Shotcut GUI. After manual adjustments,
+save in Shotcut and ask the client to inspect the project again before continuing.
 
 ## Transactional safety
 
@@ -189,6 +183,9 @@ the target is checked again for concurrent changes, and promotion is atomic. A d
 supervisor owns completion and cancellation independently of the MCP stdio process.
 
 ## MCP tools
+
+Most users can work entirely through natural-language prompts. This reference is for client authors,
+integrators, and anyone who wants to understand the available tool surface.
 
 | Tool | Purpose |
 | --- | --- |
@@ -219,48 +216,10 @@ supervisor owns completion and cancellation independently of the MCP stdio proce
 | `list_project_backups` | List retained project backups and revisions |
 | `restore_project_backup` | Validate and atomically restore a selected backup |
 
-### Editing contract
-
-- Query `shotcut_capabilities` for the complete catalog or one operation's schema and example.
-- `plan_project_edit` and `edit_project` enforce those same schemas before touching the project.
-- Inspect first and pass the returned `revision` as `expected_revision`; never retry a conflict
-  with `force` unless the user explicitly authorizes it.
-- Shotcut marker `end_frame` values are exclusive; equality with `start_frame` creates a point
-  marker.
-
-### Transaction example
-
-```json
-{
-  "project_path": "C:/video/project.mlt",
-  "expected_revision": "<revision returned by inspect_project>",
-  "operations": [
-    {
-      "op": "add_track",
-      "kind": "video",
-      "name": "Titles"
-    },
-    {
-      "op": "add_generator",
-      "track": "Titles",
-      "generator": "text",
-      "text": "Opening title",
-      "duration_frames": 90,
-      "position_frame": 0,
-      "mode": "overwrite"
-    },
-    {
-      "op": "add_marker",
-      "start_frame": 0,
-      "text": "Intro",
-      "color": "#00A0FF"
-    }
-  ]
-}
-```
-
-`restore_project_backup` uses the same revision guard as `edit_project`. Exact requirements for
-planning, chapter export, and every operation remain discoverable through the published schemas.
+Clients receive full JSON schemas, operation examples, revision requirements, and safe workflow
+guidance at runtime. The [behavioral specification](docs/spec.md) documents protocol compatibility
+and transactional guarantees; the published tool schemas remain the source of truth for request
+parameters.
 
 ## Rendering
 
@@ -271,20 +230,18 @@ planning, chapter export, and every operation remain discoverable through the pu
 | Intermediate | `prores`, `dnxhd` |
 | Audio | `audio-flac`, `audio-mp3` |
 
-HDR presets use verified 10-bit software encoders; codec and hardware availability still depend on
-the local build. Advanced callers may supply up to 50 scalar `avformat` properties from the safe
-single-file allowlist. Arbitrary or sidecar-producing properties require administrator opt-in.
+Ask the client to render the complete project, a precise frame range, or a named range marker.
+Renders run under a durable supervisor, so progress can still be checked or cancellation requested
+after the MCP client restarts.
 
-`start_render` accepts exactly one range mode: omit all range fields for the full project, supply
-both `in_frame` and `out_frame` as inclusive bounds, or supply one `marker_id` returned by
-`inspect_project`. Shotcut stores a range marker's end as exclusive; the MCP converts it to MLT's
-inclusive `out` value and records the resolved frames in the durable job. Point markers do not
-define a render range. `export_marker_chapters` follows Shotcut's `<timecode> <text>` format,
-includes point markers by default, and can opt into range markers or selected colors.
+HDR presets use verified 10-bit software encoders; codec and hardware availability still depend on
+the local build. Preview and final outputs are written transactionally and replace their destination
+only after the new file completes successfully.
 
 ## Configuration
 
-Common Shotcut installations are detected automatically. Override discovery when necessary:
+Common Shotcut installations are detected automatically, so most users can skip this section.
+Administrators and client integrators can override discovery or tighten runtime policy when needed:
 
 | Environment variable | Purpose |
 | --- | --- |
