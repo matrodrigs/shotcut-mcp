@@ -544,6 +544,7 @@ summary:active {
 }
 
 .demo-controls {
+  --demo-control-icon: #fff;
   position: absolute;
   right: 0.75rem;
   bottom: 0.75rem;
@@ -553,15 +554,19 @@ summary:active {
 
 .demo-video-shell.has-custom-controls .demo-controls {
   display: flex;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+
+.demo-video-shell.has-custom-controls.is-playing.is-controls-idle .demo-controls {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition-delay: 0s;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .demo-video-shell.has-custom-controls .demo-controls {
-    opacity: 1;
-    transform: translateY(0);
-    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
-  }
-
   .demo-video-shell.has-custom-controls.is-playing:not(:hover):not(:has(:focus-visible)) .demo-controls {
     opacity: 0;
     pointer-events: none;
@@ -609,6 +614,8 @@ summary:active {
   position: relative;
   width: 13px;
   height: 14px;
+  color: var(--demo-control-icon);
+  opacity: 1;
 }
 
 .demo-control-play[data-playing="true"] .demo-play-icon::before,
@@ -619,7 +626,7 @@ summary:active {
   bottom: 1px;
   width: 3px;
   border-radius: 1px;
-  background: currentColor;
+  background: var(--demo-control-icon);
 }
 
 .demo-control-play[data-playing="true"] .demo-play-icon::before {
@@ -636,13 +643,24 @@ summary:active {
   inset: 0;
   border-style: solid;
   border-width: 7px 0 7px 11px;
-  border-color: transparent transparent transparent currentColor;
+  border-color: transparent transparent transparent var(--demo-control-icon);
   transform: translateX(1px);
 }
 
 .demo-sound-icon {
   width: 18px;
   height: 18px;
+  color: var(--demo-control-icon);
+  opacity: 1;
+}
+
+.demo-sound-icon > path:first-child {
+  fill: var(--demo-control-icon);
+}
+
+.demo-sound-waves,
+.demo-sound-slash {
+  stroke: var(--demo-control-icon);
 }
 
 .demo-control-sound[data-muted="true"] .demo-sound-waves,
@@ -1865,19 +1883,6 @@ details[open]::details-content {
 }
 
 @media (any-pointer: coarse) {
-  .demo-video-shell.has-custom-controls .demo-controls {
-    opacity: 1;
-    transform: translateY(0);
-    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
-  }
-
-  .demo-video-shell.has-custom-controls.is-playing.is-controls-idle:not(:has(:focus-visible)) .demo-controls {
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(4px);
-    transition-delay: 0s;
-  }
-
   .demo-control {
     width: 44px;
     height: 44px;

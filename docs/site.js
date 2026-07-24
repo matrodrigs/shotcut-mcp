@@ -173,12 +173,16 @@
   const demoSound = document.querySelector("[data-demo-sound]");
   const demoSoundLabel = document.querySelector("[data-demo-sound-label]");
   const demoShell = demoVideo?.closest(".demo-video-shell");
-  const demoTouchQuery = window.matchMedia("(hover: none) and (pointer: coarse)");
+  const demoTouchQuery = window.matchMedia("(any-pointer: coarse)");
   const demoControlsIdleDelay = 1600;
   let demoInView = !("IntersectionObserver" in window);
   let demoPausedByUser = false;
   let demoControlsIdleTimer = 0;
+  let demoTouchInteractionDetected = false;
   let demoVideoPointerRevealOnly = false;
+
+  const hasDemoTouchInput = () =>
+    demoTouchInteractionDetected || demoTouchQuery.matches || navigator.maxTouchPoints > 0;
 
   if (demoVideo && demoPlay && demoShell) {
     demoVideo.controls = false;
@@ -190,10 +194,10 @@
     demoControlsIdleTimer = 0;
     demoShell?.classList.remove("is-controls-idle");
 
-    if (!demoVideo || !demoShell || !demoTouchQuery.matches || demoVideo.paused) return;
+    if (!demoVideo || !demoShell || !hasDemoTouchInput() || demoVideo.paused) return;
 
     demoControlsIdleTimer = window.setTimeout(() => {
-      if (!demoVideo.paused && demoTouchQuery.matches) {
+      if (!demoVideo.paused && hasDemoTouchInput()) {
         demoShell.classList.add("is-controls-idle");
       }
     }, demoControlsIdleDelay);
@@ -243,7 +247,7 @@
       return;
     }
 
-    if (demoTouchQuery.matches && demoShell?.classList.contains("is-controls-idle")) {
+    if (hasDemoTouchInput() && demoShell?.classList.contains("is-controls-idle")) {
       resetDemoControlsIdleTimer();
       return;
     }
@@ -252,7 +256,10 @@
   };
 
   const handleDemoPointerDown = (event) => {
-    if (!demoTouchQuery.matches || !demoShell) return;
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      demoTouchInteractionDetected = true;
+    }
+    if (!hasDemoTouchInput() || !demoShell) return;
     demoVideoPointerRevealOnly =
       event.target === demoVideo && demoShell.classList.contains("is-controls-idle");
     resetDemoControlsIdleTimer();

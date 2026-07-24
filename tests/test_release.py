@@ -165,6 +165,27 @@ class ReleaseBundleTests(unittest.TestCase):
             build_release("next", Path(directory))
 
 
+class SiteAssetTests(unittest.TestCase):
+    def test_mobile_video_idle_detection_covers_touch_capable_browsers(self) -> None:
+        site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'window.matchMedia("(any-pointer: coarse)")',
+            site_script,
+        )
+        self.assertIn("navigator.maxTouchPoints > 0", site_script)
+        self.assertNotIn(
+            'window.matchMedia("(hover: none) and (pointer: coarse)")',
+            site_script,
+        )
+        self.assertIn(
+            "\n.demo-video-shell.has-custom-controls.is-playing.is-controls-idle "
+            ".demo-controls {\n",
+            site_styles,
+        )
+
+
 class ReleaseCiGateTests(unittest.TestCase):
     def test_successful_main_push_ci_allows_release(self) -> None:
         runs = [
