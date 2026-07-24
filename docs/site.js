@@ -173,13 +173,31 @@
   const demoSound = document.querySelector("[data-demo-sound]");
   const demoSoundLabel = document.querySelector("[data-demo-sound-label]");
   const demoShell = demoVideo?.closest(".demo-video-shell");
+  const demoTouchQuery = window.matchMedia("(hover: none) and (pointer: coarse)");
+  const demoControlsIdleDelay = 1600;
   let demoInView = !("IntersectionObserver" in window);
   let demoPausedByUser = false;
+  let demoControlsIdleTimer = 0;
+  let demoVideoPointerRevealOnly = false;
 
   if (demoVideo && demoPlay && demoShell) {
     demoVideo.controls = false;
     demoShell.classList.add("has-custom-controls");
   }
+
+  const resetDemoControlsIdleTimer = () => {
+    window.clearTimeout(demoControlsIdleTimer);
+    demoControlsIdleTimer = 0;
+    demoShell?.classList.remove("is-controls-idle");
+
+    if (!demoVideo || !demoShell || !demoTouchQuery.matches || demoVideo.paused) return;
+
+    demoControlsIdleTimer = window.setTimeout(() => {
+      if (!demoVideo.paused && demoTouchQuery.matches) {
+        demoShell.classList.add("is-controls-idle");
+      }
+    }, demoControlsIdleDelay);
+  };
 
   const updateDemoStatus = () => {
     if (!demoVideo || !demoStatus) return;
@@ -187,6 +205,7 @@
     demoStatus.textContent = state === "finished" ? "Finished" : state === "paused" ? "Paused" : "Playing";
     demoStatus.closest(".demo-status")?.setAttribute("data-demo-state", state);
     demoShell?.classList.toggle("is-playing", state === "playing");
+    resetDemoControlsIdleTimer();
     if (demoPlay) {
       const action = demoVideo.paused ? "Play" : "Pause";
       demoPlay.dataset.playing = String(!demoVideo.paused);
@@ -216,6 +235,27 @@
     if (!demoVideo) return;
     demoVideo.muted = !demoVideo.muted;
     updateDemoStatus();
+  };
+
+  const handleDemoVideoClick = () => {
+    if (demoVideoPointerRevealOnly) {
+      demoVideoPointerRevealOnly = false;
+      return;
+    }
+
+    if (demoTouchQuery.matches && demoShell?.classList.contains("is-controls-idle")) {
+      resetDemoControlsIdleTimer();
+      return;
+    }
+
+    toggleDemoPlayback();
+  };
+
+  const handleDemoPointerDown = (event) => {
+    if (!demoTouchQuery.matches || !demoShell) return;
+    demoVideoPointerRevealOnly =
+      event.target === demoVideo && demoShell.classList.contains("is-controls-idle");
+    resetDemoControlsIdleTimer();
   };
 
   const applyDemoMotionPreference = () => {
@@ -250,7 +290,12 @@
   demoVideo?.addEventListener("play", updateDemoStatus);
   demoVideo?.addEventListener("pause", updateDemoStatus);
   demoVideo?.addEventListener("ended", updateDemoStatus);
-  demoVideo?.addEventListener("click", toggleDemoPlayback);
+  demoVideo?.addEventListener("click", handleDemoVideoClick);
+  demoShell?.addEventListener("pointerdown", handleDemoPointerDown);
+  demoShell?.addEventListener("pointercancel", () => {
+    demoVideoPointerRevealOnly = false;
+  });
+  demoShell?.addEventListener("focusin", resetDemoControlsIdleTimer);
   demoPlay?.addEventListener("click", toggleDemoPlayback);
   demoSound?.addEventListener("click", toggleDemoSound);
   const handleMotionPreference = () => {
@@ -262,5 +307,11 @@
     reducedMotion.addEventListener("change", handleMotionPreference);
   } else {
     reducedMotion.addListener?.(handleMotionPreference);
+  }
+
+  if (typeof demoTouchQuery.addEventListener === "function") {
+    demoTouchQuery.addEventListener("change", resetDemoControlsIdleTimer);
+  } else {
+    demoTouchQuery.addListener?.(resetDemoControlsIdleTimer);
   }
 })();
