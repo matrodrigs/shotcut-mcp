@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.4.1 (2026-07-25)
+
+### Changed
+
+- Clarify that Shotcut MCP reads only the project saved on disk, prompting callers to save recent
+  GUI edits first and avoid concurrent saves.
+- Guide callers to probe representative source media before choosing a new project's dimensions
+  or frame rate when the user did not request them.
 
 ### Fixed
 
