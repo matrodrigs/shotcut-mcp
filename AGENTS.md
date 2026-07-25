@@ -160,6 +160,7 @@ Fast local checks:
 python -m ruff format --check .
 python -m ruff check .
 python -m mypy
+python -m vulture
 python -B -m compileall -q shotcut_mcp scripts tests
 python -B -m unittest discover -s tests -v
 python scripts/check_release.py

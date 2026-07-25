@@ -16,8 +16,10 @@ boundaries and verified behavior.
 - After changing the runtime tool catalog, keep the README table's concise human summaries current,
   then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical
   `manifest.json` descriptions and website tool counts.
-- Run `ruff format --check .`, `ruff check .`, `mypy`, `python scripts/check_release.py`, and
-  `python -B -m unittest discover -s tests -v` before publishing changes.
+- Install the pinned development tools from `requirements-dev.txt`, then run
+  `ruff format --check .`, `ruff check .`, `mypy`, `vulture`,
+  `python scripts/check_release.py`, and `python -B -m unittest discover -s tests -v` before
+  publishing changes.
 - Keep runtime, `manifest.json`, and the base version before `+` in
   `.codex-plugin/plugin.json` aligned. The plugin suffix is only a local-install cachebuster.
   `server.json` records the latest published artifact; the release workflow derives the next URL

@@ -1,0 +1,4 @@
+# Development-only quality tools; the Shotcut MCP runtime remains dependency-free.
+mypy==2.3.0
+ruff==0.15.22
+vulture==2.16

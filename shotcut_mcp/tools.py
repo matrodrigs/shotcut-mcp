@@ -889,10 +889,6 @@ def _object_schema(
 
 
 PATH = {"type": "string", "description": "Absolute or relative local path."}
-TRACK = {
-    "type": "string",
-    "description": "Track name or id returned by inspect_project.",
-}
 OP_NAMES = list(OPERATION_CATALOG)
 
 

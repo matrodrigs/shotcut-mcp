@@ -267,9 +267,11 @@ administrator policies: tools cannot override them per request. `shotcut_status`
 Runtime code uses only the Python standard library. Run the local quality gate with:
 
 ```bash
+python -m pip install -r requirements-dev.txt
 python -m ruff format --check .
 python -m ruff check .
 python -m mypy
+python -m vulture
 python scripts/check_release.py
 python -m unittest discover -s tests -v
 ```
