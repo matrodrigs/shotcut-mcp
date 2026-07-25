@@ -7,12 +7,12 @@
     "url": "https://github.com/matrodrigs/shotcut-mcp",
     "source": "github"
   },
-  "version": "1.4.0",
+  "version": "1.4.1",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/matrodrigs/shotcut-mcp/releases/download/v1.4.0/shotcut-mcp-1.4.0.mcpb",
-      "fileSha256": "625187c470ec6c57c731e15c4e4958926d35a668fc3f957f1bf19067e0f79d78",
+      "identifier": "https://github.com/matrodrigs/shotcut-mcp/releases/download/v1.4.1/shotcut-mcp-1.4.1.mcpb",
+      "fileSha256": "7418675eac43e5a4033ea7febfcb16608a060c6eb2567fe6ce0bd9651c32c8fe",
       "transport": {
         "type": "stdio"
       }
