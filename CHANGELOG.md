@@ -2,15 +2,26 @@
 
 ## Unreleased
 
+## 1.4.2 (2026-07-26)
+
 ### Added
 
 - Add parallel Codex and Claude Code plugin adapters plus a self-hosted Claude marketplace catalog
   over the same client-neutral MCP stdio server.
+- Add a structured `set_clip_opacity` edit operation that accepts clip-relative keyframes,
+  preserves RGB levels, and reuses one MCP-owned filter.
 
 ### Changed
 
 - Document client-specific registration commands while preserving MCPB as the portable release
   artifact and validate both adapters against one version and server entry point.
+
+### Fixed
+
+- Use MLT's still-image producer when adding or replacing durationless image media so PNG and JPEG
+  clips continue rendering after trims, splits, and source replacement.
+- Animate only filter alpha for structured opacity edits, avoiding the color darkening caused by
+  attenuating both brightness and alpha during composition.
 
 ## 1.4.1 (2026-07-25)
 

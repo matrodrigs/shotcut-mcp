@@ -1,6 +1,6 @@
 {
   "name": "shotcut-mcp",
-  "version": "1.4.1+codex.20260726020604",
+  "version": "1.4.2+codex.20260726020604",
   "description": "Full transactional editor for Shotcut projects through a local MCP server.",
   "author": {
     "name": "matrodrigs"
