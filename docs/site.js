@@ -227,6 +227,8 @@
   const demoPlayLabel = document.querySelector("[data-demo-play-label]");
   const demoSound = document.querySelector("[data-demo-sound]");
   const demoSoundLabel = document.querySelector("[data-demo-sound-label]");
+  const demoFullscreen = document.querySelector("[data-demo-fullscreen]");
+  const demoFullscreenLabel = document.querySelector("[data-demo-fullscreen-label]");
   const demoShell = demoVideo?.closest(".demo-video-shell");
   const demoTouchQuery = window.matchMedia("(any-pointer: coarse)");
   const demoControlsIdleDelay = 1600;
@@ -243,6 +245,11 @@
     demoVideo.controls = false;
     demoShell.classList.add("has-custom-controls");
   }
+
+  const canUseDemoFullscreen = Boolean(
+    demoShell?.requestFullscreen || demoVideo?.webkitEnterFullscreen,
+  );
+  if (demoFullscreen) demoFullscreen.hidden = !canUseDemoFullscreen;
 
   const resetDemoControlsIdleTimer = () => {
     window.clearTimeout(demoControlsIdleTimer);
@@ -294,6 +301,31 @@
     if (!demoVideo) return;
     demoVideo.muted = !demoVideo.muted;
     updateDemoStatus();
+  };
+
+  const updateDemoFullscreen = () => {
+    if (!demoFullscreen) return;
+    const active = document.fullscreenElement === demoShell;
+    const action = active ? "Exit fullscreen" : "Enter fullscreen";
+    demoFullscreen.dataset.fullscreen = String(active);
+    demoFullscreen.setAttribute("aria-label", action);
+    if (demoFullscreenLabel) demoFullscreenLabel.textContent = action;
+  };
+
+  const toggleDemoFullscreen = async () => {
+    if (!demoVideo || !demoShell || !demoFullscreen) return;
+
+    try {
+      if (document.fullscreenElement === demoShell) {
+        await document.exitFullscreen();
+      } else if (demoShell.requestFullscreen) {
+        await demoShell.requestFullscreen();
+      } else {
+        demoVideo.webkitEnterFullscreen?.();
+      }
+    } catch {
+      demoFullscreen.hidden = true;
+    }
   };
 
   const handleDemoVideoClick = () => {
@@ -360,6 +392,9 @@
   demoShell?.addEventListener("focusin", resetDemoControlsIdleTimer);
   demoPlay?.addEventListener("click", toggleDemoPlayback);
   demoSound?.addEventListener("click", toggleDemoSound);
+  demoFullscreen?.addEventListener("click", toggleDemoFullscreen);
+  document.addEventListener("fullscreenchange", updateDemoFullscreen);
+  updateDemoFullscreen();
   const handleMotionPreference = () => {
     if (reducedMotion.matches) completeScrollMotion();
     applyDemoMotionPreference();

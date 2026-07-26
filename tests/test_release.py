@@ -230,6 +230,31 @@ class ReleaseBundleTests(unittest.TestCase):
 
 
 class SiteAssetTests(unittest.TestCase):
+    def test_collapsed_codex_install_panel_does_not_reserve_empty_space(self) -> None:
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "#install-panel-codex {\n  min-height: auto;\n}",
+            site_styles,
+        )
+        self.assertIn(
+            'summary::after {\n  content: "+";\n  position: absolute;\n  right: 1rem;',
+            site_styles,
+        )
+
+    def test_demo_controls_expose_a_touch_sized_fullscreen_action(self) -> None:
+        site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+        site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("data-demo-fullscreen", site_markup)
+        self.assertNotIn("nofullscreen", site_markup)
+        self.assertIn("demoShell.requestFullscreen", site_script)
+        self.assertIn(
+            ".demo-control {\n  width: 44px;\n  height: 44px;",
+            site_styles,
+        )
+
     def test_mobile_video_idle_detection_covers_touch_capable_browsers(self) -> None:
         site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
         site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
