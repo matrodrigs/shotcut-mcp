@@ -192,6 +192,28 @@ class ReleaseBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "marketplace catalog"):
                 validate_client_adapters(root, self.version)
 
+    def test_client_adapter_validation_bounds_codex_default_prompts(self) -> None:
+        invalid_prompts = (
+            (["one", "two", "three", "four"], "at most 3"),
+            (["x" * 129], "128 characters"),
+            (["first line\nsecond line"], "one line"),
+        )
+        for prompts, message in invalid_prompts:
+            with (
+                self.subTest(message=message),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                self._copy_client_adapter_fixture(root)
+
+                config_path = root / ".codex-plugin" / "plugin.json"
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                config["interface"]["defaultPrompt"] = prompts
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+
+                with self.assertRaisesRegex(RuntimeError, message):
+                    validate_client_adapters(root, self.version)
+
     def test_release_bundle_rejects_a_version_mismatch(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,

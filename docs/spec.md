@@ -30,6 +30,9 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   server instructions and error messages.
 - Route common user intents through concise server instructions, including visual review,
   optimistic-conflict recovery, missing media, color diagnosis, export monitoring and backups.
+- Keep the first 512 characters of server instructions self-contained with saved-state and normal
+  edit safety. Keep the Codex interface to at most three one-line starter prompts of at most 128
+  characters; operational policy belongs in server instructions and tool contracts.
 - When the user mentions recent GUI edits or an open Shotcut session, explain that the MCP sees
   only the project saved on disk, ask them to save first, and avoid concurrent saves.
 - When dimensions or frame rate were not requested for a new project, guide callers to probe
@@ -59,7 +62,9 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Report installed FFmpeg analyzer availability in the compatibility doctor without making an
   optional analyzer part of the core Shotcut/MLT compatibility verdict.
 - Validate project readiness through one public operation that combines local-resource and
-  required-service checks with first-frame MLT processing.
+  required-service checks with first-frame MLT processing. Report `valid` for successful
+  first-frame Melt processing and `ready` only when those dependency checks also pass; do not
+  direct callers to repeat it after every already-validated edit.
 - Render exactly one of the complete project, one explicit inclusive frame range, or one non-empty
   Shotcut range marker while preserving the durable render-job lifecycle. Accept at most 50
   scalar advanced consumer properties and keep the default safe single-file allowlist.

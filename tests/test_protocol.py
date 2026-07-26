@@ -546,12 +546,11 @@ class ProtocolNegotiationTests(unittest.TestCase):
             request("initialize", {"protocolVersion": "2025-11-25"})
         )
         instructions = response["result"]["instructions"]
-        first_window = instructions[:640]
+        first_window = instructions[:512]
         self.assertEqual(instructions, SERVER_INSTRUCTIONS)
         for phrase in (
+            "saved on disk",
             "inspect_project",
-            "render_contact_sheet",
-            "validate_project",
             "expected_revision",
             "shotcut_capabilities",
             "force",
@@ -559,11 +558,15 @@ class ProtocolNegotiationTests(unittest.TestCase):
         ):
             self.assertIn(phrase, first_window)
         for phrase in (
+            "render_contact_sheet",
+            "validate_project",
+            "valid=True",
+            "ready=True",
+            "edit_project",
             "analyze_media_quality",
             "inclusive frames",
             "render_status",
             "export_marker_chapters",
-            "saved on disk",
             "avoid concurrent saves",
         ):
             self.assertIn(phrase, instructions)
@@ -733,6 +736,12 @@ class ProtocolNegotiationTests(unittest.TestCase):
             operation["schema"]["properties"]["ripple_scope"]["enum"],
             ["track", "all_unlocked"],
         )
+        ripple_description = operation["schema"]["properties"]["ripple_scope"][
+            "description"
+        ]
+        self.assertIn("edge+delta", ripple_description)
+        self.assertIn("ripple=true", ripple_description)
+        self.assertIn("locked", ripple_description)
         self.assertEqual(operation["example"]["op"], "trim_item")
         speed_map = handle_request(
             request(
@@ -758,6 +767,13 @@ class ProtocolNegotiationTests(unittest.TestCase):
             ),
             [],
         )
+        keyframe_properties = speed_map["schema"]["properties"]["keyframes"]["items"][
+            "properties"
+        ]
+        self.assertIn(
+            "output-clip-relative", keyframe_properties["frame"]["description"]
+        )
+        self.assertIn("same sign", keyframe_properties["speed"]["description"])
         full = handle_request(
             request("tools/call", {"name": "shotcut_capabilities", "arguments": {}})
         )["result"]["structuredContent"]
@@ -901,6 +917,13 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertEqual(schema_errors(payload, schema), [])
         self.assertNotIn("validator", schema["properties"])
         self.assertEqual(schema["properties"]["diagnostic"]["type"], ["string", "null"])
+        self.assertIn(
+            "first project frame", schema["properties"]["valid"]["description"]
+        )
+        self.assertIn("local resources", schema["properties"]["ready"]["description"])
+        self.assertIn(
+            "required MLT services", schema["properties"]["ready"]["description"]
+        )
 
     def test_create_project_result_matches_its_published_output_schema(self) -> None:
         schema = next(

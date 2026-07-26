@@ -13,6 +13,8 @@
 
 - Add Shotcut 26.6 compatibility fixtures and real MLT integration coverage for reverse speed maps
   and locked-track ripple behavior.
+- Clarify saved-state, edit, readiness, review and recovery guidance; distinguish `valid` from
+  `ready`, avoid redundant post-edit checks, and keep Codex starter prompts within directory limits.
 
 ## 1.4.2 (2026-07-26)
 

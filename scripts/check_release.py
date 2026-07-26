@@ -258,6 +258,31 @@ def _read_json_object(path: Path) -> dict[str, object]:
     return payload
 
 
+def _validate_codex_default_prompts(codex_manifest: dict[str, object]) -> None:
+    interface = codex_manifest.get("interface")
+    if not isinstance(interface, dict):
+        raise RuntimeError(".codex-plugin/plugin.json interface must be an object")
+    value = interface.get("defaultPrompt")
+    prompts = [value] if isinstance(value, str) else value
+    if not isinstance(prompts, list) or not 1 <= len(prompts) <= 3:
+        raise RuntimeError(
+            "Codex interface.defaultPrompt must contain at least 1 and at most 3 prompts"
+        )
+    for prompt in prompts:
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise RuntimeError(
+                "Each Codex interface.defaultPrompt entry must be a non-empty string"
+            )
+        if "\n" in prompt or "\r" in prompt:
+            raise RuntimeError(
+                "Each Codex interface.defaultPrompt entry must fit on one line"
+            )
+        if len(prompt) > 128:
+            raise RuntimeError(
+                "Each Codex interface.defaultPrompt entry must be at most 128 characters"
+            )
+
+
 def validate_client_adapters(root: Path, version: str) -> None:
     """Keep the Codex and Claude Code adapters on one runtime contract."""
 
@@ -274,6 +299,7 @@ def validate_client_adapters(root: Path, version: str) -> None:
             )
     if codex_manifest.get("name") != "shotcut-mcp":
         raise RuntimeError("client plugin manifests must use the shotcut-mcp name")
+    _validate_codex_default_prompts(codex_manifest)
 
     codex_version = codex_manifest.get("version")
     if not isinstance(codex_version, str) or codex_version.split("+", 1)[0] != version:

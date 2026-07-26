@@ -108,7 +108,11 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
             "ripple_scope",
             "ripple_markers",
         ],
-        "notes": "Legacy in/out remains compatible; edge+delta can ripple the target track or every unlocked track.",
+        "notes": (
+            "Legacy in/out remains compatible. With edge+delta and ripple=true, "
+            "all_unlocked shifts every unlocked track, leaves locked tracks unchanged, "
+            "and rejects cross-track transition intersections; ripple_markers is opt-in."
+        ),
     },
     "roll_edit": {
         "required": ["track", "left_item_index", "delta"],
@@ -224,7 +228,10 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "set_clip_speed_map": {
         "required": ["track", "item_index", "keyframes"],
         "optional": ["image_mode", "pitch_compensation"],
-        "notes": "Uses one owned timeremap link; every speed must keep the same non-zero playback direction.",
+        "notes": (
+            "Uses one owned timeremap link. Entirely forward or entirely reverse maps "
+            "are supported; zero speeds and direction changes are rejected."
+        ),
     },
 }
 
@@ -332,7 +339,10 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "string",
         "enum": ["track", "all_unlocked"],
         "default": "track",
-        "description": "Apply an edge+delta ripple only to the target track or also to every unlocked track.",
+        "description": (
+            "For trim_item with edge+delta and ripple=true, change only the target "
+            "track or every unlocked track; locked tracks remain unchanged."
+        ),
     },
     "edge": {
         "type": "string",
@@ -552,13 +562,25 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "array",
         "minItems": 2,
         "maxItems": 64,
-        "description": "Strictly increasing speed points in one non-zero playback direction; the first frame must be 0.",
+        "description": (
+            "Strictly increasing speed points in one non-zero playback direction; "
+            "the first frame must be 0."
+        ),
         "items": {
             "type": "object",
             "properties": {
-                "frame": {"type": "integer", "minimum": 0},
+                "frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": (
+                        "Zero-based output-clip-relative frame; the first point must be 0."
+                    ),
+                },
                 "speed": {
                     "type": "number",
+                    "description": (
+                        "Signed playback multiplier; every point must have the same sign."
+                    ),
                     "anyOf": [
                         {"minimum": -100, "maximum": -0.01},
                         {"minimum": 0.01, "maximum": 100},
@@ -825,6 +847,12 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
         ),
         "render_presets": RENDER_PRESETS,
         "feature_guidance": {
+            "readiness": (
+                "validate_project reports valid when local Melt processes the first "
+                "project frame and ready when resources and required services also pass. "
+                "edit_project already validates its candidate; avoid routine duplicate "
+                "validation unless readiness or dependencies changed."
+            ),
             "quality_analysis": (
                 "Use analyze_media_quality for objective source measurements before "
                 "proposing cleanup edits; unavailable filters are reported per analyzer."
@@ -853,7 +881,7 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
             "inspect_project to obtain revision and current item indexes",
             "optionally list_mlt_services/describe_mlt_service",
             "edit_project with expected_revision and one batch of operations",
-            "validate_project for readiness, then render_preview for visual review",
+            "when readiness is unknown or dependencies changed, use validate_project before preview/render; otherwise proceed from a successful edit_project to visual review",
             "optionally export_marker_chapters from point markers",
             "start_render for a full project, inclusive frame range, or range marker; use render_status for durable progress and logs",
         ],
@@ -1376,7 +1404,13 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "validate_project",
         "title": "Validate project with MLT",
-        "description": "Use before preview or render to check project readiness, not visual quality. Parses the XML, checks local resources and required installed MLT services, and processes the first frame with local Melt.",
+        "description": (
+            "Use when saved-project readiness is unknown or media/service dependencies "
+            "changed before preview or render; edit_project already validates its "
+            "candidate, so do not repeat this after every successful edit. Checks XML, "
+            "local resources, required installed MLT services, and first-frame Melt "
+            "processing; this is not visual-quality analysis."
+        ),
         "inputSchema": _object_schema(
             {
                 "path": PATH,
@@ -2268,9 +2302,20 @@ MELT_OUTPUT_SCHEMA = _output_object(
 )
 VALIDATION_OUTPUT_SCHEMA = _output_object(
     {
-        "valid": BOOLEAN,
-        "return_code": INTEGER,
-        "diagnostic": NULLABLE_STRING,
+        "valid": {
+            "type": "boolean",
+            "description": (
+                "Whether local Melt processed the first project frame successfully."
+            ),
+        },
+        "return_code": {
+            "type": "integer",
+            "description": "Local Melt process exit code.",
+        },
+        "diagnostic": {
+            "type": ["string", "null"],
+            "description": "Bounded Melt diagnostic output, when present.",
+        },
     },
     ["valid", "return_code", "diagnostic"],
     description="Result of processing the project with local Melt.",
@@ -2927,7 +2972,13 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         {
             "project": PROJECT_RESULT_OUTPUT_SCHEMA,
             **VALIDATION_OUTPUT_SCHEMA["properties"],
-            "ready": BOOLEAN,
+            "ready": {
+                "type": "boolean",
+                "description": (
+                    "Whether validation passed, local resources exist, and required MLT "
+                    "services were verified."
+                ),
+            },
             "checks": PROJECT_READINESS_CHECKS_OUTPUT_SCHEMA,
         }
     ),

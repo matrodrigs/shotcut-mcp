@@ -1,6 +1,6 @@
 {
   "name": "shotcut-mcp",
-  "version": "1.4.2+codex.20260726020604",
+  "version": "1.4.2+codex.20260726045107",
   "description": "Full transactional editor for Shotcut projects through a local MCP server.",
   "author": {
     "name": "matrodrigs"
@@ -35,9 +35,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Check whether Shotcut is ready to use, then analyze this media for silence, black frames, freezes, interlacing, and loudness.",
-      "Show me how the current edit looks, summarize the timeline, and build or edit a complete Shotcut project from these media files with a preview.",
-      "Export one selected range for review and export this project's point markers as a Shotcut chapter file."
+      "Check whether this Shotcut project is ready, explain missing media or services, and analyze its sources for quality issues.",
+      "Inspect these media files, build or revise the Shotcut timeline I describe, and show a visual review of the result.",
+      "Export the project or a selected range, monitor the render, create chapter text, or safely restore a project backup."
     ]
   }
 }

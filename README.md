@@ -268,7 +268,7 @@ integrators, and anyone who wants to understand the available tool surface.
 | `edit_project` | Apply up to 500 timeline operations in one validated transaction |
 | `list_mlt_services` | List locally available MLT filters, transitions, producers, consumers, or links |
 | `describe_mlt_service` | Return metadata for one installed MLT service |
-| `validate_project` | Check Melt validity plus local resources and required installed MLT services |
+| `validate_project` | Report first-frame Melt `valid` status and dependency-complete `ready` status |
 | `render_preview` | Render a selected frame to PNG, with optional managed output |
 | `render_preview_batch` | Render up to 64 exact frames with bounded per-output outcomes |
 | `render_contact_sheet` | Render exact or evenly sampled frames into one atomic review image |
