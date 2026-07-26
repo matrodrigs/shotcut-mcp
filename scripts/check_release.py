@@ -10,6 +10,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SERVER_SCRIPT = "scripts/shotcut_mcp_server.py"
+COMMON_PLUGIN_FIELDS = (
+    "name",
+    "description",
+    "author",
+    "homepage",
+    "repository",
+    "license",
+    "keywords",
+)
 
 
 def runtime_tool_entries() -> list[dict[str, str]]:
@@ -235,6 +245,93 @@ def validate_tool_contracts(root: Path, entries: list[dict[str, str]]) -> None:
         )
 
 
+def _read_json_object(path: Path) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"{path.relative_to(path.parents[1])} root must be an object"
+        )
+    return payload
+
+
+def validate_client_adapters(root: Path, version: str) -> None:
+    """Keep the Codex and Claude Code adapters on one runtime contract."""
+
+    codex_manifest = _read_json_object(root / ".codex-plugin" / "plugin.json")
+    claude_manifest = _read_json_object(root / ".claude-plugin" / "plugin.json")
+    claude_marketplace = _read_json_object(root / ".claude-plugin" / "marketplace.json")
+    project_config = _read_json_object(root / ".mcp.json")
+    portable_manifest = _read_json_object(root / "manifest.json")
+
+    for field in COMMON_PLUGIN_FIELDS:
+        if codex_manifest.get(field) != claude_manifest.get(field):
+            raise RuntimeError(
+                f"Codex and Claude Code plugin manifests disagree on {field!r}"
+            )
+    if codex_manifest.get("name") != "shotcut-mcp":
+        raise RuntimeError("client plugin manifests must use the shotcut-mcp name")
+
+    codex_version = codex_manifest.get("version")
+    if not isinstance(codex_version, str) or codex_version.split("+", 1)[0] != version:
+        raise RuntimeError(
+            ".codex-plugin/plugin.json base version does not match "
+            "shotcut_mcp.__version__"
+        )
+    if claude_manifest.get("version") != version:
+        raise RuntimeError(
+            ".claude-plugin/plugin.json version does not match shotcut_mcp.__version__"
+        )
+    expected_marketplace_plugin = {
+        "name": claude_manifest.get("name"),
+        "source": "./",
+        "description": claude_manifest.get("description"),
+    }
+    if (
+        claude_marketplace.get("name") != "matrodrigs"
+        or claude_marketplace.get("owner") != {"name": "matrodrigs"}
+        or claude_marketplace.get("plugins") != [expected_marketplace_plugin]
+    ):
+        raise RuntimeError(
+            "Claude Code marketplace catalog does not match the plugin manifest"
+        )
+
+    shared_launcher = {
+        "shotcut": {
+            "command": "python",
+            "args": [f"./{SERVER_SCRIPT}"],
+            "cwd": ".",
+        }
+    }
+    if codex_manifest.get("mcpServers") != shared_launcher:
+        raise RuntimeError(
+            "Codex launcher does not match the shared server entry point"
+        )
+    if "mcpServers" in claude_manifest:
+        raise RuntimeError(
+            "Claude Code plugin must use the root .mcp.json without an inline duplicate"
+        )
+    claude_config = {
+        "mcpServers": {
+            "shotcut": {
+                "command": "python",
+                "args": [f"${{CLAUDE_PLUGIN_ROOT:-.}}/{SERVER_SCRIPT}"],
+            }
+        }
+    }
+    if project_config != claude_config:
+        raise RuntimeError(
+            "Claude Code .mcp.json does not match the shared server entry point"
+        )
+    portable_server = portable_manifest.get("server")
+    if (
+        not isinstance(portable_server, dict)
+        or portable_server.get("entry_point") != SERVER_SCRIPT
+    ):
+        raise RuntimeError("MCPB manifest does not match the shared server entry point")
+    if not (root / SERVER_SCRIPT).is_file():
+        raise RuntimeError(f"shared MCP server entry point is missing: {SERVER_SCRIPT}")
+
+
 def package_version() -> str:
     tree = ast.parse((ROOT / "shotcut_mcp" / "__init__.py").read_text(encoding="utf-8"))
     for node in tree.body:
@@ -273,25 +370,13 @@ def main(arguments: list[str] | None = None) -> int:
             )
 
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-    plugin = json.loads(
-        (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
-    )
     server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
     version = package_version()
     if manifest.get("version") != version:
         raise RuntimeError(
             "manifest.json version does not match shotcut_mcp.__version__"
         )
-    plugin_version = plugin.get("version")
-    if (
-        not isinstance(plugin_version, str)
-        or plugin_version.split("+", 1)[0] != version
-    ):
-        raise RuntimeError(
-            ".codex-plugin/plugin.json base version does not match "
-            "shotcut_mcp.__version__"
-        )
-
+    validate_client_adapters(ROOT, version)
     validate_tool_contracts(ROOT, runtime_entries)
 
     package = server["packages"][0]

@@ -20,15 +20,17 @@ boundaries and verified behavior.
   `ruff format --check .`, `ruff check .`, `mypy`, `vulture`,
   `python scripts/check_release.py`, and `python -B -m unittest discover -s tests -v` before
   publishing changes.
-- Keep runtime, `manifest.json`, and the base version before `+` in
-  `.codex-plugin/plugin.json` aligned. The plugin suffix is only a local-install cachebuster.
+- Keep runtime, `manifest.json`, `.claude-plugin/plugin.json`, and the base version before `+` in
+  `.codex-plugin/plugin.json` aligned. Keep both client adapters pointed at
+  `scripts/shotcut_mcp_server.py`, and keep `.claude-plugin/marketplace.json` aligned with the
+  Claude manifest; the Codex plugin suffix is only a local-install cachebuster.
   `server.json` records the latest published artifact; the release workflow derives the next URL
   and checksum from the attached MCPB.
 
 ## Releasing
 
-1. Update `shotcut_mcp.__version__`, `manifest.json`, and the base version before `+` in
-   `.codex-plugin/plugin.json` to the same `X.Y.Z` version.
+1. Update `shotcut_mcp.__version__`, `manifest.json`, `.claude-plugin/plugin.json`, and the base
+   version before `+` in `.codex-plugin/plugin.json` to the same `X.Y.Z` version.
 2. Close the matching `CHANGELOG.md` section with its release date and commit the changes to
    `main`.
 3. Wait for the complete `CI` workflow on that exact `main` commit to succeed.

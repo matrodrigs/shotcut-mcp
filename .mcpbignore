@@ -1,4 +1,5 @@
 .codex-plugin/
+.claude-plugin/
 .github/
 .mcp.json
 .mcpbignore

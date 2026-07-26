@@ -28,7 +28,9 @@ system, process, path, and storage concerns stay behind their respective modules
 
 ```text
 shotcut-mcp/
-├── .codex-plugin/plugin.json   # Codex plugin manifest
+├── .claude-plugin/             # Claude Code plugin manifest and marketplace catalog
+├── .codex-plugin/plugin.json   # Codex plugin adapter
+├── .mcp.json                   # Claude Code project and plugin MCP configuration
 ├── .github/workflows/          # Cross-platform CI and verified registry publishing
 ├── scripts/                    # Stdio entry point and release metadata synchronization/checks
 ├── shotcut_mcp/
@@ -62,6 +64,7 @@ shotcut-mcp/
 - Executable discovery and cancellable child-process supervision belong to `processes.py`.
 - User-controlled paths pass through `path_policy.py`.
 - Render completion is owned by a durable worker outside the MCP stdio process.
+- Codex and Claude Code packaging remain thin adapters over the same MCP entry point.
 - Runtime code supports Python 3.10+ and uses only the standard library.
 
 See the [behavioral specification](spec.md) for compatibility boundaries and verified behavior.

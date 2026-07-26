@@ -1,0 +1,17 @@
+{
+  "name": "shotcut-mcp",
+  "version": "1.4.1",
+  "description": "Full transactional editor for Shotcut projects through a local MCP server.",
+  "author": {
+    "name": "matrodrigs"
+  },
+  "homepage": "https://github.com/matrodrigs/shotcut-mcp",
+  "repository": "https://github.com/matrodrigs/shotcut-mcp",
+  "license": "MIT",
+  "keywords": [
+    "shotcut",
+    "video",
+    "mlt",
+    "mcp"
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "shotcut-mcp",
-  "version": "1.4.1+codex.20260723025523",
+  "version": "1.4.1+codex.20260726020604",
   "description": "Full transactional editor for Shotcut projects through a local MCP server.",
   "author": {
     "name": "matrodrigs"
@@ -14,7 +14,15 @@
     "mlt",
     "mcp"
   ],
-  "mcpServers": "./.mcp.json",
+  "mcpServers": {
+    "shotcut": {
+      "command": "python",
+      "args": [
+        "./scripts/shotcut_mcp_server.py"
+      ],
+      "cwd": "."
+    }
+  },
   "interface": {
     "displayName": "Shotcut MCP",
     "shortDescription": "Edit complete Shotcut timelines with transactional safety.",

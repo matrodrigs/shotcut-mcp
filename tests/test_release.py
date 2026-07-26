@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,15 +14,31 @@ from scripts.build_release import ROOT, build_release, package_members
 from scripts.check_release import (
     runtime_tool_entries,
     sync_tool_contracts,
+    validate_client_adapters,
     validate_tool_contracts,
 )
 from scripts.require_green_ci import require_green_ci
 
 
 class ReleaseBundleTests(unittest.TestCase):
+    CLIENT_ADAPTER_FILES = (
+        Path(".codex-plugin/plugin.json"),
+        Path(".claude-plugin/plugin.json"),
+        Path(".claude-plugin/marketplace.json"),
+        Path(".mcp.json"),
+        Path("manifest.json"),
+        Path("scripts/shotcut_mcp_server.py"),
+    )
+
     def setUp(self) -> None:
         manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.version = manifest["version"]
+
+    def _copy_client_adapter_fixture(self, root: Path) -> None:
+        for relative in self.CLIENT_ADAPTER_FILES:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / relative, destination)
 
     def test_release_bundle_is_reproducible_and_contains_only_runtime_files(
         self,
@@ -40,6 +57,9 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertEqual(sorted(bundle.namelist()), expected)
                 self.assertNotIn("server.json", bundle.namelist())
                 self.assertNotIn("tests/test_release.py", bundle.namelist())
+                self.assertNotIn(".claude-plugin/plugin.json", bundle.namelist())
+                self.assertNotIn(".claude-plugin/marketplace.json", bundle.namelist())
+                self.assertNotIn(".codex-plugin/plugin.json", bundle.namelist())
                 extracted = root / "extracted"
                 bundle.extractall(extracted)
             checksum = Path(first["checksum"]).read_text(encoding="ascii")
@@ -143,12 +163,34 @@ class ReleaseBundleTests(unittest.TestCase):
             validate_tool_contracts(root, entries)
             self.assertEqual(sync_tool_contracts(root, entries), ())
 
-    def test_plugin_base_version_matches_runtime_release(self) -> None:
-        plugin = json.loads(
-            (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
-        )
-        plugin_version = plugin["version"]
-        self.assertEqual(plugin_version.split("+", 1)[0], self.version)
+    def test_client_adapters_match_runtime_release_and_entry_point(self) -> None:
+        validate_client_adapters(ROOT, self.version)
+
+    def test_client_adapter_validation_rejects_entry_point_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_client_adapter_fixture(root)
+
+            config_path = root / ".codex-plugin" / "plugin.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["mcpServers"]["shotcut"]["args"] = ["./scripts/other_server.py"]
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "Codex launcher"):
+                validate_client_adapters(root, self.version)
+
+    def test_client_adapter_validation_rejects_marketplace_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_client_adapter_fixture(root)
+
+            catalog_path = root / ".claude-plugin" / "marketplace.json"
+            catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+            catalog["plugins"][0]["source"] = "./other-plugin"
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "marketplace catalog"):
+                validate_client_adapters(root, self.version)
 
     def test_release_bundle_rejects_a_version_mismatch(self) -> None:
         with (

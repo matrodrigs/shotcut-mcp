@@ -67,7 +67,7 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 
 - Python 3.10 or newer
 - Shotcut 26.6.25, or a compatible installation that provides MLT 7.40.x
-- Codex CLI or another MCP client that supports local stdio servers
+- Codex CLI, Claude Code, or another MCP client that supports local stdio servers
 
 The current compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The integration suite
 is exercised on Windows; executable discovery also supports binaries available on `PATH` and common
@@ -78,6 +78,8 @@ checks, are documented in the [behavioral specification](docs/spec.md).
 
 ### 1. Clone the repository
 
+Claude Code users installing through the plugin marketplace can skip this step and continue below.
+
 ```bash
 git clone https://github.com/matrodrigs/shotcut-mcp.git
 cd shotcut-mcp
@@ -87,7 +89,9 @@ No `pip install` is required.
 
 ### 2. Register the MCP server
 
-Use an absolute path to the server script.
+Choose your client. Manual registration uses an absolute path to the same server script.
+
+#### Codex
 
 **Windows PowerShell**
 
@@ -100,6 +104,54 @@ codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_serv
 ```bash
 codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py
 ```
+
+#### Claude Code
+
+Run these commands inside Claude Code. No repository clone is required.
+
+```text
+/plugin marketplace add matrodrigs/shotcut-mcp
+/plugin install shotcut-mcp@matrodrigs
+```
+
+Run `/reload-plugins` to activate the plugin without restarting Claude Code.
+
+<details>
+<summary>Manual stdio registration</summary>
+
+Clone the repository as described in step 1, then register the server directly.
+
+**Windows PowerShell**
+
+```powershell
+claude mcp add --transport stdio --scope user shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"
+```
+
+**macOS or Linux**
+
+```bash
+claude mcp add --transport stdio --scope user shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py
+```
+
+From a source checkout, Claude Code can also use the checked-in `.mcp.json` as project-scoped
+configuration when it is started from the repository root. Review and approve the server when
+prompted.
+
+</details>
+
+#### Other MCP clients
+
+Configure a local `stdio` server with these values:
+
+| Setting | Value |
+| --- | --- |
+| Name | `shotcut` |
+| Command | `python` on Windows; `python3` on macOS or Linux |
+| Argument | Absolute path to `scripts/shotcut_mcp_server.py` |
+
+The `.codex-plugin` and `.claude-plugin` manifests are thin client adapters. The Claude marketplace
+entry only adds discovery and installation. Every route starts the same dependency-free Python
+server; the tools, schemas, and project-safety behavior do not fork by client.
 
 Restart the MCP client or open a new task after registration.
 

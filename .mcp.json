@@ -2,8 +2,7 @@
   "mcpServers": {
     "shotcut": {
       "command": "python",
-      "args": ["./scripts/shotcut_mcp_server.py"],
-      "cwd": "."
+      "args": ["${CLAUDE_PLUGIN_ROOT:-.}/scripts/shotcut_mcp_server.py"]
     }
   }
 }

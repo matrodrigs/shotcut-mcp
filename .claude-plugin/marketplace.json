@@ -1,0 +1,14 @@
+{
+  "name": "matrodrigs",
+  "owner": {
+    "name": "matrodrigs"
+  },
+  "description": "Shotcut MCP plugins maintained by matrodrigs.",
+  "plugins": [
+    {
+      "name": "shotcut-mcp",
+      "source": "./",
+      "description": "Full transactional editor for Shotcut projects through a local MCP server."
+    }
+  ]
+}

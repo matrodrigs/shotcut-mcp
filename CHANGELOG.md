@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add parallel Codex and Claude Code plugin adapters plus a self-hosted Claude marketplace catalog
+  over the same client-neutral MCP stdio server.
+
+### Changed
+
+- Document client-specific registration commands while preserving MCPB as the portable release
+  artifact and validate both adapters against one version and server entry point.
+
 ## 1.4.1 (2026-07-25)
 
 ### Changed

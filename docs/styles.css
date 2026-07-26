@@ -1164,7 +1164,7 @@ summary:active {
 
 .source-panel > pre {
   flex: 1 0 auto;
-  min-height: 235px;
+  min-height: 190px;
   padding: 1.5rem;
 }
 
@@ -1787,7 +1787,7 @@ details[open]::details-content {
   }
 
   .source-panel > pre {
-    min-height: 220px;
+    min-height: 180px;
     padding: 1.25rem;
   }
 

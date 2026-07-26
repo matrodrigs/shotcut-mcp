@@ -86,7 +86,7 @@
               <span>Get latest release</span>
               <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2v8m0 0 3-3m-3 3L5 7M3 13h10"/></svg>
             </a>
-            <a class="button button-secondary" href="#install">Install from source</a>
+          <a class="button button-secondary" href="#install">Installation options</a>
           </div>
 
           <dl class="proof-list" aria-label="Project highlights">
@@ -290,14 +290,23 @@
 
           <article class="source-panel">
             <div class="source-panel-heading">
-              <div><p class="panel-kicker">Windows PowerShell</p><h3>Three source commands.</h3></div>
-              <button class="copy-button" type="button" data-copy-target="#windows-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
+              <div><p class="panel-kicker">Claude Code · Plugin marketplace</p><h3>Install without cloning.</h3></div>
+              <button class="copy-button" type="button" data-copy-target="#claude-marketplace-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
             </div>
-            <pre data-terminal-sequence><code id="windows-install-command"><span class="command">git clone https://github.com/matrodrigs/shotcut-mcp.git</span>
-<span class="command">cd shotcut-mcp</span>
-<span class="command">codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"</span></code></pre>
+            <pre data-terminal-sequence><code id="claude-marketplace-command"><span class="command">/plugin marketplace add matrodrigs/shotcut-mcp</span>
+<span class="command">/plugin install shotcut-mcp@matrodrigs</span>
+<span class="command">/reload-plugins</span></code></pre>
             <details class="platform-details">
-              <summary>macOS or Linux commands</summary>
+              <summary>Codex · Windows PowerShell</summary>
+              <div class="platform-code">
+                <button class="copy-button compact" type="button" data-copy-target="#windows-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
+                <pre><code id="windows-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
+cd shotcut-mcp
+codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"</code></pre>
+              </div>
+            </details>
+            <details class="platform-details">
+              <summary>Codex · macOS or Linux</summary>
               <div class="platform-code">
                 <button class="copy-button compact" type="button" data-copy-target="#unix-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
                 <pre><code id="unix-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
