@@ -139,7 +139,7 @@ class ReleaseBundleTests(unittest.TestCase):
             )
             (root / "README.md").write_text(readme, encoding="utf-8")
             (root / "docs" / "index.html").write_text(
-                "<dt>1</dt><dd>MCP tools</dd>\nSee all 1 MCP tools\n",
+                "See all 1 MCP tools\n",
                 encoding="utf-8",
             )
 
@@ -157,7 +157,7 @@ class ReleaseBundleTests(unittest.TestCase):
             self.assertIs(manifest["tools_generated"], False)
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), readme)
             self.assertIn(
-                "<dt>2</dt><dd>MCP tools</dd>",
+                "See all 2 MCP tools",
                 (root / "docs" / "index.html").read_text(encoding="utf-8"),
             )
             validate_tool_contracts(root, entries)

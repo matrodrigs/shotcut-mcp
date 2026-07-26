@@ -137,12 +137,16 @@ def _replace_site_count(source: str, count: int) -> str:
             "link",
         ),
     )
+    found = 0
     for pattern, replacement, label in replacements:
         source, matches = re.subn(pattern, replacement, source)
-        if matches != 1:
+        if matches > 1:
             raise RuntimeError(
-                f"site must contain exactly one MCP tool count {label}; found {matches}"
+                f"site contains duplicate MCP tool count {label}; found {matches}"
             )
+        found += matches
+    if found == 0:
+        raise RuntimeError("site must contain at least one MCP tool count")
     return source
 
 
