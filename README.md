@@ -76,22 +76,22 @@ macOS locations.
 Additional compatibility and runtime behavior, including progress, MLT startup, and RNNoise
 checks, are documented in the [behavioral specification](docs/spec.md).
 
-### 1. Clone the repository
+### Choose your client
 
-Claude Code users installing through the plugin marketplace can skip this step and continue below.
+| [**Codex**](#codex) | [**Claude Code**](#claude-code) | [**Other MCP clients**](#other-mcp-clients) |
+| --- | --- | --- |
+| Native CLI registration | Plugin marketplace | Standard MCP `stdio` |
+
+### Codex
+
+Clone the repository. No `pip install` is required.
 
 ```bash
 git clone https://github.com/matrodrigs/shotcut-mcp.git
 cd shotcut-mcp
 ```
 
-No `pip install` is required.
-
-### 2. Register the MCP server
-
-Choose your client. Manual registration uses an absolute path to the same server script.
-
-#### Codex
+Register the server using an absolute path to the checked-out script.
 
 **Windows PowerShell**
 
@@ -105,7 +105,7 @@ codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_serv
 codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py
 ```
 
-#### Claude Code
+### Claude Code
 
 Run these commands inside Claude Code. No repository clone is required.
 
@@ -119,7 +119,14 @@ Run `/reload-plugins` to activate the plugin without restarting Claude Code.
 <details>
 <summary>Manual stdio registration</summary>
 
-Clone the repository as described in step 1, then register the server directly.
+Clone the repository. No `pip install` is required.
+
+```bash
+git clone https://github.com/matrodrigs/shotcut-mcp.git
+cd shotcut-mcp
+```
+
+Then register the server directly using an absolute path to the checked-out script.
 
 **Windows PowerShell**
 
@@ -139,7 +146,14 @@ prompted.
 
 </details>
 
-#### Other MCP clients
+### Other MCP clients
+
+Clone the repository. No `pip install` is required.
+
+```bash
+git clone https://github.com/matrodrigs/shotcut-mcp.git
+cd shotcut-mcp
+```
 
 Configure a local `stdio` server with these values:
 
@@ -155,7 +169,7 @@ server; the tools, schemas, and project-safety behavior do not fork by client.
 
 Restart the MCP client or open a new task after registration.
 
-### 3. Check the installation
+### Verify the installation
 
 Ask your MCP client:
 

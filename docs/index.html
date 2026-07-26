@@ -274,47 +274,88 @@
           <p>Shotcut MCP runs locally over stdio. It needs Python 3.10 or newer and a compatible Shotcut installation.</p>
         </div>
 
-        <div class="install-grid">
-          <article class="release-panel">
-            <span class="recommended-label">Recommended</span>
-            <div>
-              <p class="panel-kicker">MCPB-compatible clients</p>
-              <h3>Install the packaged release.</h3>
-              <p>Open the latest packaged release on GitHub and install it with your MCPB-compatible client.</p>
-            </div>
-            <a class="button button-primary" href="https://github.com/matrodrigs/shotcut-mcp/releases/latest">
-              View latest release
-              <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5 11 11 5m0 0H6m5 0v5"/></svg>
-            </a>
-          </article>
+        <div class="install-browser" data-install-browser>
+          <div class="install-client-tabs" role="tablist" aria-label="Installation client">
+            <button class="install-client-tab is-active" id="install-tab-claude" type="button" role="tab" aria-selected="true" aria-controls="install-panel-claude" tabindex="0" data-install-tab="claude">
+              <span class="install-client-name">Claude Code <span class="install-route-badge">No clone</span></span>
+              <span class="install-client-route">Plugin marketplace</span>
+            </button>
+            <button class="install-client-tab" id="install-tab-codex" type="button" role="tab" aria-selected="false" aria-controls="install-panel-codex" tabindex="-1" data-install-tab="codex">
+              <span class="install-client-name">Codex</span>
+              <span class="install-client-route">Native CLI registration</span>
+            </button>
+            <button class="install-client-tab" id="install-tab-other" type="button" role="tab" aria-selected="false" aria-controls="install-panel-other" tabindex="-1" data-install-tab="other">
+              <span class="install-client-name">Other MCP clients</span>
+              <span class="install-client-route">MCPB or standard stdio</span>
+            </button>
+          </div>
 
-          <article class="source-panel">
-            <div class="source-panel-heading">
-              <div><p class="panel-kicker">Claude Code · Plugin marketplace</p><h3>Install without cloning.</h3></div>
-              <button class="copy-button" type="button" data-copy-target="#claude-marketplace-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
-            </div>
-            <pre data-terminal-sequence><code id="claude-marketplace-command"><span class="command">/plugin marketplace add matrodrigs/shotcut-mcp</span>
+          <div class="install-client-panels">
+            <section class="install-client-panel is-active" id="install-panel-claude" role="tabpanel" aria-labelledby="install-tab-claude" data-install-panel="claude">
+              <div class="install-panel-heading">
+                <div>
+                  <p class="panel-kicker">Claude Code · Plugin marketplace</p>
+                  <h3>Install from the conversation.</h3>
+                  <p>Add the marketplace, install the plugin, then reload it without restarting Claude Code.</p>
+                </div>
+                <button class="copy-button" type="button" data-copy-target="#claude-marketplace-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
+              </div>
+              <div class="install-command-block">
+                <pre data-terminal-sequence><code id="claude-marketplace-command"><span class="command">/plugin marketplace add matrodrigs/shotcut-mcp</span>
 <span class="command">/plugin install shotcut-mcp@matrodrigs</span>
 <span class="command">/reload-plugins</span></code></pre>
-            <details class="platform-details">
-              <summary>Codex · Windows PowerShell</summary>
-              <div class="platform-code">
-                <button class="copy-button compact" type="button" data-copy-target="#windows-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
-                <pre><code id="windows-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
+              </div>
+            </section>
+
+            <section class="install-client-panel" id="install-panel-codex" role="tabpanel" aria-labelledby="install-tab-codex" data-install-panel="codex" hidden>
+              <div class="install-panel-heading">
+                <div>
+                  <p class="panel-kicker">Codex · Local stdio server</p>
+                  <h3>Clone once, then register.</h3>
+                  <p>Choose your platform. The command points Codex at the same dependency-free Python server.</p>
+                </div>
+              </div>
+              <div class="install-platform-list">
+                <details class="platform-details" name="codex-platform" open>
+                  <summary><span><strong>Windows</strong><small>PowerShell · Python</small></span></summary>
+                  <div class="platform-code">
+                    <button class="copy-button compact" type="button" data-copy-target="#windows-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
+                    <pre><code id="windows-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
 cd shotcut-mcp
 codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"</code></pre>
-              </div>
-            </details>
-            <details class="platform-details">
-              <summary>Codex · macOS or Linux</summary>
-              <div class="platform-code">
-                <button class="copy-button compact" type="button" data-copy-target="#unix-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
-                <pre><code id="unix-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
+                  </div>
+                </details>
+                <details class="platform-details" name="codex-platform">
+                  <summary><span><strong>macOS or Linux</strong><small>Terminal · Python 3</small></span></summary>
+                  <div class="platform-code">
+                    <button class="copy-button compact" type="button" data-copy-target="#unix-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
+                    <pre><code id="unix-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
 cd shotcut-mcp
 codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py</code></pre>
+                  </div>
+                </details>
               </div>
-            </details>
-          </article>
+            </section>
+
+            <section class="install-client-panel" id="install-panel-other" role="tabpanel" aria-labelledby="install-tab-other" data-install-panel="other" hidden>
+              <div class="install-panel-heading">
+                <div>
+                  <p class="panel-kicker">Other MCP clients</p>
+                  <h3>Use the package or standard stdio.</h3>
+                  <p>Start with the packaged release if your client supports MCPB. Otherwise clone the repository and configure the local server directly.</p>
+                </div>
+                <a class="button button-primary" href="https://github.com/matrodrigs/shotcut-mcp/releases/latest">
+                  View release
+                  <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5 11 11 5m0 0H6m5 0v5"/></svg>
+                </a>
+              </div>
+              <div class="stdio-config" aria-label="Standard stdio configuration">
+                <div><span>Name</span><code>shotcut</code></div>
+                <div><span>Command</span><code>python <em>or</em> python3</code></div>
+                <div><span>Argument</span><code>/absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py</code></div>
+              </div>
+            </section>
+          </div>
         </div>
 
         <div class="compatibility-note">
@@ -328,7 +369,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
       <div class="shell faq-layout">
         <div>
           <p class="overline">Common questions</p>
-          <h2>Clear boundaries build trust.</h2>
+          <h2>Local files. Editable projects.</h2>
         </div>
         <div class="faq-list">
           <details>

@@ -166,6 +166,61 @@
     });
   });
 
+  const installBrowser = document.querySelector("[data-install-browser]");
+  const installTabs = [...(installBrowser?.querySelectorAll("[data-install-tab]") || [])];
+  const installPanels = [...(installBrowser?.querySelectorAll("[data-install-panel]") || [])];
+
+  const activateInstallTab = (tab, { focus = false } = {}) => {
+    const client = tab?.dataset.installTab;
+    if (!client) return;
+
+    installTabs.forEach((candidate) => {
+      const active = candidate === tab;
+      candidate.classList.toggle("is-active", active);
+      candidate.setAttribute("aria-selected", String(active));
+      candidate.tabIndex = active ? 0 : -1;
+    });
+
+    installPanels.forEach((panel) => {
+      const active = panel.dataset.installPanel === client;
+      panel.hidden = !active;
+      panel.classList.toggle("is-active", active);
+    });
+
+    if (focus) tab.focus();
+  };
+
+  installTabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activateInstallTab(tab));
+    tab.addEventListener("keydown", (event) => {
+      let nextIndex = null;
+
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        nextIndex = (index + 1) % installTabs.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        nextIndex = (index - 1 + installTabs.length) % installTabs.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = installTabs.length - 1;
+      }
+
+      if (nextIndex === null) return;
+      event.preventDefault();
+      activateInstallTab(installTabs[nextIndex], { focus: true });
+    });
+  });
+
+  const codexPlatformDetails = [...document.querySelectorAll('details[name="codex-platform"]')];
+  codexPlatformDetails.forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (!details.open) return;
+      codexPlatformDetails.forEach((candidate) => {
+        if (candidate !== details) candidate.open = false;
+      });
+    });
+  });
+
   const demoVideo = document.querySelector("[data-demo-video]");
   const demoStatus = document.querySelector("[data-demo-status]");
   const demoPlay = document.querySelector("[data-demo-play]");
