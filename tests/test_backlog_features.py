@@ -110,7 +110,7 @@ class BacklogProjectFeatureTests(unittest.TestCase):
         self.assertEqual(result["checks"]["resources"]["status"], "failed")
         self.assertEqual(
             result["checks"]["resources"]["missing_resources"],
-            [str(project_path.parent / "missing.mp4")],
+            [str((project_path.parent / "missing.mp4").resolve())],
         )
         self.assertEqual(result["checks"]["mlt_services"]["status"], "failed")
         self.assertEqual(
