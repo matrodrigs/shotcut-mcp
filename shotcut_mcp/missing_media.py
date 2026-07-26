@@ -95,8 +95,15 @@ def _authorized_roots(arguments: dict[str, Any]) -> list[Path]:
     if not isinstance(roots_value, list) or not 1 <= len(roots_value) <= 8:
         raise ToolError("search_roots must contain between 1 and 8 paths.")
     roots = [expand_path(value) for value in roots_value]
-    if any(not root.is_dir() for root in roots):
-        raise ToolError("Every search root must be an existing directory.")
+    invalid_roots = [str(root) for root in roots if not root.is_dir()]
+    if invalid_roots:
+        raise ToolError(
+            "Every search root must be an existing directory.",
+            code="search_root_not_found",
+            recommended_action="choose_existing_search_roots_and_retry",
+            recommended_tool="diagnose_missing_media",
+            details={"invalid_roots": invalid_roots},
+        )
     return roots
 
 
@@ -264,7 +271,16 @@ def _visualize_candidates(
     except RequestCancelled:
         raise
     except ToolError as exc:
-        return {"created": False, "error": str(exc)}
+        return {
+            "created": False,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "error_code": exc.code,
+            "recoverable": exc.recoverable,
+            "recommended_action": exc.recommended_action,
+            "recommended_tool": exc.recommended_tool,
+            "details": exc.details,
+        }
 
 
 def diagnose_missing_resources(

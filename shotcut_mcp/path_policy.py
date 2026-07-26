@@ -39,7 +39,11 @@ def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
     """Resolve a user path and enforce the administrator's root policy."""
 
     if not isinstance(value, str) or not value.strip():
-        raise ToolError("The path must be a non-empty string.")
+        raise ToolError(
+            "The path must be a non-empty string.",
+            code="invalid_path",
+            recommended_action="provide_valid_path_and_retry",
+        )
     expanded = Path(os.path.expandvars(value)).expanduser()
     if (
         enforce_policy
@@ -47,7 +51,11 @@ def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
         and not expanded.is_absolute()
     ):
         raise ToolError(
-            "Relative paths are disabled by SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS."
+            "Relative paths are disabled by SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS.",
+            code="path_policy_denied",
+            recommended_action="provide_absolute_path_or_change_policy",
+            recommended_tool="shotcut_doctor",
+            details={"path": value},
         )
     resolved = expanded.resolve()
     configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
@@ -70,7 +78,11 @@ def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
                 break
         if not allowed:
             raise ToolError(
-                f"Path is outside SHOTCUT_MCP_ALLOWED_ROOTS allowed roots: {resolved}"
+                f"Path is outside SHOTCUT_MCP_ALLOWED_ROOTS allowed roots: {resolved}",
+                code="path_policy_denied",
+                recommended_action="move_path_inside_allowed_roots_or_change_policy",
+                recommended_tool="shotcut_doctor",
+                details={"path": str(resolved)},
             )
     return resolved
 
@@ -133,7 +145,13 @@ def parsed_project_resources(
     try:
         root = ET.parse(project_path).getroot()
     except (ET.ParseError, OSError) as exc:
-        raise ToolError(f"Invalid MLT XML while checking resources: {exc}") from exc
+        raise ToolError(
+            f"Invalid MLT XML while checking resources: {exc}",
+            code="invalid_project_xml",
+            recommended_action="restore_or_resave_project",
+            recommended_tool="list_project_backups",
+            details={"path": str(project_path)},
+        ) from exc
     return root, resource_references(root)
 
 
@@ -174,7 +192,11 @@ def enforce_project_resource_policy(project_path: Path) -> None:
         raise ToolError(
             "Project network resources are disabled by default: "
             f"{preview}. An administrator can opt in with "
-            "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES=1."
+            "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES=1.",
+            code="network_resource_policy_denied",
+            recommended_action="remove_network_resources_or_change_policy",
+            recommended_tool="shotcut_doctor",
+            details={"resource_count": len(network)},
         )
     if not os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip():
         return

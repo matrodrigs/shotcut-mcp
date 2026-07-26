@@ -209,7 +209,12 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     project_path = expand_path(arguments.get("project_path", ""))
     output_path = expand_path(arguments.get("output_path", ""))
     if not project_path.is_file():
-        raise ToolError(f"Project not found: {project_path}")
+        raise ToolError(
+            f"Project not found: {project_path}",
+            code="project_not_found",
+            recommended_action="check_project_path_and_retry",
+            details={"path": str(project_path)},
+        )
     enforce_project_resource_policy(project_path)
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
@@ -239,7 +244,13 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         source_duration_frames = int(timing["duration_frames"])
         project_revision = str(timing["revision"])
         if source_duration_frames <= 0:
-            raise ToolError("The project has no renderable frames.")
+            raise ToolError(
+                "The project has no renderable frames.",
+                code="project_has_no_renderable_frames",
+                recommended_action="inspect_project_and_add_timeline_content",
+                recommended_tool="inspect_project",
+                details={"project_path": str(project_path)},
+            )
         if marker_id is not None:
             markers = [
                 marker
@@ -247,7 +258,13 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
                 if marker.get("marker_id") == marker_id
             ]
             if len(markers) != 1:
-                raise ToolError(f"Marker not found uniquely: {marker_id}")
+                raise ToolError(
+                    f"Marker not found uniquely: {marker_id}",
+                    code="range_marker_not_found",
+                    recommended_action="inspect_project_and_choose_range_marker",
+                    recommended_tool="inspect_project",
+                    details={"marker_id": marker_id},
+                )
             marker = markers[0]
             marker_text = (
                 str(marker.get("text")) if marker.get("text") is not None else None
@@ -344,7 +361,13 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
             finished_at=time.time(),
         )
         write_job(metadata)
-        raise ToolError(f"Could not start the render: {exc}") from exc
+        raise ToolError(
+            f"Could not start the render: {exc}",
+            code="render_start_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"job_id": job_id},
+        ) from exc
     with _RUNNING_JOBS_LOCK:
         RUNNING_JOBS[job_id] = process
     threading.Thread(

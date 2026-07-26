@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Return every tool execution failure with a published structured recovery contract, including a
+  stable error code, recoverability, recommended action/tool, and bounded contextual details.
+- Route unsupported project structures, stale render cursors, missing streams/search roots,
+  FFmpeg capability failures, unavailable visual frames, and corrupt durable render state to
+  specific safe recovery actions.
+
 ## 1.4.5 (2026-07-26)
 
 ### Added

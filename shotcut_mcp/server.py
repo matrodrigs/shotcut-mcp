@@ -29,6 +29,9 @@ SUPPORTED_PROTOCOL_VERSIONS = {
     "2025-11-25",
 }
 STRUCTURED_CONTENT_PROTOCOLS = {"2025-06-18", "2025-11-25"}
+MAX_ERROR_DETAIL_ITEMS = 32
+MAX_ERROR_DETAIL_STRING = 2000
+MAX_ERROR_DETAIL_DEPTH = 4
 SERVER_INSTRUCTIONS = (
     "Saved state: Use the user-supplied project path; ask if missing or ambiguous. "
     "Shotcut MCP sees only the project saved on disk; if Shotcut is open or recent GUI "
@@ -55,7 +58,9 @@ SERVER_INSTRUCTIONS = (
     "frames, or one range marker; monitor its job_id with render_status. Use "
     "export_marker_chapters for Shotcut-compatible chapter text and list_render_jobs "
     "when the job_id is unknown.\n"
-    "Recovery: List backups before restoring and confirm the selected backup."
+    "Recovery: For a tool result with isError=true, follow error_code, "
+    "recommended_action, recommended_tool, and details instead of parsing the English "
+    "message. List backups before restoring and confirm the selected backup."
 )
 
 
@@ -159,13 +164,39 @@ def _inline_image_content(
     }
 
 
+def _bounded_error_detail(value: Any, depth: int = 0) -> Any:
+    """Keep diagnostic context useful without letting errors bypass message bounds."""
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[-MAX_ERROR_DETAIL_STRING:]
+    if depth >= MAX_ERROR_DETAIL_DEPTH:
+        return str(value)[-MAX_ERROR_DETAIL_STRING:]
+    if isinstance(value, dict):
+        return {
+            str(key)[:128]: _bounded_error_detail(item, depth + 1)
+            for key, item in list(value.items())[:MAX_ERROR_DETAIL_ITEMS]
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _bounded_error_detail(item, depth + 1)
+            for item in value[:MAX_ERROR_DETAIL_ITEMS]
+        ]
+    return str(value)[-MAX_ERROR_DETAIL_STRING:]
+
+
 def _tool_error_payload(exc: ToolError) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "error": str(exc),
+        "error": str(exc)[-4000:],
         "error_type": type(exc).__name__,
+        "error_code": exc.code,
+        "recoverable": exc.recoverable,
+        "recommended_action": exc.recommended_action,
+        "recommended_tool": exc.recommended_tool,
+        "details": _bounded_error_detail(exc.details),
     }
     if isinstance(exc, ConflictError):
-        payload["recommended_action"] = exc.recommended_action
         if exc.expected_revision is not None:
             payload["expected_revision"] = exc.expected_revision
         if exc.current_revision is not None:
@@ -242,7 +273,17 @@ def _handle_tool_call(
             request_id,
             -32602,
             "Tool arguments do not match the published input contracts.",
-            {"validationErrors": validation_errors},
+            {
+                "validationErrors": validation_errors,
+                "error_code": "invalid_arguments",
+                "recoverable": True,
+                "recommended_action": "correct_arguments_and_retry",
+                "recommended_tool": name,
+                "details": {
+                    "validation_errors": validation_errors[:MAX_ERROR_DETAIL_ITEMS],
+                    "validation_error_count": len(validation_errors),
+                },
+            },
         )
     try:
         reporter = (
@@ -258,7 +299,12 @@ def _handle_tool_call(
             payload = handler(arguments)
         result = _tool_result(payload, session.protocol_version, tool_name=name)
     except RequestCancelled as exc:
-        return _error(request_id, -32800, str(exc) or "Request cancelled.")
+        return _error(
+            request_id,
+            -32800,
+            str(exc) or "Request cancelled.",
+            _tool_error_payload(exc),
+        )
     except ToolError as exc:
         result = _tool_result(
             _tool_error_payload(exc),
@@ -268,8 +314,15 @@ def _handle_tool_call(
         )
     except Exception as exc:  # Keep the long-running stdio server alive.
         print(f"Unexpected error in {name}: {exc!r}", file=sys.stderr, flush=True)
+        failure = ToolError(
+            f"Unexpected internal failure: {type(exc).__name__}: {exc}",
+            code="internal_failure",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"exception_type": type(exc).__name__},
+        )
         result = _tool_result(
-            {"error": f"Unexpected internal failure: {type(exc).__name__}: {exc}"},
+            _tool_error_payload(failure),
             session.protocol_version,
             True,
         )

@@ -1934,6 +1934,65 @@ NULLABLE_STRING = {"type": ["string", "null"]}
 NULLABLE_INTEGER = {"type": ["integer", "null"]}
 NULLABLE_NUMBER = {"type": ["number", "null"]}
 
+ERROR_OUTPUT_PROPERTIES: dict[str, dict[str, Any]] = {
+    "error": {"type": "string", "description": "Human-readable failure summary."},
+    "error_type": {
+        "type": "string",
+        "description": "Stable Python exception family retained for compatibility.",
+    },
+    "error_code": {
+        "type": "string",
+        "description": "Stable machine-readable Shotcut MCP error code.",
+    },
+    "recoverable": {
+        "type": "boolean",
+        "description": "Whether the caller can take a safe corrective action.",
+    },
+    "recommended_action": {
+        "type": "string",
+        "description": "Machine-readable next action for the caller.",
+    },
+    "recommended_tool": {
+        "type": ["string", "null"],
+        "description": "MCP tool to call next when one action is preferred.",
+    },
+    "details": {
+        "type": "object",
+        "description": "Bounded structured context specific to the error code.",
+        "additionalProperties": {},
+    },
+    "expected_revision": NULLABLE_STRING,
+    "current_revision": NULLABLE_STRING,
+}
+ERROR_OUTPUT_REQUIRED = [
+    "error",
+    "error_type",
+    "error_code",
+    "recoverable",
+    "recommended_action",
+    "recommended_tool",
+    "details",
+]
+
+
+def _structured_output_schema(success_schema: dict[str, Any]) -> dict[str, Any]:
+    """Publish one object contract that accepts either success or tool-error data."""
+
+    result = _clone_schema(success_schema)
+    properties = result.setdefault("properties", {})
+    if not isinstance(properties, dict):
+        raise ValueError("Tool output schemas must publish object properties.")
+    properties.update(_clone_schema(ERROR_OUTPUT_PROPERTIES))
+    success_required = result.pop("required", [])
+    if not isinstance(success_required, list) or not success_required:
+        raise ValueError("Tool success output schemas must require stable fields.")
+    result["oneOf"] = [
+        {"required": success_required},
+        {"required": list(ERROR_OUTPUT_REQUIRED)},
+    ]
+    return result
+
+
 PROPERTY_BAG_SCHEMA = {
     "type": "object",
     "description": "Decoded MLT properties keyed by property name.",
@@ -3041,7 +3100,7 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "type": ["object", "null"],
                 "properties": {
                     "created": BOOLEAN,
-                    "error": STRING,
+                    **_clone_schema(ERROR_OUTPUT_PROPERTIES),
                     "path": STRING,
                     "size_bytes": INTEGER,
                     "cells": _output_array(
@@ -3255,7 +3314,9 @@ for tool in TOOLS:
     described_schema = _clone_schema(tool["inputSchema"])
     _describe_input_schema(described_schema)
     tool["inputSchema"] = described_schema
-    tool["outputSchema"] = OUTPUT_SCHEMAS.get(tool["name"], _result_schema())
+    tool["outputSchema"] = _structured_output_schema(
+        OUTPUT_SCHEMAS.get(tool["name"], _result_schema())
+    )
 
 
 HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {

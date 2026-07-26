@@ -184,6 +184,9 @@ def _write_validated(
                 raise ConflictError(
                     "expected_revision is required to edit an existing project.",
                     current_revision=current_revision,
+                    code="expected_revision_required",
+                    recommended_action="inspect_project_and_retry",
+                    details={"project_path": str(path)},
                 )
             if expected_revision != current_revision:
                 raise ConflictError(
@@ -207,7 +210,16 @@ def _write_validated(
             if not validation.get("valid"):
                 raise ToolError(
                     "MLT rejected the edit before the project was replaced: "
-                    + str(validation.get("diagnostic") or validation.get("return_code"))
+                    + str(
+                        validation.get("diagnostic") or validation.get("return_code")
+                    ),
+                    code="project_validation_failed",
+                    recommended_action="run_compatibility_diagnostics_and_reconsider_edit",
+                    recommended_tool="shotcut_doctor",
+                    details={
+                        "project_path": str(path),
+                        "return_code": validation.get("return_code"),
+                    },
                 )
             latest = path.read_bytes() if path.is_file() else None
             latest_revision = project_revision(latest) if latest is not None else None
@@ -240,10 +252,20 @@ def _write_validated(
 def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     path = expand_path(arguments.get("project_path", ""))
     if path.suffix.lower() not in {".mlt", ".xml"}:
-        raise ToolError("The project must use the .mlt or .xml extension.")
+        raise ToolError(
+            "The project must use the .mlt or .xml extension.",
+            code="invalid_project_path",
+            recommended_action="choose_mlt_or_xml_project_path",
+            details={"path": str(path)},
+        )
     overwrite = _boolean(arguments.get("overwrite", False), "overwrite")
     if path.exists() and not overwrite:
-        raise ToolError(f"The project already exists: {path}")
+        raise ToolError(
+            f"The project already exists: {path}",
+            code="output_exists",
+            recommended_action="choose_another_output_or_authorize_overwrite",
+            details={"path": str(path)},
+        )
     width = _int(arguments.get("width", 1920), "width", 16)
     height = _int(arguments.get("height", 1080), "height", 16)
     fps_num = _int(arguments.get("fps_num", 30), "fps_num", 1)
@@ -329,6 +351,9 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
             raise ConflictError(
                 "expected_revision is required to edit an existing project.",
                 current_revision=original_revision,
+                code="expected_revision_required",
+                recommended_action="inspect_project_and_retry",
+                details={"project_path": str(path)},
             )
         if expected_revision != original_revision:
             raise ConflictError(
@@ -355,7 +380,28 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
                 f"Applied {index + 1} of {len(operations)} operations in memory.",
             )
         except ToolError as exc:
-            raise ToolError(f"Operation {index} failed: {exc}") from exc
+            operation_name = (
+                raw_operation.get("op") if isinstance(raw_operation, dict) else None
+            )
+            semantic_error = exc.code != "tool_error"
+            raise ToolError(
+                f"Operation {index} failed: {exc}",
+                code=exc.code if semantic_error else "edit_operation_rejected",
+                recoverable=exc.recoverable,
+                recommended_action=(
+                    exc.recommended_action
+                    if semantic_error
+                    else "inspect_operation_capabilities_and_retry"
+                ),
+                recommended_tool=(
+                    exc.recommended_tool if semantic_error else "shotcut_capabilities"
+                ),
+                details={
+                    **exc.details,
+                    "operation_index": index,
+                    "operation": operation_name,
+                },
+            ) from exc
     document.update_main_duration()
     return EditCandidate(
         path=path,
@@ -682,7 +728,16 @@ def render_project_contact_sheet(arguments: dict[str, Any]) -> dict[str, Any]:
             raise ToolError("sample_count must be an integer between 1 and 64.")
         duration = ProjectDocument.load(project_path).snapshot()["duration_frames"]
         if duration <= 0:
-            raise ToolError("The project has no timeline frames to sample.")
+            raise ToolError(
+                "The project has no timeline frames to sample.",
+                code="no_visual_frame",
+                recommended_action="inspect_project_and_add_timeline_content",
+                recommended_tool="inspect_project",
+                details={
+                    "project_path": str(project_path),
+                    "reason": "empty_timeline",
+                },
+            )
         frames = (
             [0]
             if sample_count == 1
@@ -742,7 +797,16 @@ def restore_backup(arguments: dict[str, Any]) -> dict[str, Any]:
     if expected_revision is not None and not isinstance(expected_revision, str):
         raise ToolError("expected_revision must be a SHA-256 string.")
     if not is_project_backup(project_path, backup_path):
-        raise ToolError("backup_path is not one of this project's backups.")
+        raise ToolError(
+            "backup_path is not one of this project's backups.",
+            code="backup_not_owned_by_project",
+            recommended_action="list_project_backups_and_choose_backup",
+            recommended_tool="list_project_backups",
+            details={
+                "project_path": str(project_path),
+                "backup_path": str(backup_path),
+            },
+        )
     document = ProjectDocument.load(backup_path)
     document.path = project_path
     return {

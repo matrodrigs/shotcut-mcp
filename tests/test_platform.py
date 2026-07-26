@@ -117,6 +117,61 @@ class MeltCacheTests(unittest.TestCase):
         self.assertEqual(result["quality_analyzers"], analyzers)
         self.assertFalse(result["quality_analyzers"]["freeze"]["available"])
 
+    def test_media_contact_sheet_reports_when_no_candidate_has_a_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "audio-only.mp3"
+            output = root / "candidates.png"
+            media.write_bytes(b"audio")
+            failed = subprocess.CompletedProcess([], 1, "", "no video stream")
+            with (
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, None, None, Path("ffmpeg")),
+                ),
+                patch(
+                    "shotcut_mcp.platform.require_executable",
+                    return_value=Path("ffmpeg"),
+                ),
+                patch("shotcut_mcp.platform.run_capture", return_value=failed),
+                self.assertRaises(ToolError) as caught,
+            ):
+                platform.render_media_contact_sheet(
+                    [("candidate-1", media)], output, overwrite=False
+                )
+
+            self.assertEqual(caught.exception.code, "no_visual_frame")
+            self.assertEqual(caught.exception.recommended_tool, "probe_media")
+            self.assertEqual(caught.exception.details["candidate_count"], 1)
+            self.assertEqual(
+                caught.exception.details["skipped"][0]["candidate_id"], "candidate-1"
+            )
+            self.assertFalse(output.exists())
+
+    def test_encoder_query_failure_recommends_compatibility_diagnostics(self) -> None:
+        failed = subprocess.CompletedProcess([], 1, "", "encoder query failed")
+        platform._ENCODER_CACHE.clear()
+        with tempfile.TemporaryDirectory() as directory:
+            ffmpeg = Path(directory) / "ffmpeg"
+            ffmpeg.write_bytes(b"executable")
+            with (
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, None, None, ffmpeg),
+                ),
+                patch("shotcut_mcp.platform.require_executable", return_value=ffmpeg),
+                patch("shotcut_mcp.platform.run_capture", return_value=failed),
+                self.assertRaises(ToolError) as caught,
+            ):
+                platform.detect_hardware_encoders(refresh=True)
+
+        self.assertEqual(caught.exception.code, "ffmpeg_capability_query_failed")
+        self.assertEqual(
+            caught.exception.recommended_action, "run_compatibility_diagnostics"
+        )
+        self.assertEqual(caught.exception.recommended_tool, "shotcut_doctor")
+        self.assertEqual(caught.exception.details["query"], "encoders")
+
 
 class PathPolicyTests(unittest.TestCase):
     def test_configured_allowed_roots_block_paths_outside_them(self) -> None:
@@ -128,9 +183,13 @@ class PathPolicyTests(unittest.TestCase):
                 patch.dict(
                     os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(allowed)}, clear=False
                 ),
-                self.assertRaisesRegex(ToolError, "allowed roots"),
+                self.assertRaisesRegex(ToolError, "allowed roots") as caught,
             ):
                 platform.expand_path(str(outside))
+
+            self.assertEqual(caught.exception.code, "path_policy_denied")
+            self.assertEqual(caught.exception.recommended_tool, "shotcut_doctor")
+            self.assertEqual(caught.exception.details["path"], str(outside.resolve()))
 
     def test_project_network_resources_are_blocked_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

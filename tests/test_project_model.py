@@ -20,6 +20,35 @@ class ProjectModelTests(unittest.TestCase):
         validation.start()
         self.addCleanup(validation.stop)
 
+    def test_missing_project_reports_actionable_error_metadata(self) -> None:
+        missing = Path("C:/definitely-missing/shotcut-project.mlt")
+        with self.assertRaisesRegex(ToolError, "Project not found") as caught:
+            ProjectDocument.load(missing)
+
+        self.assertEqual(caught.exception.code, "project_not_found")
+        self.assertEqual(
+            caught.exception.recommended_action, "check_project_path_and_retry"
+        )
+        self.assertEqual(caught.exception.details["path"], str(missing))
+
+    def test_edit_operation_errors_include_index_and_recovery_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "project.mlt"
+            created = create_project({"project_path": str(project_path)})
+            with self.assertRaisesRegex(ToolError, "Operation 0 failed") as caught:
+                edit_project(
+                    {
+                        "project_path": str(project_path),
+                        "expected_revision": created["revision"],
+                        "operations": [{"op": "set_notes", "notes": 42}],
+                    }
+                )
+
+        self.assertEqual(caught.exception.code, "edit_operation_rejected")
+        self.assertEqual(caught.exception.recommended_tool, "shotcut_capabilities")
+        self.assertEqual(caught.exception.details["operation_index"], 0)
+        self.assertEqual(caught.exception.details["operation"], "set_notes")
+
     def test_clip_filter_clones_a_shared_producer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"

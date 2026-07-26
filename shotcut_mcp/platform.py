@@ -115,7 +115,10 @@ def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> Non
             if result.returncode:
                 detail = (result.stderr.strip() or result.stdout.strip())[-1200:]
                 raise ToolError(
-                    f"MLT repository initialization failed: {detail or 'unknown error'}"
+                    f"MLT repository initialization failed: {detail or 'unknown error'}",
+                    code="mlt_repository_unavailable",
+                    recommended_action="run_compatibility_diagnostics",
+                    recommended_tool="shotcut_doctor",
                 )
             if len(_MELT_READY_CACHE) > 16:
                 _MELT_READY_CACHE.clear()
@@ -123,7 +126,11 @@ def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> Non
             return
 
         raise ToolError(
-            f"MLT repository initialization timed out after {attempts} attempts."
+            f"MLT repository initialization timed out after {attempts} attempts.",
+            code="mlt_repository_timeout",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"attempts": attempts},
         ) from last_timeout
 
 
@@ -255,7 +262,13 @@ def list_services(kind: str) -> dict[str, Any]:
     result = run_capture([str(melt), "-query", f"{kind}s"], timeout=30)
     if result.returncode:
         detail = (result.stderr.strip() or result.stdout.strip())[-1200:]
-        raise ToolError(f"MLT service query failed: {detail or result.returncode}")
+        raise ToolError(
+            f"MLT service query failed: {detail or result.returncode}",
+            code="mlt_service_query_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"kind": kind, "return_code": result.returncode},
+        )
     names = sorted(
         set(re.findall(r"^\s*-\s+([^\s#]+)\s*$", result.stdout, re.MULTILINE))
     )
@@ -360,7 +373,12 @@ def compatibility_doctor() -> dict[str, Any]:
 
 def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
     if not path.exists():
-        raise ToolError(f"File or directory not found: {path}")
+        raise ToolError(
+            f"File or directory not found: {path}",
+            code="path_not_found",
+            recommended_action="check_path_and_retry",
+            details={"path": str(path)},
+        )
     shotcut = require_executable(
         discover_executables().shotcut, "Shotcut", "SHOTCUT_PATH"
     )
@@ -375,7 +393,13 @@ def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
             start_new_session=os.name != "nt",
         )
     except OSError as exc:
-        raise ToolError(f"Could not open Shotcut: {exc}") from exc
+        raise ToolError(
+            f"Could not open Shotcut: {exc}",
+            code="shotcut_open_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"path": str(path)},
+        ) from exc
     return {"opened": True, "path": str(path), "pid": process.pid}
 
 
@@ -383,7 +407,12 @@ def render_preview(
     project_path: Path, output_path: Path | None, frame: int, overwrite: bool
 ) -> dict[str, Any]:
     if not project_path.is_file():
-        raise ToolError(f"Project not found: {project_path}")
+        raise ToolError(
+            f"Project not found: {project_path}",
+            code="project_not_found",
+            recommended_action="check_project_path_and_retry",
+            details={"path": str(project_path)},
+        )
     enforce_project_resource_policy(project_path)
     if frame < 0:
         raise ToolError("frame must be zero or positive.")
@@ -420,7 +449,11 @@ def render_preview(
             ).strip()
             raise ToolError(
                 "Failed to generate preview: "
-                + (detail[-2000:] or "output was not created")
+                + (detail[-2000:] or "output was not created"),
+                code="preview_failed",
+                recommended_action="validate_project_and_retry",
+                recommended_tool="validate_project",
+                details={"project_path": str(project_path), "frame": frame},
             )
         output.commit()
     finally:
@@ -591,7 +624,12 @@ def _assemble_stills(
     )
     if result.returncode or not output.temporary.is_file():
         detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
-        raise ToolError(f"Failed to assemble contact sheet: {detail or 'no output'}")
+        raise ToolError(
+            f"Failed to assemble contact sheet: {detail or 'no output'}",
+            code="contact_sheet_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+        )
 
 
 def render_media_contact_sheet(
@@ -665,7 +703,16 @@ def render_media_contact_sheet(
                     }
                 )
             if not cells:
-                raise ToolError("None of the candidates produced a visual frame.")
+                raise ToolError(
+                    "None of the candidates produced a visual frame.",
+                    code="no_visual_frame",
+                    recommended_action="probe_candidates_or_skip_visualization",
+                    recommended_tool="probe_media",
+                    details={
+                        "candidate_count": len(candidates),
+                        "skipped": skipped[:16],
+                    },
+                )
             _assemble_stills(
                 ffmpeg,
                 temporary_dir / "frame-%06d.png",
@@ -718,9 +765,20 @@ def detect_hardware_encoders(refresh: bool = False) -> dict[str, Any]:
             return _ENCODER_CACHE[cache_key]
     listed = run_capture([str(ffmpeg), "-hide_banner", "-encoders"], timeout=30)
     if listed.returncode:
+        diagnostic = (
+            listed.stderr.strip() or listed.stdout.strip() or "unknown error"
+        )[-1200:]
         raise ToolError(
-            "FFmpeg encoder discovery failed: "
-            + (listed.stderr.strip() or listed.stdout.strip())[-1200:]
+            f"FFmpeg encoder discovery failed: {diagnostic}",
+            code="ffmpeg_capability_query_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={
+                "query": "encoders",
+                "ffmpeg_path": str(ffmpeg),
+                "return_code": listed.returncode,
+                "diagnostic": diagnostic,
+            },
         )
     advertised = set(
         re.findall(r"^\s*[A-Z.]{6}\s+([A-Za-z0-9_]+)\s", listed.stdout, re.M)

@@ -28,6 +28,14 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Provide project inspection and durable render-job management.
 - Return stable, structured JSON from every tool and use English for public tool descriptions,
   server instructions and error messages.
+- Return tool execution failures with `isError`, a stable machine-readable error code,
+  recoverability, recommended action/tool, and bounded structured details while preserving the
+  legacy human-readable error fields. Publish the error alternative in every current output schema;
+  keep malformed requests and invalid arguments as JSON-RPC errors with equivalent recovery data.
+- Use distinct recovery families when the caller's next safe action changes, including project
+  restoration, render-history restart, media probing, search-root correction, compatibility
+  diagnosis, visual fallback, and reporting corrupt durable render state. Preserve successful
+  missing-media diagnosis data when only its optional visualization fails.
 - Route common user intents through concise server instructions, including visual review,
   optimistic-conflict recovery, missing media, color diagnosis, export monitoring and backups.
 - Keep the first 512 characters of server instructions self-contained with saved-state and normal

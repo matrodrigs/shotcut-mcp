@@ -48,7 +48,12 @@ def ensure_job_directory() -> Path:
 
 def validate_job_id(job_id: str) -> str:
     if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise ToolError("Invalid job_id.")
+        raise ToolError(
+            "Invalid job_id.",
+            code="invalid_render_job_id",
+            recommended_action="list_render_jobs_and_retry",
+            recommended_tool="list_render_jobs",
+        )
     return job_id
 
 
@@ -137,11 +142,29 @@ def read_job(job_id: str) -> dict[str, Any]:
     try:
         payload = json.loads(_read_job_metadata(path))
     except FileNotFoundError as exc:
-        raise ToolError(f"Render job not found: {job_id}") from exc
+        raise ToolError(
+            f"Render job not found: {job_id}",
+            code="render_job_not_found",
+            recommended_action="list_render_jobs_and_retry",
+            recommended_tool="list_render_jobs",
+            details={"job_id": job_id},
+        ) from exc
     except (OSError, json.JSONDecodeError) as exc:
-        raise ToolError(f"Invalid render metadata: {exc}") from exc
+        raise ToolError(
+            f"Invalid render metadata: {exc}",
+            code="invalid_render_metadata",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"job_id": job_id},
+        ) from exc
     if not isinstance(payload, dict) or payload.get("job_id") != job_id:
-        raise ToolError("Invalid render metadata.")
+        raise ToolError(
+            "Invalid render metadata.",
+            code="invalid_render_metadata",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"job_id": job_id},
+        )
     return payload
 
 
@@ -215,7 +238,13 @@ def list_jobs(
             index for index, item in enumerate(jobs) if item.get("job_id") == cursor
         ]
         if not positions:
-            raise ToolError("Render history cursor was not found for this filter.")
+            raise ToolError(
+                "Render history cursor was not found for this filter.",
+                code="render_history_cursor_not_found",
+                recommended_action="restart_render_history_query",
+                recommended_tool="list_render_jobs",
+                details={"cursor": cursor, "status_filter": status},
+            )
         start = positions[0] + 1
     page = jobs[start : start + limit]
     fields = (

@@ -31,6 +31,21 @@ class PreviewSafetyTests(unittest.TestCase):
             patch("shotcut_mcp.platform.run_capture", side_effect=render),
         )
 
+    def test_existing_output_reports_safe_recovery_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "existing.mp4"
+            output_path.write_bytes(b"keep")
+
+            with self.assertRaisesRegex(ToolError, "already exists") as caught:
+                OutputTransaction.prepare(output_path, overwrite=False)
+
+            self.assertEqual(caught.exception.code, "output_exists")
+            self.assertEqual(
+                caught.exception.recommended_action,
+                "choose_another_output_or_authorize_overwrite",
+            )
+            self.assertEqual(caught.exception.details["path"], str(output_path))
+
     def test_preview_rejects_the_project_as_its_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"

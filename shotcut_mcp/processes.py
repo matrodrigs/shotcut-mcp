@@ -120,7 +120,13 @@ def creation_flags() -> int:
 
 def require_executable(path: Path | None, label: str, env_name: str) -> Path:
     if path is None:
-        raise ToolError(f"{label} was not found. Install Shotcut or set {env_name}.")
+        raise ToolError(
+            f"{label} was not found. Install Shotcut or set {env_name}.",
+            code="executable_not_found",
+            recommended_action="install_dependency_or_configure_path",
+            recommended_tool="shotcut_doctor",
+            details={"executable": label, "environment_variable": env_name},
+        )
     return path
 
 
@@ -130,7 +136,13 @@ def runtime_identity(executable: Path) -> tuple[object, ...]:
     try:
         stat = executable.stat()
     except OSError as exc:
-        raise ToolError(f"Could not inspect executable {executable}: {exc}") from exc
+        raise ToolError(
+            f"Could not inspect executable {executable}: {exc}",
+            code="executable_unavailable",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"path": str(executable)},
+        ) from exc
     environment = tuple((key, os.environ.get(key)) for key in MLT_ENVIRONMENT_KEYS)
     return (str(executable), stat.st_mtime_ns, stat.st_size, environment)
 
@@ -158,7 +170,13 @@ def run_capture(
                 start_new_session=os.name != "nt",
             )
         except OSError as exc:
-            raise ToolError(f"Could not run {command[0]}: {exc}") from exc
+            raise ToolError(
+                f"Could not run {command[0]}: {exc}",
+                code="process_start_failed",
+                recommended_action="run_compatibility_diagnostics",
+                recommended_tool="shotcut_doctor",
+                details={"executable": command[0]},
+            ) from exc
         deadline = time.monotonic() + timeout
         while process.poll() is None:
             if cancellation_requested():
@@ -170,21 +188,30 @@ def run_capture(
             ):
                 terminate_process(process)
                 raise ToolError(
-                    f"The command exceeded the {max_output_bytes}-byte output limit."
+                    f"The command exceeded the {max_output_bytes}-byte output limit.",
+                    code="process_output_limit_exceeded",
+                    recommended_action="narrow_request_and_retry",
+                    details={"maximum_output_bytes": max_output_bytes},
                 )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 terminate_process(process)
                 expired = subprocess.TimeoutExpired(command, timeout)
                 raise ToolError(
-                    f"The command timed out after {timeout} seconds."
+                    f"The command timed out after {timeout} seconds.",
+                    code="process_timeout",
+                    recommended_action="increase_timeout_or_narrow_request",
+                    details={"timeout_seconds": timeout},
                 ) from expired
             time.sleep(min(0.05, remaining))
         stdout_size = os.fstat(stdout_file.fileno()).st_size
         stderr_size = os.fstat(stderr_file.fileno()).st_size
         if stdout_size > max_output_bytes or stderr_size > max_output_bytes:
             raise ToolError(
-                f"The command exceeded the {max_output_bytes}-byte output limit."
+                f"The command exceeded the {max_output_bytes}-byte output limit.",
+                code="process_output_limit_exceeded",
+                recommended_action="narrow_request_and_retry",
+                details={"maximum_output_bytes": max_output_bytes},
             )
         stdout_file.seek(0)
         stderr_file.seek(0)

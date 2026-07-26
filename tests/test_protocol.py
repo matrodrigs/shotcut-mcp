@@ -8,8 +8,10 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from shotcut_mcp import render_jobs as render_jobs_module
 from shotcut_mcp.errors import ConflictError, RequestCancelled, ToolError
 from shotcut_mcp.project import ProjectDocument, create_project
 from shotcut_mcp.protocol import cancellation_requested, schema_errors
@@ -158,6 +160,13 @@ class ProtocolValidationTests(unittest.TestCase):
         )
         self.assertEqual(response["error"]["code"], -32602)
         self.assertIn("path", response["error"]["data"]["validationErrors"][0])
+        self.assertEqual(response["error"]["data"]["error_code"], "invalid_arguments")
+        self.assertTrue(response["error"]["data"]["recoverable"])
+        self.assertEqual(
+            response["error"]["data"]["recommended_action"],
+            "correct_arguments_and_retry",
+        )
+        self.assertEqual(response["error"]["data"]["recommended_tool"], "probe_media")
 
     def test_edit_project_schema_requires_revision_or_explicit_force(self) -> None:
         base_arguments = {
@@ -469,6 +478,12 @@ class ProtocolValidationTests(unittest.TestCase):
         response = json.loads(output.getvalue().decode().splitlines()[-1])
         self.assertEqual(response["id"], 9)
         self.assertEqual(response["error"]["code"], -32800)
+        self.assertEqual(response["error"]["data"]["error_code"], "request_cancelled")
+        self.assertTrue(response["error"]["data"]["recoverable"])
+        self.assertEqual(
+            response["error"]["data"]["recommended_action"],
+            "retry_if_still_requested",
+        )
 
     def test_stdio_server_requires_initialize_before_tools(self) -> None:
         message = (
@@ -568,6 +583,7 @@ class ProtocolNegotiationTests(unittest.TestCase):
             "render_status",
             "export_marker_chapters",
             "avoid concurrent saves",
+            "recommended_action",
         ):
             self.assertIn(phrase, instructions)
 
@@ -660,7 +676,7 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertEqual(render_status["progress_percent"]["type"], ["number", "null"])
         self.assertEqual(render_status["log_tail"]["type"], ["string", "null"])
         inspect_schema = by_name["inspect_project"]["outputSchema"]
-        self.assertIn("tracks", inspect_schema["required"])
+        self.assertIn("tracks", inspect_schema["oneOf"][0]["required"])
         track_schema = inspect_schema["properties"]["tracks"]["items"]
         self.assertEqual(track_schema["properties"]["track_id"]["type"], "string")
         self.assertEqual(
@@ -872,14 +888,29 @@ class ProtocolNegotiationTests(unittest.TestCase):
             for name, child in schema.items():
                 assert_nested_shapes(child, f"{path}.{name}")
 
+        error_payload = {
+            "error": "recoverable failure",
+            "error_type": "ToolError",
+            "error_code": "tool_error",
+            "recoverable": True,
+            "recommended_action": "review_error_and_correct_request",
+            "recommended_tool": None,
+            "details": {},
+        }
         for tool in TOOLS:
             with self.subTest(tool=tool["name"]):
                 schema = tool["outputSchema"]
                 properties = schema["properties"]
                 self.assertTrue(properties)
-                self.assertTrue(schema.get("required"))
-                self.assertTrue(set(schema["required"]).issubset(properties))
+                self.assertEqual(len(schema.get("oneOf", [])), 2)
+                success_required = schema["oneOf"][0]["required"]
+                error_required = schema["oneOf"][1]["required"]
+                self.assertTrue(success_required)
+                self.assertTrue(set(success_required).issubset(properties))
+                self.assertIn("error_code", error_required)
+                self.assertTrue(set(error_required).issubset(properties))
                 assert_nested_shapes(schema, tool["name"])
+                self.assertEqual(schema_errors(error_payload, schema), [])
 
     def test_validate_project_output_schema_matches_clean_result(self) -> None:
         by_name = {tool["name"]: tool for tool in TOOLS}
@@ -1002,10 +1033,356 @@ class ProtocolNegotiationTests(unittest.TestCase):
             )
         result = response["result"]
         self.assertTrue(result["isError"])
-        self.assertEqual(
-            result["structuredContent"]["recommended_action"], "inspect_project"
+        payload = result["structuredContent"]
+        self.assertEqual(payload["recommended_action"], "inspect_project")
+        self.assertEqual(payload["recommended_tool"], "inspect_project")
+        self.assertEqual(payload["error_code"], "project_revision_conflict")
+        self.assertTrue(payload["recoverable"])
+        self.assertEqual(payload["current_revision"], "b" * 64)
+        schema = next(
+            tool["outputSchema"] for tool in TOOLS if tool["name"] == "inspect_project"
         )
-        self.assertEqual(result["structuredContent"]["current_revision"], "b" * 64)
+        self.assertEqual(schema_errors(payload, schema), [])
+
+    def test_tool_errors_publish_stable_recovery_metadata(self) -> None:
+        def failure(_arguments: dict[str, object]) -> dict[str, object]:
+            raise ToolError(
+                "Project not found: C:/missing/project.mlt",
+                code="project_not_found",
+                recommended_action="check_project_path_and_retry",
+                details={"path": "C:/missing/project.mlt"},
+            )
+
+        with patch.dict(HANDLERS, {"inspect_project": failure}):
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "inspect_project", "arguments": {"path": "project.mlt"}},
+                )
+            )
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        payload = result["structuredContent"]
+        self.assertEqual(payload["error_code"], "project_not_found")
+        self.assertEqual(payload["recommended_action"], "check_project_path_and_retry")
+        self.assertIsNone(payload["recommended_tool"])
+        self.assertEqual(payload["details"]["path"], "C:/missing/project.mlt")
+        schema = next(
+            tool["outputSchema"] for tool in TOOLS if tool["name"] == "inspect_project"
+        )
+        self.assertEqual(schema_errors(payload, schema), [])
+
+    def test_tool_error_details_are_bounded_at_the_protocol_seam(self) -> None:
+        def failure(_arguments: dict[str, object]) -> dict[str, object]:
+            raise ToolError(
+                "bounded",
+                details={
+                    "long": "x" * 4000,
+                    **{f"field_{index}": index for index in range(64)},
+                },
+            )
+
+        with patch.dict(HANDLERS, {"inspect_project": failure}):
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "inspect_project", "arguments": {"path": "project.mlt"}},
+                )
+            )
+
+        details = response["result"]["structuredContent"]["details"]
+        self.assertLessEqual(len(details), 32)
+        self.assertTrue(all(len(str(value)) <= 2000 for value in details.values()))
+
+    def test_generic_tool_errors_keep_a_safe_recovery_fallback(self) -> None:
+        def failure(_arguments: dict[str, object]) -> dict[str, object]:
+            raise ToolError("Unsupported project structure.")
+
+        with patch.dict(HANDLERS, {"inspect_project": failure}):
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "inspect_project", "arguments": {"path": "project.mlt"}},
+                )
+            )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "tool_error")
+        self.assertTrue(payload["recoverable"])
+        self.assertEqual(
+            payload["recommended_action"], "review_error_and_correct_request"
+        )
+        self.assertEqual(payload["details"], {})
+
+    def test_missing_project_error_routes_caller_without_message_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.mlt"
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "inspect_project", "arguments": {"path": str(missing)}},
+                )
+            )
+
+        payload = response["result"]["structuredContent"]
+        self.assertTrue(response["result"]["isError"])
+        self.assertEqual(payload["error_code"], "project_not_found")
+        self.assertEqual(payload["recommended_action"], "check_project_path_and_retry")
+        self.assertEqual(payload["details"]["path"], str(missing))
+        schema = next(
+            tool["outputSchema"] for tool in TOOLS if tool["name"] == "inspect_project"
+        )
+        self.assertEqual(schema_errors(payload, schema), [])
+
+    def test_unsupported_project_structure_recommends_restoring_or_resaving(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "not-mlt.mlt"
+            project.write_text("<not_mlt/>", encoding="utf-8")
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "inspect_project", "arguments": {"path": str(project)}},
+                )
+            )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "unsupported_project_structure")
+        self.assertEqual(payload["recommended_action"], "restore_or_resave_project")
+        self.assertEqual(payload["recommended_tool"], "list_project_backups")
+        self.assertEqual(payload["details"]["reason"], "unexpected_root")
+
+    def test_stale_render_history_cursor_restarts_the_query(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(render_jobs_module, "JOB_DIR", Path(directory) / "jobs"),
+        ):
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "list_render_jobs", "arguments": {"cursor": "0" * 32}},
+                )
+            )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "render_history_cursor_not_found")
+        self.assertEqual(payload["recommended_action"], "restart_render_history_query")
+        self.assertEqual(payload["recommended_tool"], "list_render_jobs")
+        self.assertEqual(payload["details"]["cursor"], "0" * 32)
+
+    def test_missing_media_stream_recommends_probe_media(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "clip.mp4"
+            media.write_bytes(b"media")
+            probe = {"format": {}, "streams": [{"index": 0, "codec_type": "video"}]}
+            with patch("shotcut_mcp.media.probe_media_raw", return_value=probe):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "analyze_media_quality",
+                            "arguments": {
+                                "path": str(media),
+                                "video_stream_index": 7,
+                            },
+                        },
+                    )
+                )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "media_stream_not_found")
+        self.assertEqual(payload["recommended_action"], "probe_media_and_choose_stream")
+        self.assertEqual(payload["recommended_tool"], "probe_media")
+        self.assertEqual(payload["details"]["available_stream_indices"], [0])
+
+    def test_missing_search_root_identifies_the_invalid_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_root = Path(directory) / "missing"
+            document = SimpleNamespace(snapshot=lambda: {"resources": []})
+            with patch(
+                "shotcut_mcp.project.ProjectDocument.load", return_value=document
+            ):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "diagnose_missing_media",
+                            "arguments": {
+                                "project_path": str(Path(directory) / "project.mlt"),
+                                "search_roots": [str(missing_root)],
+                            },
+                        },
+                    )
+                )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "search_root_not_found")
+        self.assertEqual(
+            payload["recommended_action"], "choose_existing_search_roots_and_retry"
+        )
+        self.assertEqual(payload["recommended_tool"], "diagnose_missing_media")
+        self.assertEqual(payload["details"]["invalid_roots"], [str(missing_root)])
+
+    def test_ffmpeg_capability_failure_recommends_doctor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "clip.mp4"
+            ffmpeg = Path(directory) / "ffmpeg"
+            media.write_bytes(b"media")
+            ffmpeg.write_bytes(b"executable")
+            probe = {"format": {}, "streams": [{"index": 0, "codec_type": "video"}]}
+            failed = SimpleNamespace(returncode=1, stdout="", stderr="filter failure")
+            with (
+                patch("shotcut_mcp.media.probe_media_raw", return_value=probe),
+                patch(
+                    "shotcut_mcp.media.discover_executables",
+                    return_value=SimpleNamespace(ffmpeg=ffmpeg),
+                ),
+                patch("shotcut_mcp.media.require_executable", return_value=ffmpeg),
+                patch("shotcut_mcp.media.run_capture", return_value=failed),
+            ):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "analyze_media_quality",
+                            "arguments": {"path": str(media), "analyzers": ["black"]},
+                        },
+                    )
+                )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "ffmpeg_capability_query_failed")
+        self.assertEqual(payload["recommended_action"], "run_compatibility_diagnostics")
+        self.assertEqual(payload["recommended_tool"], "shotcut_doctor")
+        self.assertEqual(payload["details"]["query"], "filters")
+
+    def test_empty_timeline_reports_no_visual_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "empty.mlt"
+            document = SimpleNamespace(snapshot=lambda: {"duration_frames": 0})
+            with patch(
+                "shotcut_mcp.project.ProjectDocument.load", return_value=document
+            ):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "render_contact_sheet",
+                            "arguments": {"project_path": str(project_path)},
+                        },
+                    )
+                )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "no_visual_frame")
+        self.assertEqual(
+            payload["recommended_action"], "inspect_project_and_add_timeline_content"
+        )
+        self.assertEqual(payload["recommended_tool"], "inspect_project")
+        self.assertEqual(payload["details"]["reason"], "empty_timeline")
+
+    def test_optional_visual_failure_keeps_diagnosis_and_recovery_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_path = root / "missing-media.mlt"
+            candidate_path = root / "audio-only.mp3"
+            candidate_path.write_bytes(b"audio")
+            document = SimpleNamespace(
+                snapshot=lambda: {
+                    "resources": [
+                        {
+                            "reference_id": "resource-1",
+                            "resource": "missing.mp4",
+                            "resolved_path": str(root / "missing.mp4"),
+                            "exists": False,
+                        }
+                    ]
+                }
+            )
+            candidate = {
+                "candidate_id": "candidate-1",
+                "path": str(candidate_path),
+                "score": 60,
+                "match": "basename",
+                "verified": False,
+                "size_bytes": candidate_path.stat().st_size,
+                "media": None,
+            }
+            visual_failure = ToolError(
+                "None of the candidates produced a visual frame.",
+                code="no_visual_frame",
+                recommended_action="probe_candidates_or_skip_visualization",
+                recommended_tool="probe_media",
+                details={"candidate_count": 1},
+            )
+            with (
+                patch(
+                    "shotcut_mcp.project.ProjectDocument.load", return_value=document
+                ),
+                patch("shotcut_mcp.missing_media._discover_files", return_value=[]),
+                patch(
+                    "shotcut_mcp.missing_media._rank_candidates",
+                    return_value=[candidate],
+                ),
+                patch(
+                    "shotcut_mcp.missing_media.render_media_contact_sheet",
+                    side_effect=visual_failure,
+                ),
+            ):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "diagnose_missing_media",
+                            "arguments": {
+                                "project_path": str(project_path),
+                                "search_roots": [str(root)],
+                                "visual_output_path": str(root / "candidates.png"),
+                            },
+                        },
+                    )
+                )
+
+        result = response["result"]
+        self.assertFalse(result.get("isError", False))
+        payload = result["structuredContent"]
+        self.assertEqual(payload["missing_count"], 1)
+        self.assertEqual(payload["visual"]["error_code"], "no_visual_frame")
+        self.assertEqual(payload["visual"]["recommended_tool"], "probe_media")
+        self.assertEqual(payload["visual"]["details"]["candidate_count"], 1)
+        schema = next(
+            tool["outputSchema"]
+            for tool in TOOLS
+            if tool["name"] == "diagnose_missing_media"
+        )
+        self.assertEqual(schema_errors(payload, schema), [])
+
+    def test_invalid_persistent_render_state_is_not_retried(self) -> None:
+        job_id = "a" * 32
+        metadata = {
+            "job_id": job_id,
+            "status": "queued",
+            "worker_pid": None,
+            "started_at": 0,
+            "output_transaction": None,
+        }
+        with patch("shotcut_mcp.render.read_job", return_value=metadata):
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {"name": "render_status", "arguments": {"job_id": job_id}},
+                )
+            )
+
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["error_code"], "invalid_persistent_render_state")
+        self.assertFalse(payload["recoverable"])
+        self.assertEqual(payload["recommended_action"], "report_issue")
+        self.assertEqual(payload["details"]["field"], "output_transaction")
 
     def test_small_preview_is_returned_as_image_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

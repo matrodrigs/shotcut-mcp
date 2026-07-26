@@ -17,6 +17,18 @@ from pathlib import Path
 from .errors import ConflictError, ToolError
 
 
+def _invalid_persistent_render_state(message: str, reason: str) -> ToolError:
+    """Classify corrupt durable output state without blaming caller arguments."""
+
+    return ToolError(
+        message,
+        code="invalid_persistent_render_state",
+        recoverable=False,
+        recommended_action="report_issue",
+        details={"field": "output_transaction", "reason": reason},
+    )
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -94,13 +106,26 @@ class OutputTransaction:
         for protected in protected_paths:
             if paths_refer_to_same_file(target, protected):
                 raise ToolError(
-                    f"Output must not refer to the protected input file: {protected}"
+                    f"Output must not refer to the protected input file: {protected}",
+                    code="output_matches_protected_input",
+                    recommended_action="choose_another_output_path",
+                    details={"path": str(target), "protected_path": str(protected)},
                 )
         signature = _file_signature(target)
         if signature is not None and not target.is_file():
-            raise ToolError(f"The existing output is not a file: {target}")
+            raise ToolError(
+                f"The existing output is not a file: {target}",
+                code="output_not_file",
+                recommended_action="choose_another_output_path",
+                details={"path": str(target)},
+            )
         if signature is not None and not overwrite:
-            raise ToolError(f"The output already exists: {target}")
+            raise ToolError(
+                f"The output already exists: {target}",
+                code="output_exists",
+                recommended_action="choose_another_output_or_authorize_overwrite",
+                details={"path": str(target)},
+            )
         mode = target.stat().st_mode if signature is not None else None
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(
@@ -110,11 +135,19 @@ class OutputTransaction:
 
     def commit(self) -> None:
         if not self.temporary.is_file():
-            raise ToolError("The renderer did not create its temporary output.")
+            raise ToolError(
+                "The renderer did not create its temporary output.",
+                code="render_output_missing",
+                recommended_action="inspect_render_diagnostics",
+                details={"path": str(self.target)},
+            )
         if _file_signature(self.target) != self.initial_signature:
             raise ConflictError(
                 f"The output changed while rendering and was not replaced: {self.target}",
+                code="output_changed",
                 recommended_action="choose_another_output_path_or_retry",
+                recommended_tool=None,
+                details={"path": str(self.target)},
             )
         with self.temporary.open("r+b") as handle:
             os.fsync(handle.fileno())
@@ -141,21 +174,29 @@ class OutputTransaction:
     @classmethod
     def deserialize(cls, value: object) -> OutputTransaction:
         if not isinstance(value, dict):
-            raise ToolError("Invalid output transaction metadata.")
+            raise _invalid_persistent_render_state(
+                "Invalid output transaction metadata.", "metadata_not_object"
+            )
         target = value.get("target")
         temporary = value.get("temporary")
         signature = value.get("initial_signature")
         mode = value.get("initial_mode")
         if not isinstance(target, str) or not isinstance(temporary, str):
-            raise ToolError("Invalid output transaction paths.")
+            raise _invalid_persistent_render_state(
+                "Invalid output transaction paths.", "invalid_paths"
+            )
         if signature is not None and (
             not isinstance(signature, list)
             or len(signature) != 4
             or not all(isinstance(item, int) for item in signature)
         ):
-            raise ToolError("Invalid output transaction signature.")
+            raise _invalid_persistent_render_state(
+                "Invalid output transaction signature.", "invalid_signature"
+            )
         if mode is not None and not isinstance(mode, int):
-            raise ToolError("Invalid output transaction mode.")
+            raise _invalid_persistent_render_state(
+                "Invalid output transaction mode.", "invalid_mode"
+            )
         return cls(
             Path(target),
             Path(temporary),
@@ -181,7 +222,11 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
         except FileExistsError:
             if attempt:
                 raise ConflictError(
-                    f"Another MCP process is editing the project: {lock_path}"
+                    f"Another MCP process is editing the project: {lock_path}",
+                    code="project_locked",
+                    recommended_action="wait_and_retry",
+                    recommended_tool=None,
+                    details={"lock_path": str(lock_path)},
                 ) from None
             try:
                 age = time.time() - lock_path.stat().st_mtime
@@ -194,7 +239,11 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
                 lock_path.unlink(missing_ok=True)
                 continue
             raise ConflictError(
-                f"Another MCP process is editing the project: {lock_path}"
+                f"Another MCP process is editing the project: {lock_path}",
+                code="project_locked",
+                recommended_action="wait_and_retry",
+                recommended_tool=None,
+                details={"lock_path": str(lock_path)},
             ) from None
     try:
         yield
@@ -301,7 +350,10 @@ def write_project_backup(project_path: Path, source: bytes, keep: int = 20) -> P
         )
     except (OSError, ValueError) as exc:
         raise ToolError(
-            "The backup directory resolves outside the project directory."
+            "The backup directory resolves outside the project directory.",
+            code="path_policy_denied",
+            recommended_action="inspect_project_backup_policy",
+            details={"project_path": str(project_path)},
         ) from exc
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_path = directory / f"{stamp}.{_sha256(source)[:12]}{project_path.suffix}"

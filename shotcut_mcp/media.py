@@ -113,7 +113,12 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
     """Return cached raw FFprobe JSON for a concrete file revision."""
 
     if not media_path.is_file():
-        raise ToolError(f"Media file not found: {media_path}")
+        raise ToolError(
+            f"Media file not found: {media_path}",
+            code="media_not_found",
+            recommended_action="check_media_path_and_retry",
+            details={"path": str(media_path)},
+        )
     stat = media_path.stat()
     ffprobe = require_executable(
         discover_executables().ffprobe, "ffprobe", "SHOTCUT_FFPROBE_PATH"
@@ -144,14 +149,30 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
     if result.returncode:
         raise ToolError(
             f"Failed to probe {media_path}: "
-            f"{(result.stderr.strip() or 'unknown error')[-1200:]}"
+            f"{(result.stderr.strip() or 'unknown error')[-1200:]}",
+            code="media_probe_failed",
+            recommended_action="inspect_media_or_run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"path": str(media_path), "return_code": result.returncode},
         )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise ToolError("ffprobe returned invalid JSON.") from exc
+        raise ToolError(
+            "ffprobe returned invalid JSON.",
+            code="media_probe_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"path": str(media_path)},
+        ) from exc
     if not isinstance(payload, dict):
-        raise ToolError("ffprobe returned an unexpected result.")
+        raise ToolError(
+            "ffprobe returned an unexpected result.",
+            code="media_probe_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={"path": str(media_path)},
+        )
     with _PROBE_LOCK:
         if len(_PROBE_CACHE) > 256:
             _PROBE_CACHE.clear()
@@ -231,11 +252,20 @@ def _available_ffmpeg_filters(ffmpeg: Path) -> set[str]:
         max_output_bytes=2 * 1024 * 1024,
     )
     if result.returncode:
+        diagnostic = (
+            result.stderr.strip() or result.stdout.strip() or "unknown error"
+        )[-1200:]
         raise ToolError(
-            "Could not query FFmpeg filters: "
-            + (result.stderr.strip() or result.stdout.strip() or "unknown error")[
-                -1200:
-            ]
+            f"Could not query FFmpeg filters: {diagnostic}",
+            code="ffmpeg_capability_query_failed",
+            recommended_action="run_compatibility_diagnostics",
+            recommended_tool="shotcut_doctor",
+            details={
+                "query": "filters",
+                "ffmpeg_path": str(ffmpeg),
+                "return_code": result.returncode,
+                "diagnostic": diagnostic,
+            },
         )
     filters = {
         match.group(1)
@@ -493,7 +523,12 @@ def analyze_media_quality(
     """Run bounded FFmpeg analyzers and return normalized machine-readable results."""
 
     if not media_path.is_file():
-        raise ToolError(f"Media file not found: {media_path}")
+        raise ToolError(
+            f"Media file not found: {media_path}",
+            code="media_not_found",
+            recommended_action="check_media_path_and_retry",
+            details={"path": str(media_path)},
+        )
     requested = arguments.get("analyzers", list(QUALITY_ANALYZERS))
     if (
         not isinstance(requested, list)
@@ -553,7 +588,19 @@ def analyze_media_quality(
             ]
             if len(matches) != 1:
                 raise ToolError(
-                    f"{selector_name}={selected_index} does not identify a {kind} stream."
+                    f"{selector_name}={selected_index} does not identify a {kind} stream.",
+                    code="media_stream_not_found",
+                    recommended_action="probe_media_and_choose_stream",
+                    recommended_tool="probe_media",
+                    details={
+                        "path": str(media_path),
+                        "selector": selector_name,
+                        "selected_index": selected_index,
+                        "stream_type": kind,
+                        "available_stream_indices": [
+                            stream.get("index") for stream in available_streams
+                        ],
+                    },
                 )
             streams_by_type[kind] = matches
         else:

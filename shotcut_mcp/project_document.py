@@ -36,6 +36,20 @@ DocumentT = TypeVar("DocumentT", bound="ProjectDocument")
 MAX_PROJECT_BYTES = 64 * 1024 * 1024
 
 
+def _unsupported_project_structure(
+    message: str, path: Path, reason: str, **details: Any
+) -> ToolError:
+    """Describe unsafe or ambiguous MLT structure through one recovery family."""
+
+    return ToolError(
+        message,
+        code="unsupported_project_structure",
+        recommended_action="restore_or_resave_project",
+        recommended_tool="list_project_backups",
+        details={"path": str(path), "reason": reason, **details},
+    )
+
+
 def project_revision(data: bytes) -> str:
     """Return the canonical content revision used for optimistic concurrency."""
 
@@ -156,10 +170,20 @@ class ProjectDocument:
         self.tree = tree
         root = tree.getroot()
         if root is None:
-            raise ToolError("The MLT XML project has no root element.")
+            raise _unsupported_project_structure(
+                "The MLT XML project has no root element.",
+                path,
+                "missing_root",
+            )
         self.root: ET.Element = root
         if root.tag != "mlt":
-            raise ToolError(f"Unexpected XML root: <{root.tag}>; expected <mlt>.")
+            raise _unsupported_project_structure(
+                f"Unexpected XML root: <{root.tag}>; expected <mlt>.",
+                path,
+                "unexpected_root",
+                actual_root=root.tag,
+                expected_root="mlt",
+            )
         self.source = source
         self.revision = project_revision(source)
         self._id_cache: dict[str, ET.Element] | None = None
@@ -167,17 +191,35 @@ class ProjectDocument:
     @classmethod
     def load(cls: type[DocumentT], path: Path) -> DocumentT:
         if not path.is_file():
-            raise ToolError(f"Project not found: {path}")
+            raise ToolError(
+                f"Project not found: {path}",
+                code="project_not_found",
+                recommended_action="check_project_path_and_retry",
+                details={"path": str(path)},
+            )
         if path.stat().st_size > MAX_PROJECT_BYTES:
             raise ToolError(
-                f"Project exceeds the {MAX_PROJECT_BYTES // (1024 * 1024)} MiB limit."
+                f"Project exceeds the {MAX_PROJECT_BYTES // (1024 * 1024)} MiB limit.",
+                code="project_too_large",
+                recommended_action="reduce_project_size_and_retry",
+                details={
+                    "path": str(path),
+                    "maximum_bytes": MAX_PROJECT_BYTES,
+                    "size_bytes": path.stat().st_size,
+                },
             )
         source = path.read_bytes()
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         try:
             root = ET.fromstring(source, parser=parser)
         except ET.ParseError as exc:
-            raise ToolError(f"Invalid MLT XML: {exc}") from exc
+            raise ToolError(
+                f"Invalid MLT XML: {exc}",
+                code="invalid_project_xml",
+                recommended_action="restore_or_resave_project",
+                recommended_tool="list_project_backups",
+                details={"path": str(path)},
+            ) from exc
         return cls(path, ET.ElementTree(root), source)
 
     @classmethod
@@ -261,7 +303,12 @@ class ProjectDocument:
                 if not element_id:
                     continue
                 if element_id in mapping:
-                    raise ToolError(f"Duplicate XML id: {element_id}")
+                    raise _unsupported_project_structure(
+                        f"Duplicate XML id: {element_id}",
+                        self.path,
+                        "duplicate_xml_id",
+                        duplicate_id=element_id,
+                    )
                 mapping[element_id] = element
             self._id_cache = mapping
         return self._id_cache
@@ -269,7 +316,11 @@ class ProjectDocument:
     def profile(self) -> ET.Element:
         profile = self.root.find("profile")
         if profile is None:
-            raise ToolError("The project does not contain an MLT profile.")
+            raise _unsupported_project_structure(
+                "The project does not contain an MLT profile.",
+                self.path,
+                "missing_profile",
+            )
         return profile
 
     @property
@@ -291,16 +342,26 @@ class ProjectDocument:
         if shotcut:
             if len(shotcut) == 1:
                 return shotcut[0]
-            raise ToolError(
-                "The project contains multiple tractors marked as the Shotcut timeline."
+            raise _unsupported_project_structure(
+                "The project contains multiple tractors marked as the Shotcut timeline.",
+                self.path,
+                "ambiguous_shotcut_timeline",
+                shotcut_tractor_count=len(shotcut),
             )
         if len(tractors) == 1:
             return tractors[0]
         if tractors:
-            raise ToolError(
-                "The project contains multiple tractors and does not identify the main one."
+            raise _unsupported_project_structure(
+                "The project contains multiple tractors and does not identify the main one.",
+                self.path,
+                "ambiguous_main_timeline",
+                tractor_count=len(tractors),
             )
-        raise ToolError("The project does not contain a timeline tractor.")
+        raise _unsupported_project_structure(
+            "The project does not contain a timeline tractor.",
+            self.path,
+            "missing_timeline",
+        )
 
     def track_container(self) -> ET.Element:
         tractor = self.main_tractor()
