@@ -27,12 +27,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Check whether Shotcut is ready to use.",
-      "Show me how the current edit looks and summarize the timeline.",
-      "Build a complete Shotcut project from these media files.",
-      "Analyze this media for silence, black frames, freezes, interlacing, and loudness.",
-      "Edit this timeline, generate a preview, and export one selected range for review.",
-      "Export this project's point markers as a Shotcut chapter file."
+      "Check whether Shotcut is ready to use, then analyze this media for silence, black frames, freezes, interlacing, and loudness.",
+      "Show me how the current edit looks, summarize the timeline, and build or edit a complete Shotcut project from these media files with a preview.",
+      "Export one selected range for review and export this project's point markers as a Shotcut chapter file."
     ]
   }
 }
