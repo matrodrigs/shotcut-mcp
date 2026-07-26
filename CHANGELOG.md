@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.4.5 (2026-07-26)
+
 ### Added
 
 - Report per-analyzer FFmpeg availability in `shotcut_doctor` and combine local-resource,
@@ -11,10 +13,8 @@
 
 ### Changed
 
-- Add Shotcut 26.6 compatibility fixtures and real MLT integration coverage for reverse speed maps
-  and locked-track ripple behavior.
-- Clarify saved-state, edit, readiness, review and recovery guidance; distinguish `valid` from
-  `ready`, avoid redundant post-edit checks, and keep Codex starter prompts within directory limits.
+- Clarify the MCP's saved-state, edit, readiness, visual-review and recovery guidance; distinguish
+  `valid` from `ready` and avoid redundant post-edit readiness checks.
 
 ## 1.4.2 (2026-07-26)
 
