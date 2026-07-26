@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from shotcut_mcp import platform, render_jobs
+from shotcut_mcp import project as project_module
 from shotcut_mcp import render as render_module
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.path_policy import project_network_resources
@@ -71,7 +73,56 @@ class BacklogProjectFeatureTests(unittest.TestCase):
                 },
             )
 
-    def test_constant_speed_and_positive_speed_map_use_owned_mlt_primitives(
+    def test_validate_project_combines_mlt_resources_and_required_services(
+        self,
+    ) -> None:
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "shotcut-26.6"
+            / "multitrack-ripple.mlt"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "project.mlt"
+            shutil.copy2(fixture, project_path)
+
+            def services(kind: str) -> dict[str, object]:
+                available = {
+                    "producer": ["color", "avformat-novalidate"],
+                    "filter": [],
+                    "transition": [],
+                    "consumer": [],
+                    "link": [],
+                }
+                return {
+                    "kind": kind,
+                    "count": len(available[kind]),
+                    "services": available[kind],
+                }
+
+            with patch(
+                "shotcut_mcp.project.list_services", side_effect=services, create=True
+            ):
+                result = project_module.validate_project({"path": str(project_path)})
+
+        self.assertTrue(result["valid"])
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["checks"]["resources"]["status"], "failed")
+        self.assertEqual(
+            result["checks"]["resources"]["missing_resources"],
+            [str(project_path.parent / "missing.mp4")],
+        )
+        self.assertEqual(result["checks"]["mlt_services"]["status"], "failed")
+        self.assertEqual(
+            result["checks"]["mlt_services"]["missing"],
+            {"filter": ["fixture_missing_filter"]},
+        )
+        self.assertEqual(
+            result["checks"]["mlt_services"]["required"]["producer"],
+            ["avformat-novalidate", "color"],
+        )
+
+    def test_constant_and_same_direction_speed_maps_use_owned_mlt_primitives(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory, self._media_patch():
@@ -144,6 +195,65 @@ class BacklogProjectFeatureTests(unittest.TestCase):
                 "0=1;100=2",
             )
 
+            reverse_path = root / "reverse-ramp.mlt"
+            reverse = create_project(
+                {"project_path": str(reverse_path), "clips": [{"path": str(media)}]}
+            )
+            reverse = edit_project(
+                {
+                    "project_path": str(reverse_path),
+                    "expected_revision": reverse["revision"],
+                    "operations": [
+                        {
+                            "op": "set_clip_speed_map",
+                            "track": "V1",
+                            "item_index": 0,
+                            "keyframes": [
+                                {"frame": 0, "speed": -1},
+                                {"frame": 100, "speed": -2},
+                            ],
+                        }
+                    ],
+                }
+            )
+            self.assertEqual(reverse["operation_results"][0]["duration_frames"], 175)
+            document = ProjectDocument.load(reverse_path)
+            reverse_item = reverse["project"]["tracks"][0]["items"][0]
+            chain = document.id_map()[reverse_item["producer_id"]]
+            link = chain.find("link")
+            assert link is not None
+            self.assertEqual(chain.get("in"), "299")
+            self.assertEqual(chain.get("out"), "473")
+            self.assertEqual(reverse_item["in_frame"], 299)
+            self.assertEqual(reverse_item["out_frame"], 473)
+            self.assertEqual(
+                next(
+                    prop.text
+                    for prop in link.findall("property")
+                    if prop.get("name") == "speed_map"
+                ),
+                "0=-1;100=-2",
+            )
+
+            with self.assertRaisesRegex(ToolError, "same playback direction"):
+                edit_project(
+                    {
+                        "project_path": str(reverse_path),
+                        "expected_revision": reverse["revision"],
+                        "operations": [
+                            {
+                                "op": "set_clip_speed_map",
+                                "track": "V1",
+                                "item_index": 0,
+                                "keyframes": [
+                                    {"frame": 0, "speed": -1},
+                                    {"frame": 100, "speed": 1},
+                                ],
+                            }
+                        ],
+                    }
+                )
+
     def test_slide_and_non_ripple_trim_preserve_total_duration(self) -> None:
         with tempfile.TemporaryDirectory() as directory, self._media_patch():
             root = Path(directory)
@@ -205,6 +315,59 @@ class BacklogProjectFeatureTests(unittest.TestCase):
             self.assertEqual(
                 trimmed["project"]["tracks"][0]["items"][-1]["type"], "gap"
             )
+
+    def test_ripple_trim_updates_all_unlocked_tracks_and_preserves_fixture_xml(
+        self,
+    ) -> None:
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "shotcut-26.6"
+            / "multitrack-ripple.mlt"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "project.mlt"
+            shutil.copy2(fixture, project_path)
+            snapshot = ProjectDocument.load(project_path).snapshot()
+            edited = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": snapshot["revision"],
+                    "operations": [
+                        {
+                            "op": "trim_item",
+                            "track": "V1",
+                            "item_index": 0,
+                            "edge": "end",
+                            "delta": -10,
+                            "ripple": True,
+                            "ripple_scope": "all_unlocked",
+                            "ripple_markers": True,
+                        }
+                    ],
+                }
+            )
+
+            tracks = {track["name"]: track for track in edited["project"]["tracks"]}
+            self.assertEqual(tracks["V1"]["duration_frames"], 50)
+            self.assertEqual(tracks["A1"]["duration_frames"], 50)
+            self.assertEqual(tracks["V2"]["duration_frames"], 60)
+            self.assertEqual(edited["project"]["markers"][0]["start_frame"], 50)
+            self.assertEqual(edited["operation_results"][0]["ripple_track_count"], 1)
+
+            root = ET.parse(project_path).getroot()
+            tractor = root.find("tractor[@id='tractor0']")
+            producer = root.find("producer[@id='media_v1']")
+            assert tractor is not None and producer is not None
+            self.assertEqual(
+                next(
+                    prop.text
+                    for prop in tractor.findall("property")
+                    if prop.get("name") == "shotcut:fixtureKeep"
+                ),
+                "preserved",
+            )
+            self.assertIsNotNone(producer.find("filter[@id='fixture_filter']"))
 
     def test_allowed_roots_cover_media_operations(self) -> None:
         with tempfile.TemporaryDirectory() as directory, self._media_patch():

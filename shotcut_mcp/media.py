@@ -249,6 +249,29 @@ def _available_ffmpeg_filters(ffmpeg: Path) -> set[str]:
     return filters
 
 
+def quality_analyzer_capabilities(ffmpeg: Path | None) -> dict[str, dict[str, Any]]:
+    """Report whether each bounded quality analyzer is available in FFmpeg."""
+
+    error: str | None = None
+    available_filters: set[str] = set()
+    if ffmpeg is None or not ffmpeg.is_file():
+        error = "FFmpeg was not found."
+    else:
+        try:
+            available_filters = _available_ffmpeg_filters(ffmpeg)
+        except ToolError as exc:
+            error = str(exc)
+    return {
+        name: {
+            "filter": filter_name,
+            "stream_type": stream_type,
+            "available": filter_name in available_filters,
+            "error": error,
+        }
+        for name, (filter_name, stream_type) in QUALITY_ANALYZERS.items()
+    }
+
+
 def _decimal(value: str) -> float | None:
     try:
         result = float(value)

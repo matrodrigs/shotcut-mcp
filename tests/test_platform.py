@@ -74,6 +74,49 @@ class MeltCacheTests(unittest.TestCase):
         self.assertFalse(result["checks"]["rnnoise"]["passed"])
         self.assertFalse(result["compatible"])
 
+    def test_doctor_reports_quality_analyzers_without_changing_compatibility(
+        self,
+    ) -> None:
+        executables = platform.Executables(
+            Path("shotcut"), Path("melt"), Path("ffprobe"), Path("ffmpeg")
+        )
+        analyzers = {
+            "silence": {
+                "filter": "silencedetect",
+                "stream_type": "audio",
+                "available": True,
+            },
+            "freeze": {
+                "filter": "freezedetect",
+                "stream_type": "video",
+                "available": False,
+            },
+        }
+        with (
+            patch(
+                "shotcut_mcp.platform.discover_executables", return_value=executables
+            ),
+            patch("shotcut_mcp.platform.ensure_melt_ready"),
+            patch(
+                "shotcut_mcp.platform.version_line",
+                side_effect=["Shotcut 26.6.25", "melt 7.40.0"],
+            ),
+            patch(
+                "shotcut_mcp.platform.describe_service",
+                return_value={"available": True, "metadata": "available"},
+            ),
+            patch(
+                "shotcut_mcp.platform.quality_analyzer_capabilities",
+                return_value=analyzers,
+                create=True,
+            ),
+        ):
+            result = platform.compatibility_doctor()
+
+        self.assertTrue(result["compatible"])
+        self.assertEqual(result["quality_analyzers"], analyzers)
+        self.assertFalse(result["quality_analyzers"]["freeze"]["available"])
+
 
 class PathPolicyTests(unittest.TestCase):
     def test_configured_allowed_roots_block_paths_outside_them(self) -> None:

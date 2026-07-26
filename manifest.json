@@ -29,7 +29,7 @@
   },
   "tools": [
     { "name": "shotcut_status", "description": "Use for a quick readiness check. Locates Shotcut, Melt, FFprobe, and FFmpeg and reports their versions; use shotcut_doctor for compatibility diagnosis." },
-    { "name": "shotcut_doctor", "description": "Use after installation, upgrade, or a setup failure. Verifies validated Shotcut/MLT versions, repository startup, RNNoise, and path policy." },
+    { "name": "shotcut_doctor", "description": "Use after installation, upgrade, or a setup failure. Verifies validated Shotcut/MLT versions, repository startup, RNNoise, FFmpeg quality-analyzer availability, and path policy." },
     { "name": "shotcut_capabilities", "description": "Use before an unfamiliar edit. Omit operation for the catalog, presets, compatibility, and workflow; pass operation for only its complete schema, example, and transaction guarantees enforced by plan and edit." },
     { "name": "probe_media", "description": "Use to understand a source file before editing. Reads duration, codecs, resolution, frame rate, color, and audio with per-file caching." },
     { "name": "analyze_media_quality", "description": "Use before proposing cleanup or delivery edits. Runs installed FFmpeg analyzers for silence, black frames, freezes, interlacing, and loudness and returns bounded structured measurements without changing the media." },
@@ -39,7 +39,7 @@
     { "name": "edit_project", "description": "Use only after inspect_project. Applies up to 500 related operations in one validated atomic write, enforcing each focused operation schema; pass expected_revision and re-inspect on conflicts instead of using force." },
     { "name": "list_mlt_services", "description": "Use when an edit needs an unfamiliar native MLT effect or transition. Lists services of one kind installed with Shotcut." },
     { "name": "describe_mlt_service", "description": "Use after list_mlt_services to learn one installed service's accepted properties and local MLT metadata." },
-    { "name": "validate_project", "description": "Use to check technical MLT validity, not visual quality. Parses the XML and processes the first frame with local Melt." },
+    { "name": "validate_project", "description": "Use before preview or render to check project readiness, not visual quality. Parses the XML, checks local resources and required installed MLT services, and processes the first frame with local Melt." },
     { "name": "render_preview", "description": "Use to show or inspect one specific moment. Renders one PNG and returns its path; omit output_path for a bounded server-managed preview." },
     { "name": "diagnose_color_workflow", "description": "Use for washed-out colors, HDR/SDR questions, or export compatibility. Reports normalized source color facts and Shotcut 26.6 issues." },
     { "name": "diagnose_missing_media", "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates; never relinks automatically, so let the user choose first." },

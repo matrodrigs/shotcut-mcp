@@ -14,7 +14,7 @@ from shotcut_mcp.platform import (
     render_preview,
     summarize_media,
 )
-from shotcut_mcp.project import create_project, edit_project
+from shotcut_mcp.project import create_project, edit_project, validate_project
 from shotcut_mcp.render import cancel_render, render_status, start_render
 
 PLUGIN_ROOT = Path(__file__).parents[1]
@@ -161,6 +161,10 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                 Path(edited["path"]), root / "preview.png", 10, False
             )
             self.assertGreater(preview["size_bytes"], 100)
+            readiness = validate_project({"path": edited["path"]})
+            self.assertTrue(readiness["ready"], readiness["checks"])
+            self.assertEqual(readiness["checks"]["resources"]["status"], "passed")
+            self.assertEqual(readiness["checks"]["mlt_services"]["status"], "passed")
             job = start_render(
                 {
                     "project_path": edited["path"],
@@ -254,6 +258,88 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             self.assertTrue(ramp["validation"]["valid"])
             preview = render_preview(ramp_path, root / "ramp.png", 10, False)
             self.assertGreater(preview["size_bytes"], 100)
+
+            reverse_path = root / "reverse-ramp.mlt"
+            reverse = create_project(
+                {
+                    "project_path": str(reverse_path),
+                    "width": 320,
+                    "height": 240,
+                    "fps_num": 30,
+                    "clips": [{"path": str(media)}],
+                }
+            )
+            reverse = edit_project(
+                {
+                    "project_path": str(reverse_path),
+                    "expected_revision": reverse["revision"],
+                    "operations": [
+                        {
+                            "op": "set_clip_speed_map",
+                            "track": "V1",
+                            "item_index": 0,
+                            "keyframes": [
+                                {"frame": 0, "speed": -1},
+                                {"frame": 30, "speed": -2},
+                            ],
+                        }
+                    ],
+                }
+            )
+            self.assertTrue(reverse["validation"]["valid"])
+            preview = render_preview(reverse_path, root / "reverse.png", 10, False)
+            self.assertGreater(preview["size_bytes"], 100)
+
+    def test_cross_track_ripple_respects_locked_tracks_with_real_mlt(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "source.mp4"
+            self._create_media(executables.ffmpeg, media, duration=4)
+            project_path = root / "ripple.mlt"
+            created = create_project(
+                {
+                    "project_path": str(project_path),
+                    "width": 320,
+                    "height": 240,
+                    "fps_num": 30,
+                    "tracks": [
+                        {"kind": "video", "name": "V2"},
+                        {"kind": "audio", "name": "A1"},
+                    ],
+                    "clips": [
+                        {"track": "V1", "path": str(media)},
+                        {"track": "V2", "path": str(media)},
+                        {"track": "A1", "path": str(media)},
+                    ],
+                }
+            )
+            edited = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {"op": "update_track", "track": "V2", "locked": True},
+                        {"op": "add_marker", "start_frame": 120},
+                        {
+                            "op": "trim_item",
+                            "track": "V1",
+                            "item_index": 0,
+                            "edge": "end",
+                            "delta": -10,
+                            "ripple_scope": "all_unlocked",
+                            "ripple_markers": True,
+                        },
+                    ],
+                }
+            )
+            self.assertTrue(edited["validation"]["valid"])
+            tracks = {track["name"]: track for track in edited["project"]["tracks"]}
+            self.assertEqual(tracks["V1"]["duration_frames"], 110)
+            self.assertEqual(tracks["A1"]["duration_frames"], 110)
+            self.assertEqual(tracks["V2"]["duration_frames"], 120)
+            self.assertEqual(edited["project"]["markers"][0]["start_frame"], 110)
 
     def test_still_images_render_after_split_and_replacement(self) -> None:
         executables = discover_executables()

@@ -20,6 +20,7 @@ from .media import (
     analyze_media_quality,
     media_duration,
     probe_media_raw,
+    quality_analyzer_capabilities,
     shotcut_file_hash,
     summarize_media,
 )
@@ -352,6 +353,7 @@ def compatibility_doctor() -> dict[str, Any]:
         "compatible": all(check["passed"] for check in checks.values()),
         "validated_stack": {"shotcut": "26.6.25", "mlt": "7.40.x"},
         "checks": checks,
+        "quality_analyzers": quality_analyzer_capabilities(executables.ffmpeg),
         "path_policy": path_policy(),
     }
 

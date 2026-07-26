@@ -20,6 +20,7 @@ from .missing_media import diagnose_missing_resources
 from .platform import (
     enforce_project_resource_policy,
     expand_path,
+    list_services,
     summarize_media,
     validate_project_file,
 )
@@ -38,7 +39,7 @@ from .project_document import (
 from .project_document import (
     ProjectDocument as MltProjectDocument,
 )
-from .project_snapshot import build_project_snapshot
+from .project_snapshot import build_project_snapshot, project_requirements
 from .protocol import cancellation_requested, report_progress
 from .storage import (
     OutputTransaction,
@@ -68,6 +69,7 @@ __all__ = [
     "plan_project_edit",
     "render_project_contact_sheet",
     "restore_backup",
+    "validate_project",
 ]
 
 
@@ -76,6 +78,74 @@ class ProjectDocument(MltProjectDocument):
 
     def snapshot(self) -> dict[str, Any]:
         return build_project_snapshot(self)
+
+
+def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Validate one project and report whether its local runtime is ready for it."""
+
+    path = expand_path(arguments.get("path", ""))
+    timeout = arguments.get("timeout_seconds", 30)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, int)
+        or not 1 <= timeout <= 300
+    ):
+        raise ToolError("timeout_seconds must be an integer between 1 and 300.")
+
+    report_progress(0, 3, "Inspecting project requirements.")
+    document = ProjectDocument.load(path)
+    snapshot = document.snapshot()
+    required = project_requirements(document)
+    validation = validate_project_file(path, timeout)
+    report_progress(1, 3, "Project processed with MLT.")
+
+    missing_services: dict[str, list[str]] = {}
+    service_errors: dict[str, str] = {}
+    for kind, names in required.items():
+        if not names:
+            continue
+        try:
+            installed = set(list_services(kind)["services"])
+        except ToolError as exc:
+            service_errors[kind] = str(exc)
+            continue
+        missing = sorted(set(names) - installed)
+        if missing:
+            missing_services[kind] = missing
+    report_progress(2, 3, "Project dependencies checked.")
+
+    missing_resources = sorted(set(snapshot["missing_resources"]))
+    resource_status = "failed" if missing_resources else "passed"
+    service_status = (
+        "failed" if missing_services else "unavailable" if service_errors else "passed"
+    )
+    ready = (
+        bool(validation.get("valid"))
+        and resource_status == "passed"
+        and service_status == "passed"
+    )
+    result = {
+        "project": snapshot,
+        **validation,
+        "ready": ready,
+        "checks": {
+            "resources": {
+                "status": resource_status,
+                "checked_count": sum(
+                    resource["exists"] is not None for resource in snapshot["resources"]
+                ),
+                "missing_resources": missing_resources,
+            },
+            "mlt_services": {
+                "status": service_status,
+                "required": required,
+                "missing": missing_services,
+                "errors": service_errors,
+            },
+        },
+    }
+    report_progress(3, 3, "Project validation complete.")
+    return result
 
 
 @dataclass

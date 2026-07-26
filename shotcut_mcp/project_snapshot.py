@@ -19,6 +19,16 @@ if TYPE_CHECKING:
     from .project_document import ProjectDocument
 
 
+_SERVICE_KIND_BY_TAG = {
+    "producer": "producer",
+    "chain": "producer",
+    "filter": "filter",
+    "transition": "transition",
+    "consumer": "consumer",
+    "link": "link",
+}
+
+
 def _resource_path(document: ProjectDocument, resource: str) -> Path | None:
     return resolve_project_resource(document.path, document.root.get("root"), resource)
 
@@ -208,6 +218,22 @@ def build_project_snapshot(document: ProjectDocument) -> dict[str, Any]:
             )
         },
     }
+
+
+def project_requirements(document: ProjectDocument) -> dict[str, list[str]]:
+    """Project the installed MLT services required by this document."""
+
+    required: dict[str, set[str]] = {
+        kind: set() for kind in ("producer", "filter", "transition", "consumer", "link")
+    }
+    for element in document.root.iter():
+        kind = _SERVICE_KIND_BY_TAG.get(element.tag)
+        if kind is None:
+            continue
+        service = property_value(element, "mlt_service")
+        if service:
+            required[kind].add(service)
+    return {kind: sorted(names) for kind, names in required.items()}
 
 
 def project_timing(path: Path) -> dict[str, Any]:

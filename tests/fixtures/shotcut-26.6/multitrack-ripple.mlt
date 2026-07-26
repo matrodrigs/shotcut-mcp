@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mlt LC_NUMERIC="C" version="7.40.0" title="Shotcut version 26.6.25" producer="tractor0" root=".">
+  <profile description="320x240 30.000 fps" width="320" height="240" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="4" display_aspect_den="3" frame_rate_num="30" frame_rate_den="1" colorspace="601" />
+  <producer id="black" in="0" out="0">
+    <property name="length">1</property>
+    <property name="resource">0</property>
+    <property name="mlt_service">color</property>
+  </producer>
+  <producer id="media_v1" in="0" out="59">
+    <property name="length">60</property>
+    <property name="resource">missing.mp4</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">V1 fixture clip</property>
+    <property name="shotcut:fixtureKeep">preserved</property>
+    <filter id="fixture_filter">
+      <property name="mlt_service">fixture_missing_filter</property>
+      <property name="shotcut:filter">fixture</property>
+    </filter>
+  </producer>
+  <producer id="media_v2" in="0" out="59">
+    <property name="length">60</property>
+    <property name="resource">missing.mp4</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">Locked V2 fixture clip</property>
+  </producer>
+  <producer id="media_a1" in="0" out="59">
+    <property name="length">60</property>
+    <property name="resource">missing.mp4</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">A1 fixture clip</property>
+  </producer>
+  <playlist id="background">
+    <entry producer="black" in="0" out="59" />
+  </playlist>
+  <playlist id="playlist_v1">
+    <property name="shotcut:video">1</property>
+    <property name="shotcut:name">V1</property>
+    <entry producer="media_v1" in="0" out="59" />
+  </playlist>
+  <playlist id="playlist_v2">
+    <property name="shotcut:video">1</property>
+    <property name="shotcut:name">V2</property>
+    <property name="shotcut:lock">1</property>
+    <entry producer="media_v2" in="0" out="59" />
+  </playlist>
+  <playlist id="playlist_a1">
+    <property name="shotcut:audio">1</property>
+    <property name="shotcut:name">A1</property>
+    <property name="hide">1</property>
+    <entry producer="media_a1" in="0" out="59" />
+  </playlist>
+  <tractor id="tractor0" in="0" out="59">
+    <property name="shotcut">1</property>
+    <property name="shotcut:projectAudioChannels">2</property>
+    <property name="shotcut:processingMode">Native8Cpu</property>
+    <property name="shotcut:fixtureKeep">preserved</property>
+    <properties name="shotcut:markers">
+      <properties name="0">
+        <property name="text">After edit</property>
+        <property name="start">60</property>
+        <property name="end">60</property>
+        <property name="color">#00A0FF</property>
+      </properties>
+    </properties>
+    <track producer="background" />
+    <track producer="playlist_v1" />
+    <track producer="playlist_v2" />
+    <track producer="playlist_a1" />
+  </tractor>
+</mlt>

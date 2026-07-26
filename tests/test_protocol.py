@@ -546,11 +546,12 @@ class ProtocolNegotiationTests(unittest.TestCase):
             request("initialize", {"protocolVersion": "2025-11-25"})
         )
         instructions = response["result"]["instructions"]
-        first_window = instructions[:512]
+        first_window = instructions[:640]
         self.assertEqual(instructions, SERVER_INSTRUCTIONS)
         for phrase in (
             "inspect_project",
             "render_contact_sheet",
+            "validate_project",
             "expected_revision",
             "shotcut_capabilities",
             "force",
@@ -728,7 +729,35 @@ class ProtocolNegotiationTests(unittest.TestCase):
         )
         operation = focused["operations"]["trim_item"]
         self.assertEqual(operation["schema"]["properties"]["delta"]["type"], "integer")
+        self.assertEqual(
+            operation["schema"]["properties"]["ripple_scope"]["enum"],
+            ["track", "all_unlocked"],
+        )
         self.assertEqual(operation["example"]["op"], "trim_item")
+        speed_map = handle_request(
+            request(
+                "tools/call",
+                {
+                    "name": "shotcut_capabilities",
+                    "arguments": {"operation": "set_clip_speed_map"},
+                },
+            )
+        )["result"]["structuredContent"]["operations"]["set_clip_speed_map"]
+        self.assertEqual(
+            schema_errors(
+                {
+                    "op": "set_clip_speed_map",
+                    "track": "V1",
+                    "item_index": 0,
+                    "keyframes": [
+                        {"frame": 0, "speed": -1},
+                        {"frame": 30, "speed": -2},
+                    ],
+                },
+                speed_map["schema"],
+            ),
+            [],
+        )
         full = handle_request(
             request("tools/call", {"name": "shotcut_capabilities", "arguments": {}})
         )["result"]["structuredContent"]
@@ -853,6 +882,20 @@ class ProtocolNegotiationTests(unittest.TestCase):
                 "valid": True,
                 "return_code": 0,
                 "diagnostic": None,
+                "ready": True,
+                "checks": {
+                    "resources": {
+                        "status": "passed",
+                        "checked_count": 0,
+                        "missing_resources": [],
+                    },
+                    "mlt_services": {
+                        "status": "passed",
+                        "required": {"producer": ["color"]},
+                        "missing": {},
+                        "errors": {},
+                    },
+                },
             }
 
         self.assertEqual(schema_errors(payload, schema), [])

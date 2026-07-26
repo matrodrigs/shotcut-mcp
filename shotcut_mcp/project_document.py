@@ -1231,6 +1231,9 @@ class ProjectDocument:
         frame_out = _clock_to_frames(item.get("out"), self.fps)
         if frame_out is None:
             frame_out = frame_in + self.item_duration(item) - 1
+        ripple_scope = operation.get("ripple_scope", "track")
+        if ripple_scope not in {"track", "all_unlocked"}:
+            raise ToolError("ripple_scope must be track or all_unlocked.")
         edge = operation.get("edge")
         if edge is not None:
             if edge not in {"start", "end"}:
@@ -1241,6 +1244,8 @@ class ProjectDocument:
             new_in = frame_in + delta if edge == "start" else frame_in
             new_out = frame_out + delta if edge == "end" else frame_out
         else:
+            if ripple_scope != "track":
+                raise ToolError("ripple_scope requires an edge+delta trim.")
             new_in = _int(operation.get("in_frame", frame_in), "in_frame", 0)
             new_out = _int(operation.get("out_frame", frame_out), "out_frame", 0)
         if new_out < new_in:
@@ -1258,26 +1263,40 @@ class ProjectDocument:
         old_duration = frame_out - frame_in + 1
         new_duration = new_out - new_in + 1
         duration_change = new_duration - old_duration
+        timeline_start = sum(self.item_duration(node) for node in sequence[:index])
         ripple = True
         if edge is not None:
             ripple = _boolean(operation.get("ripple", True), "ripple")
             if not ripple:
+                if ripple_scope != "track":
+                    raise ToolError("ripple_scope=all_unlocked requires ripple=true.")
                 side = "before" if edge == "start" else "after"
                 self._compensate_trim_blank(sequence, index, side, -duration_change)
         item.set("in", str(new_in))
         item.set("out", str(new_out))
         self.replace_sequence(track.playlist, self.consolidate_blanks(sequence))
-        if edge is not None and ripple and operation.get("ripple_markers", False):
-            if not isinstance(operation.get("ripple_markers"), bool):
-                raise ToolError("ripple_markers must be a boolean.")
-            boundary = sum(self.item_duration(node) for node in sequence[:index])
+        ripple_track_count = 0
+        if edge is not None and ripple and ripple_scope == "all_unlocked":
+            ripple_position = (
+                timeline_start
+                if edge == "start"
+                else timeline_start + min(old_duration, new_duration)
+            )
+            ripple_track_count = self._ripple_unlocked_tracks(
+                track, ripple_position, duration_change
+            )
+        ripple_markers = operation.get("ripple_markers", False)
+        if not isinstance(ripple_markers, bool):
+            raise ToolError("ripple_markers must be a boolean.")
+        if edge is not None and ripple and ripple_markers:
+            boundary = timeline_start
             if edge == "end":
                 boundary += old_duration
             self._shift_markers(boundary, duration_change)
         ripple_tracks = operation.get("ripple_tracks")
         if ripple_tracks not in (None, [], False):
             raise ToolError(
-                "ripple_tracks is not enabled until locked-track Shotcut fixtures pass."
+                "ripple_tracks is not supported; use ripple_scope=all_unlocked."
             )
         self.update_main_duration()
         return {
@@ -1286,6 +1305,8 @@ class ProjectDocument:
             "out_frame": new_out,
             "duration_change_frames": duration_change,
             "ripple": ripple,
+            "ripple_scope": ripple_scope,
+            "ripple_track_count": ripple_track_count,
         }
 
     def _compensate_trim_blank(
@@ -1325,6 +1346,41 @@ class ProjectDocument:
                 sequence.remove(adjacent)
             else:
                 adjacent.set("length", str(available - needed))
+
+    def _ripple_unlocked_tracks(
+        self, target: TrackRef, position: int, delta: int
+    ) -> int:
+        prepared: list[tuple[ET.Element, list[ET.Element]]] = []
+        removed_service_ids: set[str] = set()
+        for track in self.tracks():
+            if (
+                track.id == target.id
+                or _property(track.playlist, "shotcut:lock") == "1"
+            ):
+                continue
+            sequence = self.sequence(track.playlist)
+            total = sum(self.item_duration(item) for item in sequence)
+            if position >= total:
+                continue
+            start = self.split_sequence_at(sequence, position)
+            if delta > 0:
+                sequence.insert(start, ET.Element("blank", {"length": str(delta)}))
+            else:
+                end = self.split_sequence_at(sequence, position - delta)
+                removed = sequence[start:end]
+                if any(self.is_transition(item) for item in removed):
+                    raise ToolError(
+                        f"Ripple range on track {track.name} contains a transition."
+                    )
+                removed_service_ids.update(
+                    item.get("producer", "") for item in removed if item.tag == "entry"
+                )
+                sequence[start:end] = []
+            prepared.append((track.playlist, self.consolidate_blanks(sequence)))
+        for playlist, sequence in prepared:
+            self.replace_sequence(playlist, sequence)
+        self.remove_unreferenced_services(removed_service_ids)
+        return len(prepared)
 
     def _shift_markers(self, boundary: int, delta: int) -> None:
         if delta == 0:
@@ -2230,6 +2286,8 @@ class ProjectDocument:
     ) -> int:
         remaining = float(source_frames)
         for (start, speed), (end, next_speed) in itertools.pairwise(keyframes):
+            speed = abs(speed)
+            next_speed = abs(next_speed)
             span = end - start
             slope = (next_speed - speed) / span
             area = span * (speed + next_speed) / 2
@@ -2243,7 +2301,7 @@ class ProjectDocument:
                 partial = (-speed + math.sqrt(max(0.0, discriminant))) / slope
             return max(1, math.ceil(start + partial))
         start, speed = keyframes[-1]
-        return max(1, math.ceil(start + remaining / speed))
+        return max(1, math.ceil(start + remaining / abs(speed)))
 
     def set_clip_speed_map(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
@@ -2258,14 +2316,23 @@ class ProjectDocument:
             if not isinstance(raw, dict):
                 raise ToolError(f"keyframes[{index}] must be an object.")
             frame = _int(raw.get("frame"), f"keyframes[{index}].frame", 0)
-            speed = _number(raw.get("speed"), f"keyframes[{index}].speed", 0.01)
-            if speed > 100:
-                raise ToolError(f"keyframes[{index}].speed must not exceed 100.")
+            speed = _number(raw.get("speed"), f"keyframes[{index}].speed")
+            if not 0.01 <= abs(speed) <= 100:
+                raise ToolError(
+                    f"keyframes[{index}].speed must be between -100 and -0.01 "
+                    "or 0.01 and 100."
+                )
             if keyframes and frame <= keyframes[-1][0]:
                 raise ToolError("Speed-map frames must be strictly increasing.")
             keyframes.append((frame, speed))
         if keyframes[0][0] != 0:
             raise ToolError("The first speed-map keyframe must be at frame 0.")
+        forward = keyframes[0][1] > 0
+        if any((speed > 0) != forward for _, speed in keyframes[1:]):
+            raise ToolError(
+                "All speed-map keyframes must use the same playback direction; "
+                "zero-crossing maps are not supported."
+            )
         image_mode = operation.get("image_mode", "blend")
         if image_mode not in {"blend", "nearest"}:
             raise ToolError("image_mode must be blend or nearest.")
@@ -2312,11 +2379,13 @@ class ProjectDocument:
             raise ToolError(
                 "A speed-map keyframe lies beyond the resulting clip duration."
             )
-        entry.set("in", "0")
-        entry.set("out", str(duration - 1))
-        service.set("in", "0")
-        service.set("out", str(duration - 1))
-        _set_property(service, "length", duration)
+        mapped_in = frame_in if forward else frame_out
+        mapped_out = mapped_in + duration - 1
+        entry.set("in", str(mapped_in))
+        entry.set("out", str(mapped_out))
+        service.set("in", str(mapped_in))
+        service.set("out", str(mapped_out))
+        _set_property(service, "length", mapped_out + 1)
         self.update_main_duration()
         return {
             "speed_map_updated": True,
@@ -2324,6 +2393,7 @@ class ProjectDocument:
             "keyframe_count": len(keyframes),
             "image_mode": image_mode,
             "pitch_compensation": pitch,
+            "playback_direction": "forward" if forward else "reverse",
         }
 
     def relink_media(self, operation: dict[str, Any]) -> dict[str, Any]:

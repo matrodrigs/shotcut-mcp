@@ -19,7 +19,6 @@ from .platform import (
     render_preview_batch,
     status,
     summarize_media,
-    validate_project_file,
 )
 from .project import (
     ProjectDocument,
@@ -32,6 +31,9 @@ from .project import (
     plan_project_edit,
     render_project_contact_sheet,
     restore_backup,
+)
+from .project import (
+    validate_project as validate_project_workflow,
 )
 from .protocol import report_progress, schema_errors
 from .render import (
@@ -103,9 +105,10 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
             "edge",
             "delta",
             "ripple",
+            "ripple_scope",
             "ripple_markers",
         ],
-        "notes": "Legacy in/out remains compatible; edge+delta enables explicit ripple behavior.",
+        "notes": "Legacy in/out remains compatible; edge+delta can ripple the target track or every unlocked track.",
     },
     "roll_edit": {
         "required": ["track", "left_item_index", "delta"],
@@ -221,7 +224,7 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "set_clip_speed_map": {
         "required": ["track", "item_index", "keyframes"],
         "optional": ["image_mode", "pitch_compensation"],
-        "notes": "Uses one owned timeremap link; positive monotonic speed maps only.",
+        "notes": "Uses one owned timeremap link; every speed must keep the same non-zero playback direction.",
     },
 }
 
@@ -324,6 +327,12 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
     "ripple": {
         "type": "boolean",
         "description": "Close or create timeline space after the edit.",
+    },
+    "ripple_scope": {
+        "type": "string",
+        "enum": ["track", "all_unlocked"],
+        "default": "track",
+        "description": "Apply an edge+delta ripple only to the target track or also to every unlocked track.",
     },
     "edge": {
         "type": "string",
@@ -543,12 +552,18 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "array",
         "minItems": 2,
         "maxItems": 64,
-        "description": "Strictly increasing positive speed points; the first frame must be 0.",
+        "description": "Strictly increasing speed points in one non-zero playback direction; the first frame must be 0.",
         "items": {
             "type": "object",
             "properties": {
                 "frame": {"type": "integer", "minimum": 0},
-                "speed": {"type": "number", "minimum": 0.01, "maximum": 100},
+                "speed": {
+                    "type": "number",
+                    "anyOf": [
+                        {"minimum": -100, "maximum": -0.01},
+                        {"minimum": 0.01, "maximum": 100},
+                    ],
+                },
             },
             "required": ["frame", "speed"],
             "additionalProperties": False,
@@ -610,6 +625,7 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
         "edge": "end",
         "delta": -12,
         "ripple": True,
+        "ripple_scope": "all_unlocked",
     },
     "roll_edit": {"op": "roll_edit", "track": "V1", "left_item_index": 0, "delta": 6},
     "slip_item": {"op": "slip_item", "track": "V1", "item_index": 0, "delta": 12},
@@ -837,7 +853,7 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
             "inspect_project to obtain revision and current item indexes",
             "optionally list_mlt_services/describe_mlt_service",
             "edit_project with expected_revision and one batch of operations",
-            "render_preview or validate_project",
+            "validate_project for readiness, then render_preview for visual review",
             "optionally export_marker_chapters from point markers",
             "start_render for a full project, inclusive frame range, or range marker; use render_status for durable progress and logs",
         ],
@@ -849,21 +865,7 @@ def inspect_project(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
-    path = expand_path(arguments.get("path", ""))
-    timeout = arguments.get("timeout_seconds", 30)
-    if (
-        isinstance(timeout, bool)
-        or not isinstance(timeout, int)
-        or not 1 <= timeout <= 300
-    ):
-        raise ToolError("timeout_seconds must be an integer between 1 and 300.")
-    report_progress(0, 1, "Validating project with MLT.")
-    result = {
-        "project": ProjectDocument.load(path).snapshot(),
-        **validate_project_file(path, timeout),
-    }
-    report_progress(1, 1, "Project validation complete.")
-    return result
+    return validate_project_workflow(arguments)
 
 
 def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1073,7 +1075,8 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Check Shotcut compatibility",
         "description": (
             "Use after installation, upgrade, or a setup failure. Verifies validated "
-            "Shotcut/MLT versions, repository startup, RNNoise, and path policy."
+            "Shotcut/MLT versions, repository startup, RNNoise, FFmpeg quality-analyzer "
+            "availability, and path policy."
         ),
         "inputSchema": _object_schema({}),
         "annotations": {
@@ -1373,7 +1376,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "validate_project",
         "title": "Validate project with MLT",
-        "description": "Use to check technical MLT validity, not visual quality. Parses the XML and processes the first frame with local Melt.",
+        "description": "Use before preview or render to check project readiness, not visual quality. Parses the XML, checks local resources and required installed MLT services, and processes the first frame with local Melt.",
         "inputSchema": _object_schema(
             {
                 "path": PATH,
@@ -2272,6 +2275,44 @@ VALIDATION_OUTPUT_SCHEMA = _output_object(
     ["valid", "return_code", "diagnostic"],
     description="Result of processing the project with local Melt.",
 )
+PROJECT_RESOURCE_CHECK_OUTPUT_SCHEMA = _output_object(
+    {
+        "status": {"type": "string", "enum": ["passed", "failed"]},
+        "checked_count": {"type": "integer", "minimum": 0},
+        "missing_resources": _output_array(
+            STRING, "Distinct unresolved local resource paths."
+        ),
+    },
+    ["status", "checked_count", "missing_resources"],
+    description="Local resource readiness for this project.",
+)
+SERVICE_NAME_MAP_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": _output_array(
+        STRING, "MLT service names for one service kind."
+    ),
+}
+PROJECT_SERVICE_CHECK_OUTPUT_SCHEMA = _output_object(
+    {
+        "status": {
+            "type": "string",
+            "enum": ["passed", "failed", "unavailable"],
+        },
+        "required": SERVICE_NAME_MAP_OUTPUT_SCHEMA,
+        "missing": SERVICE_NAME_MAP_OUTPUT_SCHEMA,
+        "errors": {"type": "object", "additionalProperties": STRING},
+    },
+    ["status", "required", "missing", "errors"],
+    description="Installed MLT service readiness for this project.",
+)
+PROJECT_READINESS_CHECKS_OUTPUT_SCHEMA = _output_object(
+    {
+        "resources": PROJECT_RESOURCE_CHECK_OUTPUT_SCHEMA,
+        "mlt_services": PROJECT_SERVICE_CHECK_OUTPUT_SCHEMA,
+    },
+    ["resources", "mlt_services"],
+    description="Independent project dependency checks.",
+)
 OPERATION_RESULT_OUTPUT_SCHEMA = _output_object(
     {
         "op": {
@@ -2481,6 +2522,16 @@ MLT_SERVICE_CHECK_OUTPUT_SCHEMA = _output_object(
     ["passed"],
     description="One compatibility check; fields vary by check kind.",
 )
+QUALITY_ANALYZER_CAPABILITY_OUTPUT_SCHEMA = _output_object(
+    {
+        "filter": STRING,
+        "stream_type": {"type": "string", "enum": ["audio", "video"]},
+        "available": BOOLEAN,
+        "error": NULLABLE_STRING,
+    },
+    ["filter", "stream_type", "available", "error"],
+    description="Availability of one FFmpeg-backed quality analyzer.",
+)
 OPERATION_DESCRIPTOR_OUTPUT_SCHEMA = _output_object(
     {
         "required": _output_array(STRING, "Required operation fields."),
@@ -2669,6 +2720,10 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "checks": {
                 "type": "object",
                 "additionalProperties": MLT_SERVICE_CHECK_OUTPUT_SCHEMA,
+            },
+            "quality_analyzers": {
+                "type": "object",
+                "additionalProperties": QUALITY_ANALYZER_CAPABILITY_OUTPUT_SCHEMA,
             },
             "path_policy": PATH_POLICY_OUTPUT_SCHEMA,
         }
@@ -2872,6 +2927,8 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         {
             "project": PROJECT_RESULT_OUTPUT_SCHEMA,
             **VALIDATION_OUTPUT_SCHEMA["properties"],
+            "ready": BOOLEAN,
+            "checks": PROJECT_READINESS_CHECKS_OUTPUT_SCHEMA,
         }
     ),
     "render_preview": _result_schema(
