@@ -49,9 +49,9 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 | Area | Capabilities |
 | --- | --- |
 | Tracks | Add, remove, rename, reorder, lock, hide, mute, and configure composition for video and audio tracks |
-| Timeline | Add, duplicate, replace, split, and move media or generators; insert gaps, overwrite, remove ranges, trim, roll, slip, slide, and apply constant or variable speed |
+| Timeline | Add, duplicate, replace, split, and move media or generators, including duration-safe still images; insert gaps, overwrite, remove ranges, trim, roll, slip, slide, and apply constant or variable speed |
 | Transitions | Shotcut-compatible nested crossfades with selectable MLT video services and optional audio mixing |
-| Effects | Add, update, reorder, and remove MLT filters on a clip, track, or project; native keyframe property strings are supported |
+| Effects | Add, update, reorder, and remove MLT filters on a clip, track, or project; structured clip-opacity animation and native keyframe property strings are supported |
 | Generators | Color, dynamic text, tone, and noise |
 | Project data | Profiles, semantic SDR/HLG/PQ workflows, notes, editable markers, subtitles, assisted hash-based relinking, and unknown XML preservation |
 | Review | Compatibility doctor, source-quality and color analysis, inspection, read-only edit plans/diffs, MLT validation, preview batches, and atomic contact sheets |

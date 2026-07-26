@@ -54,6 +54,53 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             timeout=30,
         )
 
+    @staticmethod
+    def _create_image(ffmpeg: Path, image: Path, color: str) -> None:
+        subprocess.run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={color}:s=64x64",
+                "-frames:v",
+                "1",
+                str(image),
+            ],
+            check=True,
+            timeout=30,
+        )
+
+    @staticmethod
+    def _preview_pixel(ffmpeg: Path, preview: Path) -> tuple[int, int, int]:
+        raw = subprocess.run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(preview),
+                "-vf",
+                "scale=1:1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+        if len(raw) < 3:
+            raise AssertionError("Preview did not contain an RGB pixel.")
+        return raw[0], raw[1], raw[2]
+
     def test_create_edit_preview_validate_and_render(self) -> None:
         executables = discover_executables()
         self.assertIsNotNone(executables.ffmpeg)
@@ -207,6 +254,134 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             self.assertTrue(ramp["validation"]["valid"])
             preview = render_preview(ramp_path, root / "ramp.png", 10, False)
             self.assertGreater(preview["size_bytes"], 100)
+
+    def test_still_images_render_after_split_and_replacement(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            red = root / "red.png"
+            green = root / "green.png"
+            self._create_image(executables.ffmpeg, red, "red")
+            self._create_image(executables.ffmpeg, green, "green")
+            project_path = root / "images.mlt"
+            created = create_project(
+                {
+                    "project_path": str(project_path),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 30,
+                    "clips": [{"path": str(red), "image_duration_seconds": 1.5}],
+                }
+            )
+            split = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "split_item",
+                            "track": "V1",
+                            "item_index": 0,
+                            "offset_frame": 15,
+                        }
+                    ],
+                }
+            )
+            first_preview = root / "first.png"
+            render_preview(project_path, first_preview, 10, False)
+            first_pixel = self._preview_pixel(executables.ffmpeg, first_preview)
+            self.assertGreater(first_pixel[0], 120)
+            self.assertLess(max(first_pixel[1:]), 30)
+
+            replaced = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": split["revision"],
+                    "operations": [
+                        {
+                            "op": "replace_item_media",
+                            "track": "V1",
+                            "item_index": 1,
+                            "path": str(green),
+                        }
+                    ],
+                }
+            )
+            second = replaced["project"]["tracks"][0]["items"][1]
+            self.assertEqual((second["in_frame"], second["out_frame"]), (15, 44))
+            second_preview = root / "second.png"
+            render_preview(project_path, second_preview, 30, False)
+            second_pixel = self._preview_pixel(executables.ffmpeg, second_preview)
+            self.assertGreater(second_pixel[1], 60)
+            self.assertLess(max(second_pixel[0], second_pixel[2]), 30)
+
+    def test_structured_opacity_preserves_color_during_composition(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_path = root / "opacity.mlt"
+            created = create_project(
+                {
+                    "project_path": str(project_path),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 30,
+                }
+            )
+            tracked = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {"op": "add_track", "kind": "video", "name": "Overlay"}
+                    ],
+                }
+            )
+            edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": tracked["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 25,
+                            "color": "#0000ff",
+                        },
+                        {
+                            "op": "add_generator",
+                            "track": "Overlay",
+                            "generator": "color",
+                            "duration_frames": 25,
+                            "color": "#ff0000",
+                        },
+                        {
+                            "op": "split_item",
+                            "track": "Overlay",
+                            "item_index": 0,
+                            "offset_frame": 10,
+                        },
+                        {
+                            "op": "set_clip_opacity",
+                            "track": "Overlay",
+                            "item_index": 1,
+                            "opacity_keyframes": [
+                                {"frame": 0, "opacity": 0},
+                                {"frame": 14, "opacity": 1},
+                            ],
+                        },
+                    ],
+                }
+            )
+            preview = root / "midpoint.png"
+            render_preview(project_path, preview, 17, False)
+            red, green, blue = self._preview_pixel(executables.ffmpeg, preview)
+            self.assertGreater(red, 100)
+            self.assertLess(green, 15)
+            self.assertLessEqual(abs(red - blue), 15)
 
     def test_hlg_workflow_and_named_10bit_export_preset(self) -> None:
         executables = discover_executables()

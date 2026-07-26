@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -414,6 +415,232 @@ class BacklogProjectFeatureTests(unittest.TestCase):
             self.assertEqual(marker["end_frame"], 60)
             self.assertEqual(marker["text"], "Approved")
             self.assertEqual(marker["color"], "#FF8800")
+
+    def test_still_images_use_qimage_across_creation_and_replacement(self) -> None:
+        def probe(path: Path) -> dict[str, object]:
+            if path.suffix.lower() == ".png":
+                return {
+                    "format": {},
+                    "streams": [{"codec_type": "video", "codec_name": "png"}],
+                }
+            return {
+                "format": {"duration": "10"},
+                "streams": [{"codec_type": "video", "codec_name": "h264"}],
+            }
+
+        def producer_properties(path: Path, producer_id: str) -> dict[str, str]:
+            producer = next(
+                element
+                for element in ET.parse(path).getroot().findall("producer")
+                if element.get("id") == producer_id
+            )
+            return {
+                prop.get("name", ""): prop.text or ""
+                for prop in producer.findall("property")
+            }
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("shotcut_mcp.project_document.probe_media_raw", side_effect=probe),
+        ):
+            root = Path(directory)
+            video = root / "source.mp4"
+            first_image = root / "first.png"
+            second_image = root / "second.png"
+            for path in (video, first_image, second_image):
+                path.write_bytes(path.name.encode())
+
+            image_project = root / "image.mlt"
+            created = create_project(
+                {
+                    "project_path": str(image_project),
+                    "clips": [
+                        {
+                            "path": str(first_image),
+                            "image_duration_seconds": 2,
+                        }
+                    ],
+                }
+            )
+            item = created["project"]["tracks"][0]["items"][0]
+            self.assertEqual(
+                producer_properties(image_project, item["producer_id"])["mlt_service"],
+                "qimage",
+            )
+
+            replaced_image = edit_project(
+                {
+                    "project_path": str(image_project),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "replace_item_media",
+                            "track": "V1",
+                            "item_index": 0,
+                            "path": str(second_image),
+                        }
+                    ],
+                }
+            )
+            item = replaced_image["project"]["tracks"][0]["items"][0]
+            self.assertEqual(
+                producer_properties(image_project, item["producer_id"])["mlt_service"],
+                "qimage",
+            )
+
+            replaced_video = edit_project(
+                {
+                    "project_path": str(image_project),
+                    "expected_revision": replaced_image["revision"],
+                    "operations": [
+                        {
+                            "op": "replace_item_media",
+                            "track": "V1",
+                            "item_index": 0,
+                            "path": str(video),
+                        }
+                    ],
+                }
+            )
+            item = replaced_video["project"]["tracks"][0]["items"][0]
+            self.assertEqual(
+                producer_properties(image_project, item["producer_id"])["mlt_service"],
+                "avformat-novalidate",
+            )
+
+            video_project = root / "video.mlt"
+            video_created = create_project(
+                {
+                    "project_path": str(video_project),
+                    "clips": [{"path": str(video), "in_frame": 120, "out_frame": 179}],
+                }
+            )
+            filtered = edit_project(
+                {
+                    "project_path": str(video_project),
+                    "expected_revision": video_created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_filter",
+                            "target": "clip",
+                            "track": "V1",
+                            "item_index": 0,
+                            "service": "brightness",
+                            "in_frame": 130,
+                            "out_frame": 150,
+                        }
+                    ],
+                }
+            )
+            filter_id = filtered["operation_results"][0]["filter_id"]
+            replaced_still = edit_project(
+                {
+                    "project_path": str(video_project),
+                    "expected_revision": filtered["revision"],
+                    "operations": [
+                        {
+                            "op": "replace_item_media",
+                            "track": "V1",
+                            "item_index": 0,
+                            "path": str(first_image),
+                        }
+                    ],
+                }
+            )
+            item = replaced_still["project"]["tracks"][0]["items"][0]
+            self.assertEqual((item["in_frame"], item["out_frame"]), (120, 179))
+            self.assertEqual(item["filters"][0]["filter_id"], filter_id)
+            self.assertEqual(
+                producer_properties(video_project, item["producer_id"])["mlt_service"],
+                "qimage",
+            )
+
+    def test_set_clip_opacity_reuses_one_owned_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "opacity.mlt"
+            created = create_project({"project_path": str(project_path)})
+            generated = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 25,
+                            "color": "#ff0000",
+                        }
+                    ],
+                }
+            )
+            animated = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": generated["revision"],
+                    "operations": [
+                        {
+                            "op": "set_clip_opacity",
+                            "track": "V1",
+                            "item_index": 0,
+                            "opacity_keyframes": [
+                                {"frame": 0, "opacity": 0},
+                                {"frame": 12, "opacity": 1},
+                                {"frame": 24, "opacity": 0},
+                            ],
+                        }
+                    ],
+                }
+            )
+            operation_result = animated["operation_results"][0]
+            filters = animated["project"]["tracks"][0]["items"][0]["filters"]
+            self.assertEqual(len(filters), 1)
+            self.assertEqual(operation_result["filter_id"], filters[0]["filter_id"])
+            self.assertEqual(filters[0]["service"], "brightness")
+            self.assertEqual(filters[0]["properties"]["level"], "1")
+            self.assertEqual(filters[0]["properties"]["alpha"], "0=0;12=1;24=0")
+            self.assertEqual(filters[0]["properties"]["shotcut:mcpOpacity"], "1")
+
+            updated = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": animated["revision"],
+                    "operations": [
+                        {
+                            "op": "set_clip_opacity",
+                            "track": "V1",
+                            "item_index": 0,
+                            "opacity_keyframes": [
+                                {"frame": 0, "opacity": 1},
+                                {"frame": 24, "opacity": 0},
+                            ],
+                            "interpolation": "smooth",
+                        }
+                    ],
+                }
+            )
+            filters = updated["project"]["tracks"][0]["items"][0]["filters"]
+            self.assertEqual(len(filters), 1)
+            self.assertEqual(filters[0]["filter_id"], operation_result["filter_id"])
+            self.assertEqual(filters[0]["properties"]["alpha"], "0~=1;24~=0")
+
+            before = project_path.read_bytes()
+            with self.assertRaisesRegex(ToolError, "between 0 and 1"):
+                edit_project(
+                    {
+                        "project_path": str(project_path),
+                        "expected_revision": updated["revision"],
+                        "operations": [
+                            {
+                                "op": "set_clip_opacity",
+                                "track": "V1",
+                                "item_index": 0,
+                                "opacity_keyframes": [{"frame": 0, "opacity": 1.1}],
+                            }
+                        ],
+                    }
+                )
+            self.assertEqual(project_path.read_bytes(), before)
 
     def test_media_replacement_rejects_adjacent_transition_without_writing(
         self,

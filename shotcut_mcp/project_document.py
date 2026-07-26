@@ -88,6 +88,20 @@ def _boolean(value: Any, label: str) -> bool:
     return value
 
 
+def _media_producer_service(
+    payload: dict[str, Any], duration_seconds: float | None
+) -> str:
+    if duration_seconds is not None:
+        return "avformat-novalidate"
+    streams = payload.get("streams")
+    if isinstance(streams, list) and any(
+        isinstance(stream, dict) and stream.get("codec_type") == "video"
+        for stream in streams
+    ):
+        return "qimage"
+    raise ToolError("Media has no duration or still-image video stream.")
+
+
 def _frames_to_clock(frames: int, fps: float) -> str:
     total_ms = round(frames * 1000 / fps)
     hours, remainder = divmod(total_ms, 3_600_000)
@@ -914,6 +928,7 @@ class ProjectDocument:
             raise ToolError(f"Media not found: {media_path}")
         probe = probe_media_raw(media_path)
         duration_seconds = media_duration(probe)
+        producer_service = _media_producer_service(probe, duration_seconds)
         image_duration = _number(
             operation.get("image_duration_seconds", 5.0), "image_duration_seconds", 0.04
         )
@@ -945,13 +960,14 @@ class ProjectDocument:
             ("length", full_frames),
             ("eof", "pause"),
             ("resource", str(media_path).replace("\\", "/")),
-            ("mlt_service", "avformat-novalidate"),
-            ("seekable", 1),
-            ("shotcut:skipConvert", 1),
+            ("mlt_service", producer_service),
             ("shotcut:caption", operation.get("caption") or media_path.name),
             ("shotcut:hash", shotcut_file_hash(media_path)),
         ):
             _set_property(producer, name, value)
+        if producer_service == "avformat-novalidate":
+            _set_property(producer, "seekable", 1)
+            _set_property(producer, "shotcut:skipConvert", 1)
         entry = ET.Element(
             "entry",
             {"producer": producer_id, "in": str(frame_in), "out": str(frame_out)},
@@ -1027,9 +1043,9 @@ class ProjectDocument:
                 "replace_item_media currently supports regular producer-backed clips only."
             )
         service = _property(original, "mlt_service")
-        if service not in {"avformat", "avformat-novalidate"}:
+        if service not in {"avformat", "avformat-novalidate", "qimage"}:
             raise ToolError(
-                "replace_item_media supports avformat-backed media clips only."
+                "replace_item_media supports ordinary media and still-image clips only."
             )
         if _property(original, "shotcut:proxy") or _property(
             original, "shotcut:proxyResource"
@@ -1055,6 +1071,7 @@ class ProjectDocument:
             raise ToolError(f"Media not found: {media_path}")
         payload = probe_media_raw(media_path)
         duration_seconds = media_duration(payload)
+        producer_service = _media_producer_service(payload, duration_seconds)
         full_frames = (
             max(1, math.ceil(duration_seconds * self.fps))
             if duration_seconds is not None
@@ -1070,9 +1087,13 @@ class ProjectDocument:
         producer.set("out", str(full_frames - 1))
         _set_property(producer, "length", full_frames)
         _set_property(producer, "resource", str(media_path).replace("\\", "/"))
-        _set_property(producer, "mlt_service", "avformat-novalidate")
-        _set_property(producer, "seekable", 1)
-        _set_property(producer, "shotcut:skipConvert", 1)
+        _set_property(producer, "mlt_service", producer_service)
+        if producer_service == "avformat-novalidate":
+            _set_property(producer, "seekable", 1)
+            _set_property(producer, "shotcut:skipConvert", 1)
+        else:
+            _remove_property(producer, "seekable")
+            _remove_property(producer, "shotcut:skipConvert")
         _set_property(producer, "shotcut:hash", shotcut_file_hash(media_path))
         caption = operation.get("caption", media_path.name)
         if not isinstance(caption, str):
@@ -2062,6 +2083,75 @@ class ProjectDocument:
             "colorspace": str(colorspace),
         }
 
+    def set_clip_opacity(self, operation: dict[str, Any]) -> dict[str, Any]:
+        track = self.find_track(operation.get("track"))
+        _, _, entry, frame_in, frame_out = self._regular_clip(
+            track, operation.get("item_index")
+        )
+        raw_keyframes = operation.get("opacity_keyframes")
+        if not isinstance(raw_keyframes, list) or not 1 <= len(raw_keyframes) <= 64:
+            raise ToolError("opacity_keyframes must contain between 1 and 64 points.")
+        keyframes: list[tuple[int, float]] = []
+        for index, raw in enumerate(raw_keyframes):
+            if not isinstance(raw, dict):
+                raise ToolError(f"opacity_keyframes[{index}] must be an object.")
+            frame = _int(raw.get("frame"), f"opacity_keyframes[{index}].frame", 0)
+            opacity = _number(
+                raw.get("opacity"), f"opacity_keyframes[{index}].opacity", 0
+            )
+            if opacity > 1:
+                raise ToolError(
+                    f"opacity_keyframes[{index}].opacity must be between 0 and 1."
+                )
+            if keyframes and frame <= keyframes[-1][0]:
+                raise ToolError("Opacity keyframe frames must be strictly increasing.")
+            keyframes.append((frame, opacity))
+        if keyframes[0][0] != 0:
+            raise ToolError("The first opacity keyframe must be at frame 0.")
+        duration = frame_out - frame_in + 1
+        if keyframes[-1][0] >= duration:
+            raise ToolError(
+                f"Opacity keyframes must be within the clip duration ({duration} frames)."
+            )
+        interpolation = operation.get("interpolation", "linear")
+        separators = {"linear": "=", "discrete": "|=", "smooth": "~="}
+        if not isinstance(interpolation, str) or interpolation not in separators:
+            raise ToolError("interpolation must be linear, discrete, or smooth.")
+        separator = separators[interpolation]
+        serialized = ";".join(
+            f"{frame}{separator}{opacity:g}" for frame, opacity in keyframes
+        )
+
+        service = self.isolate_entry_service(entry)
+        if service.tag not in {"producer", "chain"}:
+            raise ToolError("Clip opacity requires a producer or chain clip.")
+        owned = [
+            element
+            for element in service.findall("filter")
+            if _property(element, "shotcut:mcpOpacity") == "1"
+        ]
+        if len(owned) > 1:
+            raise ToolError("The clip contains multiple MCP-owned opacity filters.")
+        if owned:
+            element = owned[0]
+        else:
+            element = ET.Element("filter", {"id": self.new_id("filter")})
+            service.append(element)
+            self.invalidate()
+        element.set("in", str(frame_in))
+        element.set("out", str(frame_out))
+        _set_property(element, "mlt_service", "brightness")
+        _set_property(element, "shotcut:mcpOpacity", 1)
+        _set_property(element, "level", 1)
+        _set_property(element, "alpha", serialized)
+        _remove_property(element, "disable")
+        return {
+            "opacity_updated": True,
+            "filter_id": element.get("id"),
+            "keyframe_count": len(keyframes),
+            "interpolation": interpolation,
+        }
+
     def set_clip_speed(self, operation: dict[str, Any]) -> dict[str, Any]:
         track = self.find_track(operation.get("track"))
         _, _, entry, frame_in, frame_out = self._regular_clip(
@@ -2390,6 +2480,7 @@ class ProjectDocument:
             "relink_media": self.relink_media,
             "set_profile": self.set_profile,
             "set_color_workflow": self.set_color_workflow,
+            "set_clip_opacity": self.set_clip_opacity,
             "set_clip_speed": self.set_clip_speed,
             "set_clip_speed_map": self.set_clip_speed_map,
         }

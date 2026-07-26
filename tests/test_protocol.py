@@ -744,6 +744,7 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertIn("render_presets", full)
         self.assertIn("workflow", full)
         self.assertIn("duplicate_item", guidance["edit_primitives"])
+        self.assertIn("set_clip_opacity", guidance["edit_primitives"])
         self.assertIn("render_status", guidance["progress"])
 
     def test_marker_operation_schema_explains_exclusive_end(self) -> None:
@@ -778,6 +779,15 @@ class ProtocolNegotiationTests(unittest.TestCase):
             (
                 "trim_item",
                 {"op": "trim_item", "track": "V1", "item_index": 0, "delta": 0},
+            ),
+            (
+                "set_clip_opacity",
+                {
+                    "op": "set_clip_opacity",
+                    "track": "V1",
+                    "item_index": 0,
+                    "opacity_keyframes": [{"frame": 0, "opacity": 1.1}],
+                },
             ),
         )
         for operation_name, operation in cases:

@@ -18,7 +18,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Supervise renders outside the MCP stdio process so completion and cancellation survive restart.
 - Support video and audio tracks, gaps, clips, explicit ripple/non-ripple trim, roll, slip,
   slide, constant timewarp, positive timeremap speed maps, split, move, ripple/overwrite edits,
-  crossfades, generic MLT filters, keyframed properties, text/color/tone generators,
+  crossfades, generic MLT filters, structured clip opacity, keyframed properties,
+  text/color/tone generators,
   markers, project notes, subtitle feeds, media relinking, clip duplication, safe source
   replacement, filter ordering, and marker updates.
 - Expose MLT service discovery so callers can use filters, transitions and links installed with
@@ -74,9 +75,12 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Preserve unsupported structures, but reject an edit when a target is ambiguous or when
   modifying it would require guessing about an unknown transition layout.
 - Preserve Shotcut's exclusive marker end convention and translate it to MLT's inclusive render
-  `out` value. Reject source replacement next to transitions rather than guessing at tractor rewiring.
+  `out` value. Use MLT's still-image producer for durationless image streams so trims, splits and
+  source replacement preserve their timeline ranges. Reject source replacement next to transitions
+  rather than guessing at tractor rewiring.
 - Generic filters accept native MLT properties; the MCP does not promise that every third-party
-  filter is available or renderable on every machine.
+  filter is available or renderable on every machine. Structured clip opacity owns and reuses one
+  brightness filter, keeps its RGB level neutral, and animates only alpha.
 - Deny network resources and sidecar/path-bearing consumer properties by default. Administrators
   may opt in through environment policy and may constrain every tool path to canonical roots.
 - Apply those policies to every recognized MLT path representation, including timewarp, proxy,
@@ -93,6 +97,7 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   shared producers, advanced timeline edits, speed/color annotations, assisted relinking,
   bounded process/log output, render history/ETA, orphan cleanup and security policies.
 - Real ffmpeg/ffprobe/melt integration covering multitrack creation, editing, validation,
-  preview, media-quality analysis, range rendering, and final render.
+  still-image trims and replacement, opacity composition, preview, media-quality analysis, range
+  rendering, and final render.
 - Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI. Release tags
   must point to a `main` commit whose exact SHA completed that CI successfully.

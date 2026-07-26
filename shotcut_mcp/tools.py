@@ -76,7 +76,10 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
     "replace_item_media": {
         "required": ["track", "item_index", "path"],
         "optional": ["caption"],
-        "notes": "Preserves source range, placement, filters, and unknown producer properties.",
+        "notes": (
+            "Preserves source range, placement, filters, and unknown producer "
+            "properties; static images use the MLT still-image producer."
+        ),
     },
     "add_generator": {
         "required": ["track", "generator", "duration_frames"],
@@ -201,6 +204,14 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         "required": ["workflow"],
         "optional": ["processing_mode", "colorspace"],
         "notes": "workflow: sdr|hlg|pq; owns processing mode, transfer, and colorspace together.",
+    },
+    "set_clip_opacity": {
+        "required": ["track", "item_index", "opacity_keyframes"],
+        "optional": ["interpolation"],
+        "notes": (
+            "Animates transparency without changing RGB brightness and reuses one "
+            "MCP-owned filter."
+        ),
     },
     "set_clip_speed": {
         "required": ["track", "item_index", "speed"],
@@ -504,6 +515,30 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "boolean",
         "description": "Preserve perceived audio pitch.",
     },
+    "opacity_keyframes": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 64,
+        "description": (
+            "Strictly increasing clip-relative opacity points from 0 to 1; the "
+            "first frame must be 0."
+        ),
+        "items": {
+            "type": "object",
+            "properties": {
+                "frame": {"type": "integer", "minimum": 0},
+                "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": ["frame", "opacity"],
+            "additionalProperties": False,
+        },
+    },
+    "interpolation": {
+        "type": "string",
+        "enum": ["linear", "discrete", "smooth"],
+        "default": "linear",
+        "description": "MLT interpolation applied between opacity keyframes.",
+    },
     "keyframes": {
         "type": "array",
         "minItems": 2,
@@ -664,6 +699,17 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
         "frame_rate_den": 1,
     },
     "set_color_workflow": {"op": "set_color_workflow", "workflow": "sdr"},
+    "set_clip_opacity": {
+        "op": "set_clip_opacity",
+        "track": "V2",
+        "item_index": 0,
+        "opacity_keyframes": [
+            {"frame": 0, "opacity": 0.0},
+            {"frame": 12, "opacity": 1.0},
+            {"frame": 48, "opacity": 0.0},
+        ],
+        "interpolation": "linear",
+    },
     "set_clip_speed": {
         "op": "set_clip_speed",
         "track": "V1",
@@ -776,8 +822,9 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
                 "range markers and color filtering are opt-in."
             ),
             "edit_primitives": (
-                "duplicate_item, replace_item_media, move_filter, and update_marker are "
-                "transactional operations and support plan_project_edit."
+                "duplicate_item, replace_item_media, set_clip_opacity, move_filter, "
+                "and update_marker are transactional operations and support "
+                "plan_project_edit."
             ),
             "progress": (
                 "Request progress is emitted only when the caller supplies a progress "
