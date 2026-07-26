@@ -256,7 +256,7 @@ integrators, and anyone who wants to understand the available tool surface.
 | Tool | Purpose |
 | --- | --- |
 | `shotcut_status` | Discover Shotcut, Melt, FFmpeg, and FFprobe and report versions |
-| `shotcut_doctor` | Verify Shotcut 26.6.25, MLT 7.40.x, repository startup, RNNoise, and path policy |
+| `shotcut_doctor` | Verify the Shotcut/MLT stack, RNNoise, FFmpeg analyzer availability, and path policy |
 | `shotcut_capabilities` | Return the complete edit catalog and context, or one focused operation schema and example |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
@@ -268,7 +268,7 @@ integrators, and anyone who wants to understand the available tool surface.
 | `edit_project` | Apply up to 500 timeline operations in one validated transaction |
 | `list_mlt_services` | List locally available MLT filters, transitions, producers, consumers, or links |
 | `describe_mlt_service` | Return metadata for one installed MLT service |
-| `validate_project` | Parse the project and validate it with Melt |
+| `validate_project` | Check Melt validity plus local resources and required installed MLT services |
 | `render_preview` | Render a selected frame to PNG, with optional managed output |
 | `render_preview_batch` | Render up to 64 exact frames with bounded per-output outcomes |
 | `render_contact_sheet` | Render exact or evenly sampled frames into one atomic review image |
@@ -355,10 +355,11 @@ Real Shotcut integration is opt-in through `SHOTCUT_MCP_INTEGRATION=1`. See
 - Third-party filters, GPU/OpenGL services, codecs, and fonts vary by Shotcut installation.
 - Quality analysis depends on filters present in the installed FFmpeg build. Checks run
   independently and report `unavailable` or `not_applicable` instead of failing the whole analysis.
-- Speed maps currently accept positive, non-zero maps only and reject third-party/ambiguous links;
-  reverse or zero-crossing ramps require additional Shotcut round-trip fixtures.
-- Cross-track ripple trim remains rejected until locked-track and marker fixtures establish the
-  exact Shotcut 26.6 behavior; same-track ripple/non-ripple trim is supported.
+- Speed maps accept wholly forward or wholly reverse non-zero ramps. Zero-crossing ramps and
+  third-party/ambiguous chain links remain rejected.
+- Ripple trim can affect only the target track or every unlocked track. Locked tracks are left
+  unchanged, and a cross-track removal that intersects a transition is rejected rather than
+  rewired speculatively.
 - Changing project FPS preserves recognized timeline and marker frame numbers; it does not
   automatically retime the creative edit.
 - If the dedicated render supervisor itself is forcibly killed while Melt survives, the job is

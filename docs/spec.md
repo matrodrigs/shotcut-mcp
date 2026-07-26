@@ -16,8 +16,9 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Render previews and exports to protected sibling files and promote them atomically only if the
   original target has not changed.
 - Supervise renders outside the MCP stdio process so completion and cancellation survive restart.
-- Support video and audio tracks, gaps, clips, explicit ripple/non-ripple trim, roll, slip,
-  slide, constant timewarp, positive timeremap speed maps, split, move, ripple/overwrite edits,
+- Support video and audio tracks, gaps, clips, same-track or all-unlocked ripple/non-ripple trim,
+  roll, slip, slide, constant timewarp, same-direction forward or reverse timeremap speed maps,
+  split, move, ripple/overwrite edits,
   crossfades, generic MLT filters, structured clip opacity, keyframed properties,
   text/color/tone generators,
   markers, project notes, subtitle feeds, media relinking, clip duplication, safe source
@@ -55,6 +56,10 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Analyze media quality with independently bounded FFmpeg silence, black, freeze, interlace,
   and EBU R128 loudness checks, returning partial structured results when a filter or stream is
   unavailable.
+- Report installed FFmpeg analyzer availability in the compatibility doctor without making an
+  optional analyzer part of the core Shotcut/MLT compatibility verdict.
+- Validate project readiness through one public operation that combines local-resource and
+  required-service checks with first-frame MLT processing.
 - Render exactly one of the complete project, one explicit inclusive frame range, or one non-empty
   Shotcut range marker while preserving the durable render-job lifecycle. Accept at most 50
   scalar advanced consumer properties and keep the default safe single-file allowlist.
@@ -85,8 +90,9 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   may opt in through environment policy and may constrain every tool path to canonical roots.
 - Apply those policies to every recognized MLT path representation, including timewarp, proxy,
   luma, source, filename, and filter resources.
-- Keep HDR display preview, mixed HLG/PQ conversion, reverse/zero-crossing speed maps, and
-  ambiguous third-party chain edits out of the verified interface.
+- Keep HDR display preview, mixed HLG/PQ conversion, zero-crossing speed maps, and ambiguous
+  third-party chain edits out of the verified interface. Reverse speed maps must remain entirely
+  negative and start from the selected source range's final frame.
 
 ## Verification
 
@@ -96,8 +102,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Regression tests for preservation, optimistic concurrency, backup ownership, atomic output,
   shared producers, advanced timeline edits, speed/color annotations, assisted relinking,
   bounded process/log output, render history/ETA, orphan cleanup and security policies.
-- Real ffmpeg/ffprobe/melt integration covering multitrack creation, editing, validation,
-  still-image trims and replacement, opacity composition, preview, media-quality analysis, range
-  rendering, and final render.
+- Real ffmpeg/ffprobe/melt integration covering multitrack creation, locked-track ripple editing,
+  forward/reverse timeremap validation, still-image trims and replacement, opacity composition,
+  preview, media-quality analysis, range rendering, and final render.
 - Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI. Release tags
   must point to a `main` commit whose exact SHA completed that CI successfully.

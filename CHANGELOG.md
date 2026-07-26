@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- Report per-analyzer FFmpeg availability in `shotcut_doctor` and combine local-resource,
+  required-service, and first-frame Melt checks in `validate_project`.
+- Support wholly reverse timeremap speed maps and all-unlocked cross-track ripple trims that
+  preserve locked tracks and marker timing.
+
+### Changed
+
+- Add Shotcut 26.6 compatibility fixtures and real MLT integration coverage for reverse speed maps
+  and locked-track ripple behavior.
+
 ## 1.4.2 (2026-07-26)
 
 ### Added
