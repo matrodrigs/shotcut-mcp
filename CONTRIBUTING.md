@@ -17,9 +17,10 @@ boundaries and verified behavior.
   then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical
   `manifest.json` descriptions and website tool counts.
 - Install the pinned development tools from `requirements-dev.txt`, then run
-  `ruff format --check .`, `ruff check .`, `mypy`, `vulture`,
-  `python scripts/check_release.py`, and `python -B -m unittest discover -s tests -v` before
-  publishing changes.
+  `python -B scripts/check_ci.py all` before publishing changes. On Windows, this command runs
+  the full unit suite through a temporary drive alias so canonical-path behavior matches CI.
+  Enable the versioned pre-push gate once per clone with
+  `git config core.hooksPath .githooks`.
 - Keep runtime, `manifest.json`, `.claude-plugin/plugin.json`, and the base version before `+` in
   `.codex-plugin/plugin.json` aligned. Keep both client adapters pointed at
   `scripts/shotcut_mcp_server.py`, and keep `.claude-plugin/marketplace.json` aligned with the

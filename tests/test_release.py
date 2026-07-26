@@ -275,6 +275,29 @@ class SiteAssetTests(unittest.TestCase):
         )
 
 
+class CiConfigurationTests(unittest.TestCase):
+    def test_local_ci_release_and_hook_share_one_check_runner(self) -> None:
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        hook = (ROOT / ".githooks" / "pre-push").read_text(encoding="utf-8")
+        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+
+        self.assertIn("python -B scripts/check_ci.py test", ci)
+        self.assertIn("python -B scripts/check_ci.py quality", ci)
+        self.assertIn("python -B scripts/check_ci.py all", release)
+        self.assertIn("python -B scripts/check_ci.py all", hook)
+        self.assertIn("/.githooks/* text eol=lf", attributes)
+
+    def test_ci_publishes_one_stable_aggregate_gate(self) -> None:
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+        self.assertIn("name: CI gate", ci)
+        self.assertIn("needs: [test, quality]", ci)
+        self.assertIn("if: always()", ci)
+
+
 class ReleaseCiGateTests(unittest.TestCase):
     def test_successful_main_push_ci_allows_release(self) -> None:
         runs = [

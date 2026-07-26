@@ -157,14 +157,12 @@ regression test for every confirmed bug before or with its fix.
 Fast local checks:
 
 ```bash
-python -m ruff format --check .
-python -m ruff check .
-python -m mypy
-python -m vulture
-python -B -m compileall -q shotcut_mcp scripts tests
-python -B -m unittest discover -s tests -v
-python scripts/check_release.py
+python -B scripts/check_ci.py all
 ```
+
+On Windows, the shared check runner executes the ordinary suite through a temporary drive alias
+so canonical-path expectations are tested locally as well as on GitHub Actions. Enable the
+versioned pre-push hook once per clone with `git config core.hooksPath .githooks`.
 
 Run the real integration test when changing project generation, MLT validation, preview,
 rendering, media analysis, executable discovery, process supervision, or compatibility checks:

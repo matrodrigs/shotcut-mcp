@@ -23,6 +23,7 @@ from shotcut_mcp.server import (
     serve,
 )
 from shotcut_mcp.tools import OPERATION_CATALOG, OPERATION_EXAMPLES, TOOLS
+from tests.path_assertions import assert_canonical_path, assert_canonical_paths
 
 
 def request(
@@ -1129,7 +1130,7 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertTrue(response["result"]["isError"])
         self.assertEqual(payload["error_code"], "project_not_found")
         self.assertEqual(payload["recommended_action"], "check_project_path_and_retry")
-        self.assertEqual(payload["details"]["path"], str(missing))
+        assert_canonical_path(self, payload["details"]["path"], missing)
         schema = next(
             tool["outputSchema"] for tool in TOOLS if tool["name"] == "inspect_project"
         )
@@ -1223,7 +1224,9 @@ class ProtocolNegotiationTests(unittest.TestCase):
             payload["recommended_action"], "choose_existing_search_roots_and_retry"
         )
         self.assertEqual(payload["recommended_tool"], "diagnose_missing_media")
-        self.assertEqual(payload["details"]["invalid_roots"], [str(missing_root)])
+        assert_canonical_paths(
+            self, payload["details"]["invalid_roots"], [missing_root]
+        )
 
     def test_ffmpeg_capability_failure_recommends_doctor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

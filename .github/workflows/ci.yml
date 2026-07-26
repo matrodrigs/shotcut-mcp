@@ -24,12 +24,8 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
-      - name: Compile package
-        run: python -B -m compileall -q shotcut_mcp scripts tests
-      - name: Run unit tests
-        run: python -B -m unittest discover -s tests -v
-      - name: Validate release metadata
-        run: python scripts/check_release.py
+      - name: Run shared test checks
+        run: python -B scripts/check_ci.py test
 
   quality:
     name: Static quality checks
@@ -44,11 +40,21 @@ jobs:
           cache: pip
       - name: Install pinned quality tools
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Ruff lint
-        run: ruff check .
-      - name: Ruff format
-        run: ruff format --check .
-      - name: Mypy
-        run: mypy
-      - name: Vulture
-        run: vulture
+      - name: Run shared quality checks
+        run: python -B scripts/check_ci.py quality
+
+  gate:
+    name: CI gate
+    if: always()
+    needs: [test, quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful test and quality jobs
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+        run: |
+          if [ "$TEST_RESULT" != "success" ] || [ "$QUALITY_RESULT" != "success" ]; then
+            echo "CI gate failed: test=$TEST_RESULT quality=$QUALITY_RESULT" >&2
+            exit 1
+          fi

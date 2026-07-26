@@ -334,12 +334,14 @@ Runtime code uses only the Python standard library. Run the local quality gate w
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m ruff format --check .
-python -m ruff check .
-python -m mypy
-python -m vulture
-python scripts/check_release.py
-python -m unittest discover -s tests -v
+python -B scripts/check_ci.py all
+```
+
+Enable the versioned pre-push gate once per clone so the same command runs before changes
+reach GitHub:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 Real Shotcut integration is opt-in through `SHOTCUT_MCP_INTEGRATION=1`. See
