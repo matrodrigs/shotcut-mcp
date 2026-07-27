@@ -11,7 +11,8 @@ validates it with the installed MLT runtime, renders previews and final media, a
 preserves user projects through transactional writes. Correctness and preservation of
 user data take priority over convenience or clever abstractions.
 
-The validated compatibility target is Shotcut 26.6.25 with MLT 7.40.x. Do not infer
+The validated compatibility target is Shotcut 26.6.25 with MLT 7.40.0 serialization in the
+MLT 7.40.x family. The runtime source of truth is `shotcut_mcp/__init__.py`. Do not infer
 that a successful MLT repository preflight proves an optional service loaded; RNNoise
 must continue to be checked independently as both a link and a filter.
 

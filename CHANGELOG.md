@@ -4,11 +4,32 @@
 
 ### Added
 
+- Return opaque revision-scoped `item_ref` selectors from project snapshots and support
+  transaction-local `as`/`@alias` bindings so earlier timeline edits cannot silently retarget
+  later operations in the same batch.
+- Add semantic `animate_clip` keyframes for pan, zoom, rotation, opacity, and volume while keeping
+  native MLT services, property names, and keyframe strings inside MCP-owned filters.
 - Return every tool execution failure with a published structured recovery contract, including a
   stable error code, recoverability, recommended action/tool, and bounded contextual details.
 - Route unsupported project structures, stale render cursors, missing streams/search roots,
   FFmpeg capability failures, unavailable visual frames, and corrupt durable render state to
   specific safe recovery actions.
+
+### Changed
+
+- Give cold MLT repository startup progressively longer 5, 10, and 20 second attempts through one
+  shared policy used by status, validation, preview, and rendering.
+- Double the default MLT project limit to 128 MiB and allow administrators to configure a bounded
+  1–512 MiB limit with `SHOTCUT_MCP_MAX_PROJECT_BYTES`.
+- Avoid duplicating complete structured results in text content for modern MCP clients, reducing
+  response size while retaining the full result in `structuredContent`.
+
+### Fixed
+
+- Enforce the configured MCP message limit on outbound responses and compact oversized progress
+  notifications before they reach the client.
+- Reject an oversized serialized project candidate before validation, backup, or replacement so
+  every saved project remains readable under the configured input policy.
 
 ## 1.4.5 (2026-07-26)
 

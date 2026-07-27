@@ -10,8 +10,15 @@ boundaries and verified behavior.
 - Validate all external paths and subprocess arguments; never invoke a shell from the server.
 - Keep tool handlers thin. Timeline rules belong in the project model, and platform/process
   behavior belongs in dedicated modules.
+- Follow the dependency direction in `docs/architecture.md`; preserve `project.py` and
+  `platform.py` as the stable public seams instead of importing private mechanics into handlers.
+- Keep operation selector/alias semantics in `project_document.py` and derive their public schema
+  projection in `tools.py`. Do not maintain a second operation-name list for the same behavior.
+- Keep validated Shotcut/MLT versions in `shotcut_mcp/__init__.py`; release checks verify that
+  `AGENTS.md`, `README.md`, `docs/spec.md`, and the project website contain those values.
 - Return recoverable user/input problems as tool errors without terminating the MCP server.
-- Tests must use public interfaces and include literal expected outcomes.
+- Tests must use public interfaces, include literal expected outcomes, and be named for their
+  domain seam (`project`, `protocol`, `platform`, `media`, or `render`) rather than release age.
 - Add a failing regression test before each bug fix and keep real Shotcut integration opt-in.
 - After changing the runtime tool catalog, keep the README table's concise human summaries current,
   then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical

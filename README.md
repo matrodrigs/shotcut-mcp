@@ -49,9 +49,9 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 | Area | Capabilities |
 | --- | --- |
 | Tracks | Add, remove, rename, reorder, lock, hide, mute, and configure composition for video and audio tracks |
-| Timeline | Add, duplicate, replace, split, and move media or generators, including duration-safe still images; insert gaps, overwrite, remove ranges, trim, roll, slip, slide, and apply constant or variable speed |
+| Timeline | Add, duplicate, replace, split, and move media or generators using revision-scoped item references and transaction-local aliases; insert gaps, overwrite, remove ranges, trim, roll, slip, slide, and apply constant or variable speed |
 | Transitions | Shotcut-compatible nested crossfades with selectable MLT video services and optional audio mixing |
-| Effects | Add, update, reorder, and remove MLT filters on a clip, track, or project; structured clip-opacity animation and native keyframe property strings are supported |
+| Effects | Animate clip pan, zoom, rotation, opacity, and volume with structured creative values; add, update, reorder, and remove native MLT filters on a clip, track, or project when lower-level control is needed |
 | Generators | Color, dynamic text, tone, and noise |
 | Project data | Profiles, semantic SDR/HLG/PQ workflows, notes, editable markers, subtitles, assisted hash-based relinking, and unknown XML preservation |
 | Review | Compatibility doctor, source-quality and color analysis, inspection, read-only edit plans/diffs, MLT validation, preview batches, and atomic contact sheets |
@@ -188,7 +188,8 @@ Put narration on A1, add 12-frame crossfades, and save it as documentary.mlt.
 
 ```text
 Inspect documentary.mlt, remove the pauses between clips on V1, add title cards,
-generate preview frames at each section boundary, and keep the project editable.
+add a slow push-in with smooth audio and video fades, generate preview frames at each
+section boundary, and keep the project editable.
 ```
 
 ```text
@@ -242,7 +243,8 @@ Every project edit uses the following safeguards:
 - Retention of the 20 most recent backups in a project-specific namespace
 - Preservation of unknown XML and rejection of ambiguous transitions or basename relinks
 - One canonical allowed-root/network policy for tool paths and embedded project resources
-- Bounded project input, process output, render logs, history, searches, and previews
+- Bounded MCP input/output, project candidates (128 MiB by default), process output, render logs,
+  history, searches, and previews
 
 Existing preview and render outputs are also protected: output is written to a temporary sibling,
 the target is checked again for concurrent changes, and promotion is atomic. A dedicated render
@@ -260,12 +262,12 @@ integrators, and anyone who wants to understand the available tool surface.
 | `shotcut_capabilities` | Return the complete edit catalog and context, or one focused operation schema and example |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
-| `inspect_project` | Return revision, profile, tracks, items, filters, markers, subtitles, and resources |
+| `inspect_project` | Return revision, profile, tracks, revision-scoped item references, filters, markers, subtitles, and resources |
 | `diagnose_color_workflow` | Report normalized media color facts and Shotcut 26.6 HDR constraints |
 | `diagnose_missing_media` | Search bounded roots by Shotcut hash/basename and optionally render a visual candidate sheet |
-| `plan_project_edit` | Validate operations and preview their snapshot/XML diff without changing the project |
+| `plan_project_edit` | Validate stable-reference operations and preview their snapshot/XML diff without changing the project |
 | `create_project` | Create a Shotcut-compatible multitrack MLT project |
-| `edit_project` | Apply up to 500 timeline operations in one validated transaction |
+| `edit_project` | Apply up to 500 timeline operations using stable item references and aliases in one validated transaction |
 | `list_mlt_services` | List locally available MLT filters, transitions, producers, consumers, or links |
 | `describe_mlt_service` | Return metadata for one installed MLT service |
 | `validate_project` | Report first-frame Melt `valid` status and dependency-complete `ready` status |
@@ -282,10 +284,10 @@ integrators, and anyone who wants to understand the available tool surface.
 | `list_project_backups` | List retained project backups and revisions |
 | `restore_project_backup` | Validate and atomically restore a selected backup |
 
-Clients receive full JSON schemas, operation examples, revision requirements, and safe workflow
-guidance at runtime. The [behavioral specification](docs/spec.md) documents protocol compatibility
-and transactional guarantees; the published tool schemas remain the source of truth for request
-parameters.
+Clients receive full JSON schemas, operation examples, revision requirements, stable item-reference
+guidance, and animation contracts at runtime. Integrators can consult the
+[behavioral specification](docs/spec.md); the published tool schemas remain the source of truth
+for request parameters.
 
 ## Rendering
 
@@ -321,7 +323,8 @@ Administrators and client integrators can override discovery or tighten runtime 
 | `SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES` | Set to `1` to allow arbitrary consumer properties and sidecar formats |
 | `SHOTCUT_MCP_MAX_WORKERS` | Concurrent MCP tool requests, clamped to 1–8 (default 4) |
 | `SHOTCUT_MCP_MAX_PENDING` | Maximum in-flight tool requests or legacy batch items, clamped to 1–256 (default 32) |
-| `SHOTCUT_MCP_MAX_MESSAGE_BYTES` | Maximum newline-delimited MCP message size, clamped to 1 KiB–16 MiB (default 4 MiB) |
+| `SHOTCUT_MCP_MAX_PROJECT_BYTES` | Maximum saved MLT project size, clamped to 1–512 MiB (default 128 MiB) |
+| `SHOTCUT_MCP_MAX_MESSAGE_BYTES` | Maximum inbound or outbound newline-delimited MCP message size, clamped to 1 KiB–16 MiB (default 4 MiB) |
 | `SHOTCUT_MCP_MAX_INLINE_IMAGE_BYTES` | Maximum preview image embedded in an MCP result, clamped to the message budget (default 1 MiB; `0` disables) |
 
 Network resources and unsafe consumer properties are denied by default. These variables are

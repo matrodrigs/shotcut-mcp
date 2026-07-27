@@ -16,10 +16,15 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Render previews and exports to protected sibling files and promote them atomically only if the
   original target has not changed.
 - Supervise renders outside the MCP stdio process so completion and cancellation survive restart.
+- Return opaque `item_ref` values for clip and transition occurrences, scope them to the inspected
+  project revision, and resolve them against item identity throughout one sequential edit batch.
+  Preserve legacy track/index selectors and support bounded transaction-local aliases for newly
+  created or split items without writing private identity metadata into MLT XML.
 - Support video and audio tracks, gaps, clips, same-track or all-unlocked ripple/non-ripple trim,
   roll, slip, slide, constant timewarp, same-direction forward or reverse timeremap speed maps,
   split, move, ripple/overwrite edits,
-  crossfades, generic MLT filters, structured clip opacity, keyframed properties,
+  crossfades, generic MLT filters, structured clip opacity, semantic pan/zoom/rotation/volume
+  animation, native keyframed properties,
   text/color/tone generators,
   markers, project notes, subtitle feeds, media relinking, clip duplication, safe source
   replacement, filter ordering, and marker updates.
@@ -50,12 +55,17 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   and mutually exclusive full/range/marker render modes.
 - Publish required stable result fields and typed nested collections for every tool output,
   including the complete project-inspection shape, for structured-content protocol revisions;
-  omit output schemas for legacy clients that predate structured tool results.
+  omit output schemas for legacy clients that predate structured tool results. On current
+  revisions, keep the text content concise instead of duplicating the complete structured payload.
 - Return the full catalog, presets, compatibility, and workflow from an unfiltered
   `shotcut_capabilities` call; when `operation` is supplied, return only that operation's complete
   schema, example, and transaction guarantees. Enforce that same operation schema before planning
   or applying a batch.
 - Propagate MCP cancellation notifications to subprocess-backed operations.
+- Apply the configured message budget to both incoming and outgoing newline-delimited JSON-RPC.
+  Reject an oversized serialized project candidate before backup or replacement, using the same
+  limit enforced while loading a project. Default to 128 MiB and allow administrators to configure
+  a value clamped between 1 MiB and 512 MiB.
 - Provide a read-only plan/diff operation before transactional edits.
 - Render bounded preview batches and atomically promoted contact sheets at exact frames.
 - Allow single previews and contact sheets to use bounded server-owned output when the caller does
@@ -83,10 +93,10 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 
 ## Compatibility boundary
 
-- Target the installed Shotcut 26.6.25 and MLT 7.40.0 formats.
-- Warm and retry cold MLT repository initialization before validation, preview and rendering,
-  while keeping every installed service available and caching readiness by executable and MLT
-  environment identity.
+- Target Shotcut 26.6.25 with MLT 7.40.0 serialization in the compatible MLT 7.40.x family.
+- Warm and retry cold MLT repository initialization with progressively longer 5, 10, and 20 second
+  attempts before status, validation, preview and rendering. Keep every installed service
+  available and cache readiness by executable and MLT environment identity.
 - Check RNNoise link/filter availability separately from the repository preflight. Prefer the
   latency-safe MLT 7.40 `link` service when callers construct RNNoise processing.
 - Work on saved `.mlt`/MLT XML projects. Unsaved GUI state is out of scope.
@@ -99,6 +109,9 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Generic filters accept native MLT properties; the MCP does not promise that every third-party
   filter is available or renderable on every machine. Structured clip opacity owns and reuses one
   brightness filter, keeps its RGB level neutral, and animates only alpha.
+- `animate_clip` compiles normalized creative keyframes to MCP-owned Shotcut 26.6 filters: affine
+  rectangle/rotation for transform, neutral-brightness alpha for opacity, and volume level in dB.
+  Reapplying it reuses only those owned filters and leaves user-created filters untouched.
 - Deny network resources and sidecar/path-bearing consumer properties by default. Administrators
   may opt in through environment policy and may constrain every tool path to canonical roots.
 - Apply those policies to every recognized MLT path representation, including timewarp, proxy,
@@ -115,7 +128,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Regression tests for preservation, optimistic concurrency, backup ownership, atomic output,
   shared producers, advanced timeline edits, speed/color annotations, assisted relinking,
   bounded process/log output, render history/ETA, orphan cleanup and security policies.
-- Real ffmpeg/ffprobe/melt integration covering multitrack creation, locked-track ripple editing,
+- Real ffmpeg/ffprobe/melt integration covering multitrack creation, stable item references,
+  semantic transform/audio animation, locked-track ripple editing,
   forward/reverse timeremap validation, still-image trims and replacement, opacity composition,
   preview, media-quality analysis, range rendering, and final render.
 - Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI. Release tags
