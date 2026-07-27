@@ -6,10 +6,10 @@ import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
-from shotcut_mcp import platform
+from shotcut_mcp import MLT_VERSION_FAMILY, SHOTCUT_VERSION, platform, processes
 from shotcut_mcp.errors import RequestCancelled, ToolError
 from shotcut_mcp.protocol import request_cancellation
 
@@ -73,6 +73,12 @@ class MeltCacheTests(unittest.TestCase):
         self.assertTrue(result["checks"]["repository"]["passed"])
         self.assertFalse(result["checks"]["rnnoise"]["passed"])
         self.assertFalse(result["compatible"])
+        self.assertEqual(result["checks"]["shotcut"]["expected"], SHOTCUT_VERSION)
+        self.assertEqual(result["checks"]["mlt"]["expected"], MLT_VERSION_FAMILY)
+        self.assertEqual(
+            result["validated_stack"],
+            {"shotcut": SHOTCUT_VERSION, "mlt": MLT_VERSION_FAMILY},
+        )
 
     def test_doctor_reports_quality_analyzers_without_changing_compatibility(
         self,
@@ -210,6 +216,31 @@ class PathPolicyTests(unittest.TestCase):
                 os.environ.pop("SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES", None)
                 with self.assertRaisesRegex(ToolError, "network resources"):
                     platform.validate_project_file(project_path)
+
+
+class ExecutableDiscoveryTests(unittest.TestCase):
+    def test_macos_discovers_the_shotcut_bundle_and_sibling_tools(self) -> None:
+        def first_candidate(candidates: list[Path | None]) -> Path | None:
+            return next((candidate for candidate in candidates if candidate), None)
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(processes.os, "name", "posix"),
+            patch("shotcut_mcp.processes.Path", PurePosixPath),
+            patch("shotcut_mcp.processes.sys_platform", return_value="darwin"),
+            patch("shotcut_mcp.processes._which", return_value=None),
+            patch(
+                "shotcut_mcp.processes._first_existing",
+                side_effect=first_candidate,
+            ),
+        ):
+            executables = processes.discover_executables()
+
+        bundle = PurePosixPath("/Applications/Shotcut.app/Contents/MacOS")
+        self.assertEqual(executables.shotcut, bundle / "shotcut")
+        self.assertEqual(executables.melt, bundle / "melt")
+        self.assertEqual(executables.ffprobe, bundle / "ffprobe")
+        self.assertEqual(executables.ffmpeg, bundle / "ffmpeg")
 
 
 class ProcessCancellationTests(unittest.TestCase):

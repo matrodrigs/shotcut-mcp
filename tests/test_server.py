@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from shotcut_mcp import platform as platform_module
 from shotcut_mcp.errors import ConflictError, ToolError
@@ -47,7 +47,47 @@ class MeltStartupTests(unittest.TestCase):
                 platform_module.ensure_melt_ready(melt, attempts=3, timeout=5)
 
             self.assertEqual(run.call_count, 2)
-            run.assert_called_with([str(melt), "-query", "consumers"], timeout=5)
+            self.assertEqual(
+                run.call_args_list,
+                [
+                    call([str(melt), "-query", "consumers"], timeout=5),
+                    call([str(melt), "-query", "consumers"], timeout=10),
+                ],
+            )
+
+    def test_cold_start_attempts_receive_progressively_longer_timeouts(self) -> None:
+        melt = Path(r"C:\Program Files\Shotcut\melt.exe")
+        observed: list[int] = []
+
+        def slow_start(
+            command: list[str], *, timeout: int
+        ) -> subprocess.CompletedProcess[str]:
+            observed.append(timeout)
+            if timeout < 12:
+                error = ToolError("cold start timed out")
+                error.__cause__ = subprocess.TimeoutExpired(command, timeout)
+                raise error
+            return subprocess.CompletedProcess(command, 0, "consumers", "")
+
+        with patch("shotcut_mcp.platform.run_capture", side_effect=slow_start):
+            platform_module.ensure_melt_ready(melt)
+
+        self.assertEqual(observed, [5, 10, 20])
+
+    def test_status_uses_the_standard_mlt_warmup_policy(self) -> None:
+        melt = Path("melt")
+        executables = platform_module.Executables(None, melt, None, None)
+        with (
+            patch(
+                "shotcut_mcp.platform.discover_executables",
+                return_value=executables,
+            ),
+            patch("shotcut_mcp.platform.version_line", return_value=None),
+            patch("shotcut_mcp.platform.ensure_melt_ready") as warm,
+        ):
+            platform_module.status()
+
+        warm.assert_called_once_with(melt)
 
 
 class ProtocolTests(unittest.TestCase):

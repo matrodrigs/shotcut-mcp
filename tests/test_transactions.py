@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from shotcut_mcp import project_document as project_document_module
 from shotcut_mcp.errors import ConflictError, ToolError
 from shotcut_mcp.project import (
     create_project,
@@ -16,6 +18,68 @@ from shotcut_mcp.project import (
 
 
 class ProjectTransactionTests(unittest.TestCase):
+    def test_default_project_size_limit_is_128_mib(self) -> None:
+        self.assertEqual(
+            project_document_module.MAX_PROJECT_BYTES,
+            128 * 1024 * 1024,
+        )
+
+    def test_project_size_configuration_is_bounded(self) -> None:
+        cases = (
+            ("invalid", 128 * 1024 * 1024),
+            ("0", 1 * 1024 * 1024),
+            (str(1024 * 1024 * 1024), 512 * 1024 * 1024),
+        )
+        for configured, expected in cases:
+            with (
+                self.subTest(configured=configured),
+                patch.dict(
+                    os.environ,
+                    {"SHOTCUT_MCP_MAX_PROJECT_BYTES": configured},
+                ),
+            ):
+                self.assertEqual(
+                    project_document_module._project_size_limit(),
+                    expected,
+                )
+
+    def test_edit_rejects_a_candidate_that_exceeds_the_project_size_limit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "bounded.mlt"
+            with patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ):
+                created = create_project({"project_path": str(project_path)})
+            before = project_path.read_bytes()
+            maximum = 1024 * 1024
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SHOTCUT_MCP_MAX_PROJECT_BYTES": str(maximum)},
+                ),
+                patch(
+                    "shotcut_mcp.project.validate_project_file",
+                    return_value={"valid": True},
+                ),
+                self.assertRaises(ToolError) as raised,
+            ):
+                edit_project(
+                    {
+                        "project_path": str(project_path),
+                        "expected_revision": created["revision"],
+                        "operations": [{"op": "set_notes", "notes": "x" * 1_100_000}],
+                    }
+                )
+
+            self.assertEqual(raised.exception.code, "project_too_large")
+            self.assertEqual(raised.exception.details["maximum_bytes"], maximum)
+            self.assertEqual(project_path.read_bytes(), before)
+            self.assertEqual(list_backups(project_path)["backup_count"], 0)
+
     def test_plan_edit_returns_diff_without_changing_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "project.mlt"

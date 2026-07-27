@@ -469,6 +469,101 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             self.assertLess(green, 15)
             self.assertLessEqual(abs(red - blue), 15)
 
+    def test_semantic_animation_and_item_aliases_validate_with_real_mlt(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_path = root / "semantic-animation.mlt"
+            created = create_project(
+                {
+                    "project_path": str(project_path),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 30,
+                }
+            )
+            edited = edit_project(
+                {
+                    "project_path": str(project_path),
+                    "expected_revision": created["revision"],
+                    "validate": True,
+                    "operations": [
+                        {"op": "add_track", "kind": "video", "name": "Overlay"},
+                        {"op": "add_track", "kind": "audio", "name": "Bed"},
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "duration_frames": 30,
+                            "color": "#0000ff",
+                        },
+                        {
+                            "op": "add_generator",
+                            "track": "Overlay",
+                            "generator": "color",
+                            "duration_frames": 30,
+                            "color": "#ff0000",
+                            "as": "hero",
+                        },
+                        {
+                            "op": "add_generator",
+                            "track": "Bed",
+                            "generator": "tone",
+                            "duration_frames": 30,
+                            "as": "bed",
+                        },
+                        {
+                            "op": "animate_clip",
+                            "item_ref": "@hero",
+                            "keyframes": [
+                                {
+                                    "frame": 0,
+                                    "center_x": 0.5,
+                                    "center_y": 0.5,
+                                    "scale": 1,
+                                    "rotation_degrees": 0,
+                                    "opacity": 0.25,
+                                },
+                                {
+                                    "frame": 29,
+                                    "center_x": 0.5,
+                                    "center_y": 0.5,
+                                    "scale": 0.5,
+                                    "rotation_degrees": 0,
+                                    "opacity": 1,
+                                },
+                            ],
+                        },
+                        {
+                            "op": "animate_clip",
+                            "item_ref": "@bed",
+                            "keyframes": [
+                                {"frame": 0, "volume_db": -24},
+                                {"frame": 29, "volume_db": -6},
+                            ],
+                        },
+                    ],
+                }
+            )
+            self.assertRegex(edited["item_bindings"]["hero"], r"^item:[0-9a-f]{24}$")
+            self.assertRegex(edited["item_bindings"]["bed"], r"^item:[0-9a-f]{24}$")
+            self.assertEqual(
+                edited["operation_results"][-2]["channels"],
+                ["transform", "opacity"],
+            )
+            self.assertEqual(edited["operation_results"][-1]["channels"], ["volume"])
+
+            readiness = validate_project({"path": str(project_path)})
+            self.assertTrue(readiness["ready"], readiness["checks"])
+            preview = root / "semantic-animation.png"
+            render_preview(project_path, preview, 29, False)
+            red, green, blue = self._preview_pixel(executables.ffmpeg, preview)
+            self.assertGreater(red, 40)
+            self.assertLess(green, 15)
+            self.assertGreater(blue, 120)
+            self.assertGreater(blue - red, 50)
+
     def test_hlg_workflow_and_named_10bit_export_preset(self) -> None:
         executables = discover_executables()
         assert executables.ffmpeg is not None

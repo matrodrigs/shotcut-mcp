@@ -11,9 +11,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from shotcut_mcp import render_jobs as render_jobs_module
+from shotcut_mcp import (
+    MLT_VERSION,
+    MLT_VERSION_FAMILY,
+    SHOTCUT_VERSION,
+)
+from shotcut_mcp import (
+    render_jobs as render_jobs_module,
+)
 from shotcut_mcp.errors import ConflictError, RequestCancelled, ToolError
-from shotcut_mcp.project import ProjectDocument, create_project
+from shotcut_mcp.project import (
+    EDIT_OPERATION_CONTRACTS,
+    ProjectDocument,
+    create_project,
+)
 from shotcut_mcp.protocol import cancellation_requested, schema_errors
 from shotcut_mcp.server import (
     HANDLERS,
@@ -21,6 +32,7 @@ from shotcut_mcp.server import (
     ProtocolSession,
     handle_request,
     serve,
+    write_message,
 )
 from shotcut_mcp.tools import OPERATION_CATALOG, OPERATION_EXAMPLES, TOOLS
 from tests.path_assertions import assert_canonical_path, assert_canonical_paths
@@ -555,8 +567,65 @@ class ProtocolValidationTests(unittest.TestCase):
         self.assertEqual(response["error"]["code"], -32600)
         self.assertIn("size limit", response["error"]["message"])
 
+    def test_stdio_server_never_writes_an_oversized_response(self) -> None:
+        output = io.BytesIO()
+        response = {
+            "jsonrpc": "2.0",
+            "id": 17,
+            "result": {"payload": "x" * 4_000},
+        }
+
+        with patch.dict(os.environ, {"SHOTCUT_MCP_MAX_MESSAGE_BYTES": "1024"}):
+            write_message(response, output)
+
+        encoded = output.getvalue()
+        self.assertLessEqual(len(encoded), 1024)
+        fallback = json.loads(encoded)
+        self.assertEqual(fallback["id"], 17)
+        self.assertEqual(fallback["error"]["code"], -32603)
+        self.assertIn("response", fallback["error"]["message"].lower())
+
+    def test_stdio_compacts_an_oversized_progress_notification(self) -> None:
+        output = io.BytesIO()
+        notification = {
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {
+                "progressToken": "token",
+                "progress": 1,
+                "total": 2,
+                "message": "x" * 4_000,
+            },
+        }
+
+        with patch.dict(os.environ, {"SHOTCUT_MCP_MAX_MESSAGE_BYTES": "1024"}):
+            write_message(notification, output)
+
+        encoded = output.getvalue()
+        self.assertLessEqual(len(encoded), 1024)
+        compact = json.loads(encoded)
+        self.assertEqual(compact["method"], "notifications/progress")
+        self.assertNotIn("message", compact["params"])
+
 
 class ProtocolNegotiationTests(unittest.TestCase):
+    def test_structured_results_do_not_duplicate_the_payload_as_text(self) -> None:
+        payload = {"payload": "x" * 10_000}
+        session = ProtocolSession(protocol_version="2025-11-25")
+        with patch.dict(
+            "shotcut_mcp.server.HANDLERS",
+            {"shotcut_status": lambda _arguments: payload},
+        ):
+            response = handle_request(
+                request("tools/call", {"name": "shotcut_status", "arguments": {}}),
+                session,
+            )
+
+        result = response["result"]
+        self.assertEqual(result["structuredContent"], payload)
+        self.assertLess(len(result["content"][0]["text"]), 512)
+        self.assertNotIn("x" * 100, result["content"][0]["text"])
+
     def test_initialize_instructions_route_common_safe_workflows(self) -> None:
         response = handle_request(
             request("initialize", {"protocolVersion": "2025-11-25"})
@@ -809,6 +878,73 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertIn("set_clip_opacity", guidance["edit_primitives"])
         self.assertIn("render_status", guidance["progress"])
 
+    def test_compatibility_and_new_projects_share_one_version_contract(self) -> None:
+        full = handle_request(
+            request("tools/call", {"name": "shotcut_capabilities", "arguments": {}})
+        )["result"]["structuredContent"]
+        self.assertEqual(
+            full["compatibility"],
+            {
+                "shotcut": SHOTCUT_VERSION,
+                "mlt": MLT_VERSION_FAMILY,
+                "project_format": "MLT XML",
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            document = ProjectDocument.new(
+                Path(directory) / "compatibility.mlt",
+                width=1920,
+                height=1080,
+                fps_num=30,
+                fps_den=1,
+                title="Compatibility",
+            )
+        self.assertEqual(document.root.get("version"), MLT_VERSION)
+        self.assertEqual(
+            document.root.get("title"), f"Shotcut version {SHOTCUT_VERSION}"
+        )
+
+    def test_advertised_item_selectors_and_aliases_match_runtime_contracts(
+        self,
+    ) -> None:
+        self.assertEqual(set(OPERATION_CATALOG), set(EDIT_OPERATION_CONTRACTS))
+        advertised_item_refs: set[str] = set()
+        advertised_aliases: set[str] = set()
+        for name in OPERATION_CATALOG:
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "shotcut_capabilities",
+                        "arguments": {"operation": name},
+                    },
+                )
+            )
+            properties = response["result"]["structuredContent"]["operations"][name][
+                "schema"
+            ]["properties"]
+            if "item_ref" in properties:
+                advertised_item_refs.add(name)
+            if "as" in properties:
+                advertised_aliases.add(name)
+
+        self.assertEqual(
+            advertised_item_refs,
+            {
+                name
+                for name, contract in EDIT_OPERATION_CONTRACTS.items()
+                if contract.selector_field is not None
+            },
+        )
+        self.assertEqual(
+            advertised_aliases,
+            {
+                name
+                for name, contract in EDIT_OPERATION_CONTRACTS.items()
+                if contract.alias_target is not None
+            },
+        )
+
     def test_marker_operation_schema_explains_exclusive_end(self) -> None:
         response = handle_request(
             request(
@@ -998,6 +1134,39 @@ class ProtocolNegotiationTests(unittest.TestCase):
                 details = response["result"]["structuredContent"]["operations"][name]
                 self.assertEqual(details["example"]["op"], name)
                 self.assertFalse(details["schema"]["additionalProperties"])
+
+    def test_animate_clip_contract_uses_creative_values_not_mlt_properties(
+        self,
+    ) -> None:
+        response = handle_request(
+            request(
+                "tools/call",
+                {
+                    "name": "shotcut_capabilities",
+                    "arguments": {"operation": "animate_clip"},
+                },
+            )
+        )
+        details = response["result"]["structuredContent"]["operations"]["animate_clip"]
+        properties = details["schema"]["properties"]
+
+        self.assertIn("item_ref", properties)
+        self.assertIn("keyframes", properties)
+        self.assertNotIn("service", properties)
+        self.assertNotIn("properties", properties)
+        point = properties["keyframes"]["items"]["properties"]
+        self.assertEqual(
+            set(point),
+            {
+                "frame",
+                "center_x",
+                "center_y",
+                "scale",
+                "rotation_degrees",
+                "opacity",
+                "volume_db",
+            },
+        )
 
     def test_every_advertised_operation_reaches_the_document_dispatcher(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

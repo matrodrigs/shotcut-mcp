@@ -12,9 +12,11 @@ from unittest.mock import patch
 
 from scripts.build_release import ROOT, build_release, package_members
 from scripts.check_release import (
+    runtime_compatibility_contract,
     runtime_tool_entries,
     sync_tool_contracts,
     validate_client_adapters,
+    validate_compatibility_contracts,
     validate_tool_contracts,
 )
 from scripts.require_green_ci import require_green_ci
@@ -108,6 +110,30 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_checked_in_tool_contracts_match_the_runtime_projection(self) -> None:
         validate_tool_contracts(ROOT, runtime_tool_entries())
         self.assertEqual(sync_tool_contracts(ROOT, runtime_tool_entries()), ())
+
+    def test_documented_compatibility_matches_the_runtime_contract(self) -> None:
+        contract = runtime_compatibility_contract()
+        validate_compatibility_contracts(ROOT, contract)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in (
+                Path("AGENTS.md"),
+                Path("README.md"),
+                Path("docs/spec.md"),
+                Path("docs/index.html"),
+            ):
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / relative, destination)
+            readme = root / "README.md"
+            readme.write_text(
+                readme.read_text(encoding="utf-8").replace(
+                    contract["Shotcut"], "0.0.0"
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "README.md.*stale"):
+                validate_compatibility_contracts(root, contract)
 
     def test_tool_contract_sync_updates_only_mechanical_projections(self) -> None:
         entries = [
