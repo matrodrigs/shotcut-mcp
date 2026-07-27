@@ -20,6 +20,40 @@ COMMON_PLUGIN_FIELDS = (
     "license",
     "keywords",
 )
+COMPATIBILITY_DOCUMENTS = (
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("docs/spec.md"),
+    Path("docs/index.html"),
+)
+
+
+def runtime_compatibility_contract() -> dict[str, str]:
+    """Load the one runtime source of validated Shotcut/MLT versions."""
+
+    sys.path.insert(0, str(ROOT))
+    try:
+        from shotcut_mcp import MLT_VERSION, MLT_VERSION_FAMILY, SHOTCUT_VERSION
+    finally:
+        del sys.path[0]
+    return {
+        "Shotcut": SHOTCUT_VERSION,
+        "MLT serialization": MLT_VERSION,
+        "MLT family": MLT_VERSION_FAMILY,
+    }
+
+
+def validate_compatibility_contracts(root: Path, contract: dict[str, str]) -> None:
+    """Reject drift between runtime compatibility facts and maintained docs."""
+
+    for relative in COMPATIBILITY_DOCUMENTS:
+        source = (root / relative).read_text(encoding="utf-8")
+        missing = [label for label, value in contract.items() if value not in source]
+        if missing:
+            raise RuntimeError(
+                f"{relative.as_posix()} compatibility contract is stale; "
+                f"missing={missing}"
+            )
 
 
 def runtime_tool_entries() -> list[dict[str, str]]:
@@ -408,6 +442,7 @@ def main(arguments: list[str] | None = None) -> int:
         )
     validate_client_adapters(ROOT, version)
     validate_tool_contracts(ROOT, runtime_entries)
+    validate_compatibility_contracts(ROOT, runtime_compatibility_contract())
 
     package = server["packages"][0]
     server_version = server["version"]
