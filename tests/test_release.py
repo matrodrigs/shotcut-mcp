@@ -218,6 +218,19 @@ class ReleaseBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "marketplace catalog"):
                 validate_client_adapters(root, self.version)
 
+    def test_client_adapter_validation_rejects_mcpb_platform_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_client_adapter_fixture(root)
+
+            manifest_path = root / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["server"]["mcp_config"]["platform_overrides"] = {}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "MCPB launcher"):
+                validate_client_adapters(root, self.version)
+
     def test_client_adapter_validation_bounds_codex_default_prompts(self) -> None:
         invalid_prompts = (
             (["one", "two", "three", "four"], "at most 3"),
@@ -302,6 +315,11 @@ class SiteAssetTests(unittest.TestCase):
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def test_ordinary_ci_covers_macos_without_enabling_real_integration(self) -> None:
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("os: [ubuntu-latest, macos-latest, windows-latest]", ci)
+        self.assertNotIn("SHOTCUT_MCP_INTEGRATION", ci)
+
     def test_local_ci_release_and_hook_share_one_check_runner(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         release = (ROOT / ".github" / "workflows" / "release.yml").read_text(

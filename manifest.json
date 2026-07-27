@@ -20,11 +20,16 @@
     "type": "python",
     "entry_point": "scripts/shotcut_mcp_server.py",
     "mcp_config": {
-      "command": "python",
+      "command": "python3",
       "args": [
         "${__dirname}/scripts/shotcut_mcp_server.py"
       ],
-      "env": {}
+      "env": {},
+      "platform_overrides": {
+        "win32": {
+          "command": "python"
+        }
+      }
     }
   },
   "tools": [

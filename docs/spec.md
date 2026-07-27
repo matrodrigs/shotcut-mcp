@@ -132,5 +132,6 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   semantic transform/audio animation, locked-track ripple editing,
   forward/reverse timeremap validation, still-image trims and replacement, opacity composition,
   preview, media-quality analysis, range rendering, and final render.
-- Manifest/version/tool-catalog validation plus Ruff and Mypy in cross-platform CI. Release tags
+- Manifest/version/tool-catalog validation plus Ruff and Mypy in Windows, macOS, and Linux CI.
+  Real Shotcut/MLT integration remains opt-in. Release tags
   must point to a `main` commit whose exact SHA completed that CI successfully.

@@ -186,7 +186,8 @@ integration stays opt-in and must use temporary projects and outputs.
 - Keep `shotcut_mcp.__version__`, `manifest.json`, `.claude-plugin/plugin.json`, and the base
   version before `+` in `.codex-plugin/plugin.json` aligned. Keep both client adapters pointed at
   `scripts/shotcut_mcp_server.py`, and keep `.claude-plugin/marketplace.json` aligned with the
-  Claude manifest; the Codex plugin suffix is only a local-install cachebuster.
+  Claude manifest; the Codex plugin suffix is only a local-install cachebuster. Preserve the MCPB
+  `python3` default and its Windows `python` override.
 - `server.json` describes the latest published artifact, not unreleased source state.
 - Pin release tooling by version and checksum; never publish an unverified MCPB.
 - Release only an existing `vX.Y.Z` tag contained in `main`; its version must match the package

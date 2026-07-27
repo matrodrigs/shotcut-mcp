@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Make the MCPB Python command select the correct executable name on Windows, macOS, and Linux.
+
 ## 1.5.0 (2026-07-27)
 
 ### Added

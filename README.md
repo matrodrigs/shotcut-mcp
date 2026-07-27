@@ -69,9 +69,9 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 - Shotcut 26.6.25, or a compatible installation that provides MLT 7.40.x
 - Codex CLI, Claude Code, or another MCP client that supports local stdio servers
 
-The current compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The integration suite
-is exercised on Windows; executable discovery also supports binaries available on `PATH` and common
-macOS locations.
+The compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The ordinary suite runs on
+Windows, macOS, and Linux; real integration is exercised on Windows. Executable discovery also
+supports binaries on `PATH` and in common macOS locations.
 
 Additional compatibility and runtime behavior, including progress, MLT startup, and RNNoise
 checks, are documented in the [behavioral specification](docs/spec.md).

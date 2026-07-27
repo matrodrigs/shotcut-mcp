@@ -386,12 +386,20 @@ def validate_client_adapters(root: Path, version: str) -> None:
         raise RuntimeError(
             "Claude Code .mcp.json does not match the shared server entry point"
         )
-    portable_server = portable_manifest.get("server")
-    if (
-        not isinstance(portable_server, dict)
-        or portable_server.get("entry_point") != SERVER_SCRIPT
-    ):
-        raise RuntimeError("MCPB manifest does not match the shared server entry point")
+    portable_server = {
+        "type": "python",
+        "entry_point": SERVER_SCRIPT,
+        "mcp_config": {
+            "command": "python3",
+            "args": [f"${{__dirname}}/{SERVER_SCRIPT}"],
+            "env": {},
+            "platform_overrides": {"win32": {"command": "python"}},
+        },
+    }
+    if portable_manifest.get("manifest_version") != "0.3":
+        raise RuntimeError("MCPB manifest must use the current 0.3 specification")
+    if portable_manifest.get("server") != portable_server:
+        raise RuntimeError("MCPB launcher does not match the portable server contract")
     if not (root / SERVER_SCRIPT).is_file():
         raise RuntimeError(f"shared MCP server entry point is missing: {SERVER_SCRIPT}")
 
