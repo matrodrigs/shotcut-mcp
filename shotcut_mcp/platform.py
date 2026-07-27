@@ -15,6 +15,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from . import MLT_VERSION_FAMILY, SHOTCUT_VERSION
 from .errors import RequestCancelled, ToolError
 from .media import (
     analyze_media_quality,
@@ -49,6 +50,8 @@ _SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
 _SERVICE_LOCK = threading.Lock()
 _MELT_READY_CACHE: set[tuple[object, ...]] = set()
 _MELT_READY_LOCK = threading.Lock()
+MLT_WARMUP_ATTEMPTS = 3
+MLT_WARMUP_BASE_TIMEOUT_SECONDS = 5
 _ENCODER_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
 _ENCODER_LOCK = threading.Lock()
 
@@ -87,14 +90,20 @@ __all__ = [
 ]
 
 
-def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> None:
+def ensure_melt_ready(
+    melt: Path,
+    *,
+    attempts: int = MLT_WARMUP_ATTEMPTS,
+    timeout: int = MLT_WARMUP_BASE_TIMEOUT_SECONDS,
+) -> None:
     """Warm MLT's module repository and tolerate one-time cold starts.
 
     A newly installed or extracted Windows build can spend long enough loading
     its DLL-backed modules that an ordinary validation command times out. A
-    short terminated attempt warms the operating-system loader; retrying then
-    completes normally with the full repository available. Cache readiness by
-    executable identity so normal operations pay no repeated startup probe.
+    short terminated attempt warms the operating-system loader. Later attempts
+    receive progressively longer timeouts so initialization work that restarts
+    in each process can still complete. Cache readiness by executable identity
+    so normal operations pay no repeated startup probe.
     """
 
     cache_key = runtime_identity(melt)
@@ -104,9 +113,10 @@ def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> Non
 
         last_timeout: ToolError | None = None
         command = [str(melt), "-query", "consumers"]
-        for _ in range(attempts):
+        attempt_timeouts = [timeout * (2**index) for index in range(attempts)]
+        for attempt_timeout in attempt_timeouts:
             try:
-                result = run_capture(command, timeout=timeout)
+                result = run_capture(command, timeout=attempt_timeout)
             except ToolError as exc:
                 if not isinstance(exc.__cause__, subprocess.TimeoutExpired):
                     raise
@@ -130,7 +140,10 @@ def ensure_melt_ready(melt: Path, *, attempts: int = 3, timeout: int = 5) -> Non
             code="mlt_repository_timeout",
             recommended_action="run_compatibility_diagnostics",
             recommended_tool="shotcut_doctor",
-            details={"attempts": attempts},
+            details={
+                "attempts": attempts,
+                "attempt_timeouts_seconds": attempt_timeouts,
+            },
         ) from last_timeout
 
 
@@ -167,7 +180,7 @@ def status() -> dict[str, Any]:
     repository_error = None
     if executables.melt is not None:
         try:
-            ensure_melt_ready(executables.melt, attempts=2, timeout=4)
+            ensure_melt_ready(executables.melt)
             repository_ready = True
         except ToolError as exc:
             repository_error = str(exc)
@@ -320,7 +333,7 @@ def compatibility_doctor() -> dict[str, Any]:
     repository_ready = False
     if executables.melt is not None:
         try:
-            ensure_melt_ready(executables.melt, attempts=3, timeout=5)
+            ensure_melt_ready(executables.melt)
             repository_ready = True
         except ToolError as exc:
             repository_error = str(exc)
@@ -329,6 +342,10 @@ def compatibility_doctor() -> dict[str, Any]:
     mlt_version, mlt_error = _safe_version(executables.melt, ["--version"])
     shotcut_number = _extract_version(shotcut_version)
     mlt_number = _extract_version(mlt_version)
+    expected_shotcut = tuple(int(part) for part in SHOTCUT_VERSION.split("."))
+    expected_mlt = tuple(
+        int(part) for part in MLT_VERSION_FAMILY.removesuffix(".x").split(".")
+    )
 
     rnnoise = {
         kind: _safe_service_description(kind, "rnnoise") for kind in ("link", "filter")
@@ -337,14 +354,14 @@ def compatibility_doctor() -> dict[str, Any]:
 
     checks: dict[str, dict[str, Any]] = {
         "shotcut": {
-            "passed": shotcut_number == (26, 6, 25),
-            "expected": "26.6.25",
+            "passed": shotcut_number == expected_shotcut,
+            "expected": SHOTCUT_VERSION,
             "detected": shotcut_version,
             "error": shotcut_error,
         },
         "mlt": {
-            "passed": mlt_number is not None and mlt_number[:2] == (7, 40),
-            "expected": "7.40.x",
+            "passed": mlt_number is not None and mlt_number[:2] == expected_mlt,
+            "expected": MLT_VERSION_FAMILY,
             "detected": mlt_version,
             "error": mlt_error,
         },
@@ -364,7 +381,10 @@ def compatibility_doctor() -> dict[str, Any]:
     }
     return {
         "compatible": all(check["passed"] for check in checks.values()),
-        "validated_stack": {"shotcut": "26.6.25", "mlt": "7.40.x"},
+        "validated_stack": {
+            "shotcut": SHOTCUT_VERSION,
+            "mlt": MLT_VERSION_FAMILY,
+        },
         "checks": checks,
         "quality_analyzers": quality_analyzer_capabilities(executables.ffmpeg),
         "path_policy": path_policy(),

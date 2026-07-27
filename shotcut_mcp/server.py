@@ -33,12 +33,13 @@ MAX_ERROR_DETAIL_ITEMS = 32
 MAX_ERROR_DETAIL_STRING = 2000
 MAX_ERROR_DETAIL_DEPTH = 4
 SERVER_INSTRUCTIONS = (
-    "Saved state: Use the user-supplied project path; ask if missing or ambiguous. "
-    "Shotcut MCP sees only the project saved on disk; if Shotcut is open or recent GUI "
-    "edits are mentioned, ask the user to save first and avoid concurrent saves.\n"
-    "Normal edit: Before planning, editing, or restoring, call inspect_project and pass "
-    "its revision as expected_revision. Use shotcut_capabilities for unfamiliar "
-    "operations, batch related edits, and never use force or overwrite without explicit "
+    "Saved state: Use the user-supplied project path; ask if missing. Shotcut MCP sees "
+    "only the project saved on disk; if Shotcut is open, ask the user to save and avoid "
+    "concurrent saves.\n"
+    "Normal edit: Call inspect_project first and pass expected_revision. Use "
+    "shotcut_capabilities for unfamiliar operations. Prefer item_ref; use as/@alias for "
+    "items created in the same batch. Use animate_clip for pan, zoom, rotation, opacity, "
+    "and volume. Batch related edits. Never use force or overwrite without explicit "
     "authorization. On a revision conflict, re-inspect and reconsider; never retry with "
     "force automatically.\n"
     "Readiness: Use validate_project when readiness is unknown or media/service "
@@ -102,9 +103,21 @@ def _tool_result(
     is_error: bool = False,
     tool_name: str | None = None,
 ) -> dict[str, Any]:
-    content: list[dict[str, Any]] = [
-        {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
-    ]
+    structured = protocol_version in STRUCTURED_CONTENT_PROTOCOLS
+    if structured:
+        if is_error:
+            message = str(payload.get("error") or "Tool execution failed.")
+            code = payload.get("error_code")
+            text = f"{message} Error code: {code}." if code else message
+        else:
+            label = tool_name or "Tool"
+            text = (
+                f"{label} completed. The complete result is available in "
+                "structuredContent."
+            )
+    else:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     image = _inline_image_content(tool_name, payload) if not is_error else None
     if image is not None:
         content.append(image)
@@ -112,7 +125,7 @@ def _tool_result(
         "content": content,
         "isError": is_error,
     }
-    if protocol_version in STRUCTURED_CONTENT_PROTOCOLS:
+    if structured:
         result["structuredContent"] = payload
     return result
 
@@ -389,6 +402,34 @@ def write_message(
     encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode(
         "utf-8"
     )
+    maximum = _message_size_limit()
+    if len(encoded) + 1 > maximum:
+        if isinstance(message, dict) and "method" in message and "id" not in message:
+            compact = dict(message)
+            params = compact.get("params")
+            if isinstance(params, dict) and "message" in params:
+                compact["params"] = {
+                    key: value for key, value in params.items() if key != "message"
+                }
+                encoded = json.dumps(
+                    compact, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+            if len(encoded) + 1 > maximum:
+                return
+        else:
+            request_id = message.get("id") if isinstance(message, dict) else None
+            fallback = _error(
+                request_id,
+                -32603,
+                "MCP response exceeds the configured message-size limit.",
+                {
+                    "maximum_bytes": maximum,
+                    "recommended_action": "narrow_request_or_increase_message_limit",
+                },
+            )
+            encoded = json.dumps(
+                fallback, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
     output = stream or sys.stdout.buffer
     if lock is None:
         output.write(encoded + b"\n")
