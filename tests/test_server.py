@@ -56,21 +56,23 @@ class MeltStartupTests(unittest.TestCase):
             )
 
     def test_cold_start_attempts_receive_progressively_longer_timeouts(self) -> None:
-        melt = Path(r"C:\Program Files\Shotcut\melt.exe")
-        observed: list[int] = []
+        with tempfile.TemporaryDirectory() as directory:
+            melt = Path(directory) / "melt"
+            melt.write_bytes(b"test executable")
+            observed: list[int] = []
 
-        def slow_start(
-            command: list[str], *, timeout: int
-        ) -> subprocess.CompletedProcess[str]:
-            observed.append(timeout)
-            if timeout < 12:
-                error = ToolError("cold start timed out")
-                error.__cause__ = subprocess.TimeoutExpired(command, timeout)
-                raise error
-            return subprocess.CompletedProcess(command, 0, "consumers", "")
+            def slow_start(
+                command: list[str], *, timeout: int
+            ) -> subprocess.CompletedProcess[str]:
+                observed.append(timeout)
+                if timeout < 12:
+                    error = ToolError("cold start timed out")
+                    error.__cause__ = subprocess.TimeoutExpired(command, timeout)
+                    raise error
+                return subprocess.CompletedProcess(command, 0, "consumers", "")
 
-        with patch("shotcut_mcp.platform.run_capture", side_effect=slow_start):
-            platform_module.ensure_melt_ready(melt)
+            with patch("shotcut_mcp.platform.run_capture", side_effect=slow_start):
+                platform_module.ensure_melt_ready(melt)
 
         self.assertEqual(observed, [5, 10, 20])
 
