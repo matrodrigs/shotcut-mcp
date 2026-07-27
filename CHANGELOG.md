@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.5.0 (2026-07-27)
+
 ### Added
 
 - Return opaque revision-scoped `item_ref` selectors from project snapshots and support
