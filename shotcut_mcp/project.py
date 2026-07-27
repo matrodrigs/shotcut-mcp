@@ -29,8 +29,10 @@ from .platform import (
 )
 from .project_document import (
     BACKGROUND_ID,
+    EDIT_OPERATION_CONTRACTS,
     MAIN_BIN_IDS,
     SEQUENCE_TAGS,
+    EditOperationContract,
     TrackRef,
     _boolean,
     _int,
@@ -54,10 +56,12 @@ MAX_OPERATIONS = 500
 
 __all__ = [
     "BACKGROUND_ID",
+    "EDIT_OPERATION_CONTRACTS",
     "MAIN_BIN_IDS",
     "MAX_OPERATIONS",
     "SEQUENCE_TAGS",
     "EditCandidate",
+    "EditOperationContract",
     "ProjectDocument",
     "TrackRef",
     "create_project",
@@ -362,6 +366,7 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
                 expected_revision=expected_revision,
                 current_revision=original_revision,
             )
+    document.prepare_item_references()
     document.ensure_shotcut_structure()
     results: list[dict[str, Any]] = []
     progress_total = len(operations) + 1
@@ -468,6 +473,7 @@ def plan_project_edit(arguments: dict[str, Any]) -> dict[str, Any]:
         "base_revision": candidate.original_revision,
         "prospective_revision": prospective_revision,
         "operation_results": candidate.operation_results,
+        "item_bindings": candidate.document.item_bindings(),
         "validation": validation,
         "project": candidate.document.snapshot(),
         "unified_diff": "\n".join(shown_lines),
@@ -492,10 +498,12 @@ def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
         "Project edit validated and committed.",
     )
     updated = ProjectDocument.load(candidate.path)
+    candidate.document.revision = saved["revision"]
     return {
         "edited": True,
         **saved,
         "operation_results": candidate.operation_results,
+        "item_bindings": candidate.document.item_bindings(),
         "project": updated.snapshot(),
     }
 

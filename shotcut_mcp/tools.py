@@ -6,6 +6,7 @@ import copy
 from collections.abc import Callable
 from typing import Any
 
+from . import MLT_VERSION_FAMILY, SHOTCUT_VERSION
 from .errors import ToolError
 from .platform import (
     analyze_media_quality,
@@ -21,6 +22,7 @@ from .platform import (
     summarize_media,
 )
 from .project import (
+    EDIT_OPERATION_CONTRACTS,
     ProjectDocument,
     create_project,
     diagnose_color_workflow,
@@ -44,7 +46,7 @@ from .render import (
     start_render,
 )
 
-OPERATION_CATALOG: dict[str, dict[str, Any]] = {
+_OPERATION_CATALOG_BASE: dict[str, dict[str, Any]] = {
     "add_track": {
         "required": ["kind"],
         "optional": ["name"],
@@ -71,12 +73,11 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         "notes": "mode: insert|overwrite; omitting position_frame appends to the end",
     },
     "duplicate_item": {
-        "required": ["track", "item_index"],
         "optional": ["target_track", "position_frame", "mode"],
         "notes": "Clones the producer/filter chain; on the same track, omission places it after the source.",
     },
     "replace_item_media": {
-        "required": ["track", "item_index", "path"],
+        "required": ["path"],
         "optional": ["caption"],
         "notes": (
             "Preserves source range, placement, filters, and unknown producer "
@@ -96,9 +97,8 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         ],
         "notes": "generator: color|text|tone|noise",
     },
-    "remove_item": {"required": ["track", "item_index"], "optional": ["ripple"]},
+    "remove_item": {"optional": ["ripple"]},
     "trim_item": {
-        "required": ["track", "item_index"],
         "optional": [
             "in_frame",
             "out_frame",
@@ -115,20 +115,23 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         ),
     },
     "roll_edit": {
-        "required": ["track", "left_item_index", "delta"],
+        "required": ["delta"],
         "notes": "Moves one contiguous clip boundary without changing total duration.",
     },
     "slip_item": {
-        "required": ["track", "item_index", "delta"],
+        "required": ["delta"],
         "notes": "Changes source in/out while preserving timeline position and duration.",
     },
     "slide_item": {
-        "required": ["track", "item_index", "delta"],
+        "required": ["delta"],
         "notes": "Moves a clip between two contiguous clips without changing source or total duration.",
     },
-    "split_item": {"required": ["track", "item_index", "offset_frame"]},
+    "split_item": {
+        "required": ["offset_frame"],
+        "notes": "as binds the right-hand item; the original reference stays with the left.",
+    },
     "move_item": {
-        "required": ["track", "item_index", "position_frame"],
+        "required": ["position_frame"],
         "optional": ["target_track", "mode", "ripple_source"],
     },
     "insert_gap": {
@@ -141,16 +144,14 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         "optional": ["tracks", "ripple"],
     },
     "add_transition": {
-        "required": ["track", "left_item_index", "duration_frames"],
+        "required": ["duration_frames"],
         "optional": ["service", "properties", "audio_crossfade", "name"],
         "notes": "Creates a nested Shotcut tractor between two adjacent clips.",
     },
-    "remove_transition": {"required": ["track", "item_index"]},
+    "remove_transition": {},
     "add_filter": {
         "required": ["target", "service"],
         "optional": [
-            "track",
-            "item_index",
             "shotcut_filter",
             "in_frame",
             "out_frame",
@@ -213,26 +214,76 @@ OPERATION_CATALOG: dict[str, dict[str, Any]] = {
         "notes": "workflow: sdr|hlg|pq; owns processing mode, transfer, and colorspace together.",
     },
     "set_clip_opacity": {
-        "required": ["track", "item_index", "opacity_keyframes"],
+        "required": ["opacity_keyframes"],
         "optional": ["interpolation"],
         "notes": (
             "Animates transparency without changing RGB brightness and reuses one "
             "MCP-owned filter."
         ),
     },
+    "animate_clip": {
+        "required": ["keyframes"],
+        "optional": ["interpolation"],
+        "notes": (
+            "Structured clip-relative pan, zoom, rotation, opacity, and volume; "
+            "compiles to MCP-owned Shotcut filters without native MLT properties."
+        ),
+    },
     "set_clip_speed": {
-        "required": ["track", "item_index", "speed"],
+        "required": ["speed"],
         "optional": ["pitch_compensation"],
         "notes": "Uses MLT timewarp; speed range is -100..-0.05 or 0.05..100.",
     },
     "set_clip_speed_map": {
-        "required": ["track", "item_index", "keyframes"],
+        "required": ["keyframes"],
         "optional": ["image_mode", "pitch_compensation"],
         "notes": (
             "Uses one owned timeremap link. Entirely forward or entirely reverse maps "
             "are supported; zero speeds and direction changes are rejected."
         ),
     },
+}
+
+if set(_OPERATION_CATALOG_BASE) != set(EDIT_OPERATION_CONTRACTS):
+    raise RuntimeError(
+        "Edit operation catalog does not match the project runtime contract."
+    )
+
+
+def _operation_summary(name: str, base: dict[str, Any]) -> dict[str, Any]:
+    """Project runtime selector/alias semantics into one public summary."""
+
+    summary = {
+        key: list(value) if isinstance(value, list) else value
+        for key, value in base.items()
+    }
+    contract = EDIT_OPERATION_CONTRACTS.get(name)
+    if contract is None:
+        return summary
+    required = list(summary.get("required", []))
+    optional = list(summary.get("optional", []))
+    if contract.selector_field is not None:
+        for field in ("track", contract.selector_field, "item_ref"):
+            if field not in optional:
+                optional.append(field)
+        if contract.item_ref_target is None:
+            selector_note = (
+                f"Select with item_ref or legacy track+{contract.selector_field}."
+            )
+            current_note = summary.get("notes")
+            notes = [current_note] if isinstance(current_note, str) else []
+            summary["notes"] = " ".join([*notes, selector_note])
+    if contract.alias_target is not None and "as" not in optional:
+        optional.append("as")
+    summary["required"] = required
+    if optional:
+        summary["optional"] = optional
+    return summary
+
+
+OPERATION_CATALOG: dict[str, dict[str, Any]] = {
+    name: _operation_summary(name, descriptor)
+    for name, descriptor in _OPERATION_CATALOG_BASE.items()
 }
 
 OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -330,6 +381,19 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "integer",
         "minimum": 0,
         "description": "Zero-based item index from inspect_project.",
+    },
+    "item_ref": {
+        "type": "string",
+        "pattern": "^(?:item:[0-9a-f]{24}|@[A-Za-z][A-Za-z0-9_-]{0,63})$",
+        "description": (
+            "Opaque revision-scoped item_ref from inspect_project, or an @alias "
+            "created earlier in the same operation batch."
+        ),
+    },
+    "as": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+        "description": "Bind the created item for later operations as @name.",
     },
     "ripple": {
         "type": "boolean",
@@ -602,6 +666,57 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
+ANIMATION_KEYFRAMES_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "minItems": 1,
+    "maxItems": 64,
+    "description": (
+        "Strictly increasing clip-relative creative animation points. The first "
+        "frame must be 0; every enabled channel must appear at every point."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "frame": {"type": "integer", "minimum": 0},
+            "center_x": {
+                "type": "number",
+                "minimum": -10,
+                "maximum": 10,
+                "description": "Horizontal center in output-frame units; 0.5 is centered.",
+            },
+            "center_y": {
+                "type": "number",
+                "minimum": -10,
+                "maximum": 10,
+                "description": "Vertical center in output-frame units; 0.5 is centered.",
+            },
+            "scale": {
+                "type": "number",
+                "minimum": 0.01,
+                "maximum": 20,
+                "description": "Output-frame scale multiplier; 1 fills the frame.",
+            },
+            "rotation_degrees": {
+                "type": "number",
+                "minimum": -3600,
+                "maximum": 3600,
+            },
+            "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+            "volume_db": {"type": "number", "minimum": -70, "maximum": 24},
+        },
+        "required": ["frame"],
+        "anyOf": [
+            {"required": ["center_x"]},
+            {"required": ["center_y"]},
+            {"required": ["scale"]},
+            {"required": ["rotation_degrees"]},
+            {"required": ["opacity"]},
+            {"required": ["volume_db"]},
+        ],
+        "additionalProperties": False,
+    },
+}
+
 OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
     "add_track": {"op": "add_track", "kind": "video", "name": "Titles"},
     "remove_track": {"op": "remove_track", "track": "V2"},
@@ -748,6 +863,31 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
         ],
         "interpolation": "linear",
     },
+    "animate_clip": {
+        "op": "animate_clip",
+        "item_ref": "item:6f023d7277c546f3aa1540c2",
+        "keyframes": [
+            {
+                "frame": 0,
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "scale": 1.0,
+                "rotation_degrees": 0,
+                "opacity": 0,
+                "volume_db": -70,
+            },
+            {
+                "frame": 24,
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "scale": 1.15,
+                "rotation_degrees": 0,
+                "opacity": 1,
+                "volume_db": 0,
+            },
+        ],
+        "interpolation": "smooth",
+    },
     "set_clip_speed": {
         "op": "set_clip_speed",
         "track": "V1",
@@ -763,11 +903,14 @@ OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
     },
 }
 
+if set(OPERATION_EXAMPLES) != set(OPERATION_CATALOG):
+    raise RuntimeError("Edit operation examples do not match the public catalog.")
+
 
 def _operation_details(name: str) -> dict[str, Any]:
     summary = OPERATION_CATALOG[name]
     fields = [*summary.get("required", []), *summary.get("optional", [])]
-    schema = {
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "op": {"type": "string", "enum": [name]},
@@ -776,6 +919,28 @@ def _operation_details(name: str) -> dict[str, Any]:
         "required": ["op", *summary.get("required", [])],
         "additionalProperties": False,
     }
+    if name == "animate_clip":
+        schema["properties"]["keyframes"] = ANIMATION_KEYFRAMES_SCHEMA
+    contract = EDIT_OPERATION_CONTRACTS.get(name)
+    if (
+        contract is not None
+        and contract.selector_field is not None
+        and contract.item_ref_target is None
+    ):
+        track_field, index_field = "track", contract.selector_field
+        schema["oneOf"] = [
+            {
+                "required": [track_field, index_field],
+                "properties": {"item_ref": {"type": "null"}},
+            },
+            {
+                "required": ["item_ref"],
+                "properties": {
+                    track_field: {"type": "null"},
+                    index_field: {"type": "null"},
+                },
+            },
+        ]
     if name == "update_marker":
         schema["anyOf"] = [
             {"required": [field]}
@@ -814,6 +979,7 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> list[str]:
 
 TRANSACTION_GUARANTEES = [
     "optimistic concurrency using SHA-256 revision",
+    "revision-scoped item_ref selectors and transaction-local item aliases",
     "single parse/write for up to 500 operations",
     "MCP lock file",
     "temporary-file MLT validation before replace",
@@ -836,8 +1002,8 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "compatibility": {
-            "shotcut": "26.6.25",
-            "mlt": "7.40.x",
+            "shotcut": SHOTCUT_VERSION,
+            "mlt": MLT_VERSION_FAMILY,
             "project_format": "MLT XML",
         },
         "transaction_guarantees": TRANSACTION_GUARANTEES,
@@ -866,9 +1032,18 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
                 "range markers and color filtering are opt-in."
             ),
             "edit_primitives": (
-                "duplicate_item, replace_item_media, set_clip_opacity, move_filter, "
-                "and update_marker are transactional operations and support "
-                "plan_project_edit."
+                "Use duplicate_item, split_item, trim_item, move_item, remove_item, "
+                "set_clip_speed, set_clip_speed_map, replace_media, "
+                "set_clip_opacity, animate_clip, and add_filter for timeline edits."
+            ),
+            "stable_item_selectors": (
+                "Prefer item_ref from inspect_project over mutable item indexes. Use "
+                "as on created items for later @alias references in the same batch."
+            ),
+            "creative_animation": (
+                "Use animate_clip for structured pan, zoom, rotation, opacity, and "
+                "volume animation; use add_filter only for native MLT effects without "
+                "a semantic operation."
             ),
             "progress": (
                 "Request progress is emitted only when the caller supplies a progress "
@@ -878,7 +1053,7 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
         "workflow": [
             "run shotcut_doctor after installing or upgrading Shotcut",
             "use probe_media for stream facts and analyze_media_quality for source QC",
-            "inspect_project to obtain revision and current item indexes",
+            "inspect_project to obtain revision and revision-scoped item_ref values",
             "optionally list_mlt_services/describe_mlt_service",
             "edit_project with expected_revision and one batch of operations",
             "when readiness is unknown or dependencies changed, use validate_project before preview/render; otherwise proceed from a successful edit_project to visual review",
@@ -1238,7 +1413,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "inspect_project",
         "title": "Inspect complete project",
-        "description": "Use first to understand a timeline or before planning, editing, or restoring. Returns structural state and the SHA-256 revision; use render_contact_sheet for visual review.",
+        "description": "Use first to understand a timeline or before planning, editing, or restoring. Returns structural state, SHA-256 revision, and revision-scoped item_ref selectors; use render_contact_sheet for visual review.",
         "inputSchema": _object_schema({"path": PATH}, ["path"]),
         "annotations": {
             "readOnlyHint": True,
@@ -1251,8 +1426,8 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Plan project edit",
         "description": (
             "Use for a dry run, uncertain edit, or user review before committing. Applies "
-            "operations in memory, validates with MLT, and returns a snapshot and diff "
-            "without changing the project."
+            "operations in memory using stable item_ref selectors when supplied, "
+            "validates with MLT, and returns a snapshot and diff without changing the project."
         ),
         "inputSchema": _object_schema(
             {
@@ -1351,8 +1526,8 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Edit project transactionally",
         "description": (
             "Use only after inspect_project. Applies up to 500 related operations in one "
-            "validated atomic write, enforcing each focused operation schema; pass "
-            "expected_revision and re-inspect on conflicts instead of using force."
+            "validated atomic write; prefer item_ref and animate_clip for robust creative "
+            "batches. Pass expected_revision and re-inspect on conflicts instead of force."
         ),
         "inputSchema": _edit_project_input_schema(),
         "annotations": {
@@ -2037,6 +2212,12 @@ TIMELINE_ITEM_OUTPUT_SCHEMA = _output_object(
             "minimum": 0,
             "description": "Zero-based item index within the track.",
         },
+        "item_ref": {
+            "type": ["string", "null"],
+            "description": (
+                "Opaque occurrence reference scoped to this project revision; null for gaps."
+            ),
+        },
         "type": {
             "type": "string",
             "enum": ["clip", "gap", "transition"],
@@ -2084,7 +2265,14 @@ TIMELINE_ITEM_OUTPUT_SCHEMA = _output_object(
             "Clip-local filters in host order.",
         ),
     },
-    ["item_index", "type", "start_frame", "duration_frames", "end_frame"],
+    [
+        "item_index",
+        "item_ref",
+        "type",
+        "start_frame",
+        "duration_frames",
+        "end_frame",
+    ],
     description="One gap, transition, or clip entry in a project track.",
 )
 TRACK_OUTPUT_SCHEMA = _output_object(
@@ -2753,11 +2941,12 @@ MISSING_RESOURCE_OUTPUT_SCHEMA = _output_object(
 PROJECT_RESULT_ITEM_OUTPUT_SCHEMA = _output_object(
     {
         "item_index": INTEGER,
+        "item_ref": NULLABLE_STRING,
         "type": STRING,
         "start_frame": INTEGER,
         "duration_frames": INTEGER,
     },
-    ["item_index", "type", "start_frame", "duration_frames"],
+    ["item_index", "item_ref", "type", "start_frame", "duration_frames"],
     additional_properties=True,
     description="Compact timeline item identity and timing.",
 )
@@ -2973,6 +3162,11 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 OPERATION_RESULT_OUTPUT_SCHEMA,
                 "Results in the same order as the requested operations.",
             ),
+            "item_bindings": {
+                "type": "object",
+                "additionalProperties": STRING,
+                "description": "Batch aliases mapped to item_ref values for the resulting revision.",
+            },
             "validation": VALIDATION_OUTPUT_SCHEMA,
             "project": PROJECT_RESULT_OUTPUT_SCHEMA,
             "unified_diff": STRING,
@@ -3007,6 +3201,11 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 OPERATION_RESULT_OUTPUT_SCHEMA,
                 "Results in the same order as the requested operations.",
             ),
+            "item_bindings": {
+                "type": "object",
+                "additionalProperties": STRING,
+                "description": "Batch aliases mapped to item_ref values for the committed revision.",
+            },
             "project": PROJECT_RESULT_OUTPUT_SCHEMA,
         }
     ),

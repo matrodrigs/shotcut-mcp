@@ -26,7 +26,7 @@
   "interface": {
     "displayName": "Shotcut MCP",
     "shortDescription": "Edit complete Shotcut timelines with transactional safety.",
-    "longDescription": "Local Shotcut and MLT integration for source-quality analysis, multitrack editing, clips, transitions, filters, markers, subtitles, previews, chapter files, backups, and monitored full or range rendering.",
+    "longDescription": "Local Shotcut and MLT integration for source-quality analysis, stable-reference multitrack editing, structured creative animation, transitions, filters, markers, subtitles, previews, backups, and monitored rendering.",
     "developerName": "matrodrigs",
     "category": "Productivity",
     "capabilities": [

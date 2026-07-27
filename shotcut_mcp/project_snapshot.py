@@ -96,6 +96,11 @@ def build_project_snapshot(document: ProjectDocument) -> dict[str, Any]:
             duration = document.item_duration(item)
             summary: dict[str, Any] = {
                 "item_index": index,
+                "item_ref": (
+                    document.item_reference(track, index, item)
+                    if item.tag == "entry"
+                    else None
+                ),
                 "type": "gap"
                 if item.tag == "blank"
                 else "transition"
