@@ -66,12 +66,8 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 ### Requirements
 
 - Python 3.10 or newer
-- Shotcut 26.6.25, or a compatible installation that provides MLT 7.40.x
+- Shotcut 26.6.25, with MLT 7.40.0 serialization in the compatible 7.40.x family
 - Codex CLI, Claude Code, or another MCP client that supports local stdio servers
-
-The compatibility target is Shotcut **26.6.25** with MLT **7.40.0**. The ordinary suite runs on
-Windows, macOS, and Linux; real integration is exercised on Windows. Executable discovery also
-supports binaries on `PATH` and in common macOS locations.
 
 Additional compatibility and runtime behavior, including progress, MLT startup, and RNNoise
 checks, are documented in the [behavioral specification](docs/spec.md).
