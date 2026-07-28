@@ -1019,10 +1019,6 @@ summary:active {
   backdrop-filter: blur(14px) saturate(125%);
 }
 
-.capability-grid article:first-child {
-  border-color: var(--brand-line);
-}
-
 .capability-code {
   display: block;
   margin-bottom: 2rem;
