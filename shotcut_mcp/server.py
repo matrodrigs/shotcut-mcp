@@ -29,6 +29,7 @@ SUPPORTED_PROTOCOL_VERSIONS = {
     "2025-11-25",
 }
 STRUCTURED_CONTENT_PROTOCOLS = {"2025-06-18", "2025-11-25"}
+RESOURCE_LINK_PROTOCOLS = {"2025-06-18", "2025-11-25"}
 MAX_ERROR_DETAIL_ITEMS = 32
 MAX_ERROR_DETAIL_STRING = 2000
 MAX_ERROR_DETAIL_DEPTH = 4
@@ -51,14 +52,23 @@ SERVER_INSTRUCTIONS = (
     "relinking; for runtime gaps, use shotcut_doctor or list_mlt_services.\n"
     "Planning and review: Use plan_project_edit for uncertain edits or user review. To "
     "show the current edit, call render_contact_sheet and surface its image when "
-    "supported; use render_preview for one exact moment.\n"
+    "supported; use render_preview for one exact moment. After inspection or a committed "
+    "edit batch, give the user a concise result summary; after visual edits, show a "
+    "managed contact sheet or exact preview.\n"
     "Media diagnosis: Use diagnose_color_workflow for washed-out color or HDR questions. "
     "Use analyze_media_quality before proposing cleanup for silence, black frames, "
     "freezes, interlacing, or loudness.\n"
-    "Export: Choose exactly one start_render mode: the full project, both inclusive "
-    "frames, or one range marker; monitor its job_id with render_status. Use "
-    "export_marker_chapters for Shotcut-compatible chapter text and list_render_jobs "
-    "when the job_id is unknown.\n"
+    "Export approval: Never infer export from completed editing, validation, or visual "
+    "review. Call start_render only when the user explicitly requested export in the "
+    "active task, or after presenting project, output, preset, range or duration, and "
+    "overwrite behavior and receiving approval. An explicit export request is already "
+    "approval; do not ask twice, and never infer overwrite authorization. Pass the "
+    "inspected expected_revision and choose exactly one mode: full project, both "
+    "inclusive frames, or one range marker. Tell the user when the durable job starts; "
+    "poll render_status until terminal and surface meaningful progress, status, or ETA "
+    "changes without repeating unchanged polls or raw logs. On completion, present both "
+    "returned artifacts: rendered media and the exact editable project. Use "
+    "list_render_jobs when job_id is unknown and export_marker_chapters for chapters.\n"
     "Recovery: For a tool result with isError=true, follow error_code, "
     "recommended_action, recommended_tool, and details instead of parsing the English "
     "message. List backups before restoring and confirm the selected backup."
@@ -110,17 +120,15 @@ def _tool_result(
             code = payload.get("error_code")
             text = f"{message} Error code: {code}." if code else message
         else:
-            label = tool_name or "Tool"
-            text = (
-                f"{label} completed. The complete result is available in "
-                "structuredContent."
-            )
+            text = _success_result_text(tool_name, payload)
     else:
         text = json.dumps(payload, ensure_ascii=False, indent=2)
     content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     image = _inline_image_content(tool_name, payload) if not is_error else None
     if image is not None:
         content.append(image)
+    if not is_error and protocol_version in RESOURCE_LINK_PROTOCOLS:
+        content.extend(_artifact_resource_links(tool_name, payload))
     result = {
         "content": content,
         "isError": is_error,
@@ -128,6 +136,92 @@ def _tool_result(
     if structured:
         result["structuredContent"] = payload
     return result
+
+
+def _success_result_text(tool_name: str | None, payload: dict[str, Any]) -> str:
+    if tool_name == "edit_project":
+        operations = payload.get("operation_results")
+        count = len(operations) if isinstance(operations, list) else 0
+        return (
+            f"Project edit committed with {count} operation result(s). Summarize the "
+            "changes for the user and show a visual review when the edits are visual. "
+            "Complete details are in structuredContent."
+        )
+    if tool_name == "start_render":
+        job_id = payload.get("job_id")
+        return (
+            f"Durable render job {job_id} started. Tell the user it started, then poll "
+            "render_status until a terminal state and surface meaningful changes."
+        )
+    if tool_name == "render_status":
+        status = payload.get("status")
+        if status == "completed" and payload.get("delivery_complete") is True:
+            return (
+                "Render completed. Present both attached artifacts to the user: the "
+                "rendered media and the exact editable Shotcut project."
+            )
+        progress = payload.get("progress_percent")
+        eta = payload.get("eta_seconds")
+        detail = (
+            f" Progress: {progress}%." if isinstance(progress, (int, float)) else ""
+        )
+        if isinstance(eta, (int, float)):
+            detail += f" ETA: {round(eta)} seconds."
+        return (
+            f"Render status is {status}.{detail} Continue monitoring until terminal, "
+            "but do not narrate unchanged polls."
+        )
+    label = tool_name or "Tool"
+    return f"{label} completed. The complete result is available in structuredContent."
+
+
+def _artifact_resource_links(
+    tool_name: str | None, payload: dict[str, Any]
+) -> list[dict[str, Any]]:
+    if tool_name != "render_status" or payload.get("delivery_complete") is not True:
+        return []
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        return []
+    links: list[dict[str, Any]] = []
+    descriptions = {
+        "rendered_media": "Completed rendered media",
+        "editable_project": "Exact editable Shotcut project used for this render",
+    }
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        kind = artifact.get("kind")
+        uri = artifact.get("uri")
+        path = artifact.get("path")
+        mime_type = artifact.get("mime_type")
+        size = artifact.get("size_bytes")
+        if (
+            kind not in descriptions
+            or not isinstance(uri, str)
+            or not isinstance(path, str)
+            or not isinstance(mime_type, str)
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+        ):
+            continue
+        links.append(
+            {
+                "type": "resource_link",
+                "uri": uri,
+                "name": Path(path).name,
+                "title": (
+                    "Rendered media"
+                    if kind == "rendered_media"
+                    else "Editable Shotcut project"
+                ),
+                "description": descriptions[kind],
+                "mimeType": mime_type,
+                "size": size,
+                "annotations": {"audience": ["user"], "priority": 1.0},
+            }
+        )
+    return links
 
 
 def _inline_image_limit() -> int:

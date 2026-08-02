@@ -1047,7 +1047,20 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
             ),
             "progress": (
                 "Request progress is emitted only when the caller supplies a progress "
-                "token; durable render progress continues through render_status."
+                "token; durable render progress continues through render_status. Poll "
+                "until a terminal state and surface only meaningful status, progress, "
+                "or ETA changes rather than unchanged polls or raw log spam."
+            ),
+            "export_approval": (
+                "Never infer export from completed editing, validation, or visual review. "
+                "Call start_render only after the user explicitly requested export in the "
+                "active task or approved a summary of project, output, preset, range or "
+                "duration, and overwrite behavior. An explicit export request is already "
+                "approval; do not ask twice."
+            ),
+            "render_delivery": (
+                "When render_status reports completed, present both returned artifacts: "
+                "the rendered media and the exact revision-bound editable project."
             ),
         },
         "workflow": [
@@ -1058,7 +1071,7 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
             "edit_project with expected_revision and one batch of operations",
             "when readiness is unknown or dependencies changed, use validate_project before preview/render; otherwise proceed from a successful edit_project to visual review",
             "optionally export_marker_chapters from point markers",
-            "start_render for a full project, inclusive frame range, or range marker; use render_status for durable progress and logs",
+            "after explicit export intent or approval, start_render with expected_revision for a full project, inclusive frame range, or range marker; poll render_status to a terminal state and present both completed artifacts",
         ],
     }
 
@@ -1232,6 +1245,15 @@ def _start_render_input_schema() -> dict[str, Any]:
                 "description": (
                     "Range marker id from inspect_project; mutually exclusive with "
                     "explicit frames."
+                ),
+            },
+            "expected_revision": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": (
+                    "Optional SHA-256 revision returned by inspect_project. When "
+                    "supplied, rendering fails before creating job or output state if "
+                    "the saved project changed."
                 ),
             },
             "overwrite": {"type": "boolean", "default": False},
@@ -1527,7 +1549,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Use only after inspect_project. Applies up to 500 related operations in one "
             "validated atomic write; prefer item_ref and animate_clip for robust creative "
-            "batches. Pass expected_revision and re-inspect on conflicts instead of force."
+            "batches. Pass expected_revision and re-inspect on conflicts instead of force. "
+            "Summarize committed operation results, and after visual edits show a managed "
+            "contact sheet or exact preview."
         ),
         "inputSchema": _edit_project_input_schema(),
         "annotations": {
@@ -1819,7 +1843,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "start_render",
         "title": "Start render",
-        "description": "Use when the user asks to export. Starts a durable background render for the full project, one inclusive frame range, or one Shotcut range marker; monitor the returned job_id with render_status.",
+        "description": "Use only after the user explicitly requests export or approves a preflight summary of project, output, preset, range or duration, and overwrite behavior; never infer export from edit completion, and do not ask twice after an explicit request. Starts one revision-bound durable render and exact editable project snapshot; pass expected_revision when known and monitor job_id with render_status.",
         "inputSchema": _start_render_input_schema(),
         "annotations": {
             "readOnlyHint": False,
@@ -1869,7 +1893,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "render_status",
         "title": "Get render status",
-        "description": "Use when job_id is known to report render state, progress, log tail, and output size. Use list_render_jobs when the id is unknown.",
+        "description": "Use when job_id is known; poll until a terminal state and surface meaningful status, progress, or ETA changes without narrating unchanged polls or raw logs. On completion, present both returned artifacts: rendered media and the exact editable project. Use list_render_jobs when the id is unknown.",
         "inputSchema": _object_schema({"job_id": {"type": "string"}}, ["job_id"]),
         "annotations": {
             "readOnlyHint": True,
@@ -2715,11 +2739,35 @@ BACKUP_OUTPUT_SCHEMA = _output_object(
     ["path", "size_bytes", "modified_at", "revision"],
     description="Project-owned backup returned by list_project_backups.",
 )
+RENDER_ARTIFACT_OUTPUT_SCHEMA = _output_object(
+    {
+        "kind": {
+            "type": "string",
+            "enum": ["rendered_media", "editable_project"],
+        },
+        "path": STRING,
+        "uri": {
+            "type": "string",
+            "description": "Canonical file URI for clients that support artifact links.",
+        },
+        "mime_type": STRING,
+        "size_bytes": INTEGER,
+        "revision": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Exact project revision used to create this delivery.",
+        },
+    },
+    ["kind", "path", "uri", "mime_type", "size_bytes", "revision"],
+    description="One completed render delivery artifact.",
+)
 RENDER_JOB_SUMMARY_OUTPUT_SCHEMA = _output_object(
     {
         "job_id": NULLABLE_STRING,
         "status": NULLABLE_STRING,
         "project_path": NULLABLE_STRING,
+        "rendered_project_revision": NULLABLE_STRING,
+        "editable_project_path": NULLABLE_STRING,
         "output_path": NULLABLE_STRING,
         "preset": NULLABLE_STRING,
         "in_frame": NULLABLE_INTEGER,
@@ -2744,6 +2792,8 @@ RENDER_JOB_SUMMARY_OUTPUT_SCHEMA = _output_object(
         "job_id",
         "status",
         "project_path",
+        "rendered_project_revision",
+        "editable_project_path",
         "output_path",
         "preset",
         "in_frame",
@@ -3374,6 +3424,9 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "job_id": STRING,
             "status": STRING,
             "project_path": STRING,
+            "source_project_path": STRING,
+            "render_project_path": STRING,
+            "editable_project_path": STRING,
             "output_path": STRING,
             "preset": STRING,
             "in_frame": NULLABLE_INTEGER,
@@ -3382,6 +3435,7 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "range_duration_frames": NULLABLE_INTEGER,
             "source_duration_frames": NULLABLE_INTEGER,
             "project_revision": NULLABLE_STRING,
+            "rendered_project_revision": STRING,
             "marker_id": NULLABLE_STRING,
             "marker_text": NULLABLE_STRING,
         }
@@ -3410,6 +3464,8 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         {
             "job_id": STRING,
             "status": STRING,
+            "project_path": STRING,
+            "rendered_project_revision": NULLABLE_STRING,
             "progress_percent": NULLABLE_NUMBER,
             "frames_completed": NULLABLE_INTEGER,
             "in_frame": NULLABLE_INTEGER,
@@ -3418,6 +3474,13 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "output_path": STRING,
             "output_exists": BOOLEAN,
             "output_size_bytes": NULLABLE_INTEGER,
+            "editable_project_path": NULLABLE_STRING,
+            "editable_project_exists": BOOLEAN,
+            "delivery_complete": BOOLEAN,
+            "artifacts": _output_array(
+                RENDER_ARTIFACT_OUTPUT_SCHEMA,
+                "Completed rendered media and exact editable project, otherwise empty.",
+            ),
             "elapsed_seconds": {"type": "number"},
             "eta_seconds": NULLABLE_NUMBER,
             "eta_confidence": NULLABLE_STRING,
@@ -3426,6 +3489,8 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         [
             "job_id",
             "status",
+            "project_path",
+            "rendered_project_revision",
             "progress_percent",
             "in_frame",
             "out_frame",
@@ -3433,6 +3498,10 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "output_path",
             "output_exists",
             "output_size_bytes",
+            "editable_project_path",
+            "editable_project_exists",
+            "delivery_complete",
+            "artifacts",
             "elapsed_seconds",
             "eta_seconds",
             "eta_confidence",

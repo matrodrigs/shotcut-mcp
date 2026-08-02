@@ -654,6 +654,10 @@ class ProtocolNegotiationTests(unittest.TestCase):
             "export_marker_chapters",
             "avoid concurrent saves",
             "recommended_action",
+            "Never infer export",
+            "explicitly requested export",
+            "meaningful progress",
+            "exact editable project",
         ):
             self.assertIn(phrase, instructions)
 
@@ -745,6 +749,10 @@ class ProtocolNegotiationTests(unittest.TestCase):
         render_status = by_name["render_status"]["outputSchema"]["properties"]
         self.assertEqual(render_status["progress_percent"]["type"], ["number", "null"])
         self.assertEqual(render_status["log_tail"]["type"], ["string", "null"])
+        self.assertIn("artifacts", render_status)
+        self.assertIn("rendered_project_revision", render_status)
+        start_render = by_name["start_render"]["inputSchema"]["properties"]
+        self.assertIn("expected_revision", start_render)
         inspect_schema = by_name["inspect_project"]["outputSchema"]
         self.assertIn("tracks", inspect_schema["oneOf"][0]["required"])
         track_schema = inspect_schema["properties"]["tracks"]["items"]
@@ -877,6 +885,10 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertIn("duplicate_item", guidance["edit_primitives"])
         self.assertIn("set_clip_opacity", guidance["edit_primitives"])
         self.assertIn("render_status", guidance["progress"])
+        self.assertIn("Never infer export", guidance["export_approval"])
+        self.assertIn(
+            "exact revision-bound editable project", guidance["render_delivery"]
+        )
 
     def test_compatibility_and_new_projects_share_one_version_contract(self) -> None:
         full = handle_request(
@@ -1614,6 +1626,91 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertEqual(
             [item["type"] for item in response["result"]["content"]], ["text"]
         )
+
+    def test_completed_render_returns_version_gated_artifact_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rendered = root / "final.mp4"
+            editable = root / "project.render-job.mlt"
+            rendered.write_bytes(b"video")
+            editable.write_bytes(b"<mlt/>")
+            revision = "a" * 64
+            payload = {
+                "job_id": "b" * 32,
+                "status": "completed",
+                "project_path": str(root / "project.mlt"),
+                "rendered_project_revision": revision,
+                "progress_percent": 100,
+                "in_frame": None,
+                "out_frame": None,
+                "range_duration_frames": 1,
+                "output_path": str(rendered),
+                "output_exists": True,
+                "output_size_bytes": rendered.stat().st_size,
+                "editable_project_path": str(editable),
+                "editable_project_exists": True,
+                "delivery_complete": True,
+                "elapsed_seconds": 1.0,
+                "eta_seconds": None,
+                "eta_confidence": None,
+                "log_tail": None,
+                "artifacts": [
+                    {
+                        "kind": "rendered_media",
+                        "path": str(rendered),
+                        "uri": rendered.resolve().as_uri(),
+                        "mime_type": "video/mp4",
+                        "size_bytes": rendered.stat().st_size,
+                        "revision": revision,
+                    },
+                    {
+                        "kind": "editable_project",
+                        "path": str(editable),
+                        "uri": editable.resolve().as_uri(),
+                        "mime_type": "application/xml",
+                        "size_bytes": editable.stat().st_size,
+                        "revision": revision,
+                    },
+                ],
+            }
+            render_schema = next(
+                tool["outputSchema"]
+                for tool in TOOLS
+                if tool["name"] == "render_status"
+            )
+            self.assertEqual(schema_errors(payload, render_schema), [])
+
+            for version in ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"):
+                session = ProtocolSession(protocol_version=version)
+                with patch.dict(
+                    HANDLERS, {"render_status": lambda _arguments: payload}
+                ):
+                    response = handle_request(
+                        request(
+                            "tools/call",
+                            {
+                                "name": "render_status",
+                                "arguments": {"job_id": "b" * 32},
+                            },
+                        ),
+                        session,
+                    )
+                result = response["result"]
+                types = [item["type"] for item in result["content"]]
+                if version in {"2025-06-18", "2025-11-25"}:
+                    self.assertEqual(types, ["text", "resource_link", "resource_link"])
+                    self.assertEqual(
+                        [item["uri"] for item in result["content"][1:]],
+                        [rendered.resolve().as_uri(), editable.resolve().as_uri()],
+                    )
+                    self.assertIn("Present both", result["content"][0]["text"])
+                else:
+                    self.assertEqual(types, ["text"])
+                    legacy_payload = json.loads(result["content"][0]["text"])
+                    self.assertEqual(
+                        [item["path"] for item in legacy_payload["artifacts"]],
+                        [str(rendered), str(editable)],
+                    )
 
     def test_file_writing_tools_are_conservatively_destructive(self) -> None:
         listed = handle_request(request("tools/list"))
