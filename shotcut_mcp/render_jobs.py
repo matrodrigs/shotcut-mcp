@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ToolError
-from .storage import fsync_directory
+from .storage import RenderInputSnapshot, fsync_directory
 
 
 def _owner_key() -> str:
@@ -168,6 +168,49 @@ def read_job(job_id: str) -> dict[str, Any]:
     return payload
 
 
+def render_input_snapshot(metadata: dict[str, Any]) -> RenderInputSnapshot:
+    """Validate and reconstruct the project snapshot owned by job metadata."""
+
+    job_id = metadata.get("job_id")
+    project_path = metadata.get("source_project_path") or metadata.get("project_path")
+    revision = metadata.get("rendered_project_revision") or metadata.get(
+        "project_revision"
+    )
+    render_path = metadata.get("render_project_path")
+    editable_path = metadata.get("editable_project_path")
+    if (
+        not isinstance(job_id, str)
+        or not isinstance(project_path, str)
+        or not isinstance(revision, str)
+    ):
+        raise ToolError(
+            "Invalid render project snapshot metadata.",
+            code="invalid_persistent_render_state",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"field": "render_project_path", "reason": "missing_identity"},
+        )
+    try:
+        snapshot = RenderInputSnapshot.for_job(Path(project_path), job_id, revision)
+    except ValueError as exc:
+        raise ToolError(
+            "Invalid render project snapshot metadata.",
+            code="invalid_persistent_render_state",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"field": "render_project_path", "reason": str(exc)},
+        ) from exc
+    if render_path != str(snapshot.path) or editable_path != str(snapshot.path):
+        raise ToolError(
+            "Render project snapshot path does not match its job identity.",
+            code="invalid_persistent_render_state",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"field": "render_project_path", "reason": "path_mismatch"},
+        )
+    return snapshot
+
+
 def request_cancel(job_id: str) -> None:
     path = cancel_path(job_id)
     descriptor = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
@@ -251,6 +294,8 @@ def list_jobs(
         "job_id",
         "status",
         "project_path",
+        "rendered_project_revision",
+        "editable_project_path",
         "output_path",
         "preset",
         "in_frame",

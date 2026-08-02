@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 import tempfile
 import time
@@ -29,7 +30,19 @@ class RenderMonitoringTests(unittest.TestCase):
                 "Path(target).write_bytes(b'rendered')\n",
                 encoding="utf-8",
             )
+            source = renderer.read_bytes()
+            render_input = SimpleNamespace(
+                source=source,
+                revision=hashlib.sha256(source).hexdigest(),
+                fps=30.0,
+                duration_frames=100,
+                markers=[],
+            )
             with (
+                patch(
+                    "shotcut_mcp.render.load_project_render_input",
+                    return_value=render_input,
+                ),
                 patch(
                     "shotcut_mcp.render.discover_executables",
                     return_value=SimpleNamespace(melt=Path(sys.executable)),

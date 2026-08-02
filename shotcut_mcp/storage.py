@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -203,6 +203,110 @@ class OutputTransaction:
             tuple(signature) if signature is not None else None,
             mode,
         )
+
+
+@dataclass(frozen=True)
+class RenderInputSnapshot:
+    """Sibling project snapshot owned by one durable render job.
+
+    Keeping the snapshot beside the source preserves Shotcut's relative ``root=.``
+    resource resolution. Successful snapshots become user-facing editable artifacts;
+    failed snapshots are removed only while their deterministic name and content hash
+    still prove ownership.
+    """
+
+    source: Path
+    path: Path
+    job_id: str
+    revision: str
+
+    @classmethod
+    def for_job(
+        cls,
+        source: Path,
+        job_id: str,
+        revision: str,
+    ) -> RenderInputSnapshot:
+        if re.fullmatch(r"[0-9a-f]{32}", job_id) is None:
+            raise ValueError("Invalid render job id for project snapshot.")
+        if re.fullmatch(r"[0-9a-f]{64}", revision) is None:
+            raise ValueError("Invalid project revision for render snapshot.")
+        path = source.with_name(f"{source.stem}.render-{job_id}{source.suffix}")
+        return cls(source=source, path=path, job_id=job_id, revision=revision)
+
+    @classmethod
+    def create(
+        cls,
+        source: Path,
+        job_id: str,
+        data: bytes,
+        revision: str,
+    ) -> RenderInputSnapshot:
+        snapshot = cls.for_job(source, job_id, revision)
+        if _sha256(data) != revision:
+            raise ToolError(
+                "Render snapshot bytes do not match the captured project revision.",
+                code="render_snapshot_revision_mismatch",
+                recoverable=False,
+                recommended_action="report_issue",
+                details={"project_path": str(source)},
+            )
+        try:
+            descriptor = os.open(
+                snapshot.path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+        except FileExistsError as exc:
+            raise ToolError(
+                f"Render project snapshot already exists: {snapshot.path}",
+                code="render_snapshot_exists",
+                recoverable=False,
+                recommended_action="report_issue",
+                details={"path": str(snapshot.path), "job_id": job_id},
+            ) from exc
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            with suppress(OSError):
+                os.chmod(snapshot.path, source.stat().st_mode)
+            fsync_directory(snapshot.path.parent)
+        except Exception:
+            snapshot.path.unlink(missing_ok=True)
+            raise
+        return snapshot
+
+    def is_exact(self) -> bool:
+        if not self.path.is_file():
+            return False
+        digest = hashlib.sha256()
+        try:
+            with self.path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            return False
+        return digest.hexdigest() == self.revision
+
+    def require_exact(self) -> None:
+        if self.is_exact():
+            return
+        raise ToolError(
+            "The immutable render project snapshot is missing or changed.",
+            code="render_snapshot_changed",
+            recoverable=False,
+            recommended_action="report_issue",
+            details={"path": str(self.path), "job_id": self.job_id},
+        )
+
+    def cleanup_if_owned(self) -> bool:
+        if not self.is_exact():
+            return False
+        self.path.unlink(missing_ok=True)
+        fsync_directory(self.path.parent)
+        return True
 
 
 @contextmanager

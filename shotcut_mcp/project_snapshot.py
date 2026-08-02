@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +28,17 @@ _SERVICE_KIND_BY_TAG = {
     "consumer": "consumer",
     "link": "link",
 }
+
+
+@dataclass(frozen=True)
+class ProjectRenderInput:
+    """Exact project bytes and timing facts captured by one read."""
+
+    source: bytes
+    revision: str
+    fps: float
+    duration_frames: int
+    markers: list[dict[str, Any]]
 
 
 def _resource_path(document: ProjectDocument, resource: str) -> Path | None:
@@ -241,16 +253,17 @@ def project_requirements(document: ProjectDocument) -> dict[str, list[str]]:
     return {kind: sorted(names) for kind, names in required.items()}
 
 
-def project_timing(path: Path) -> dict[str, Any]:
-    """Load only the stable timing facts needed by render orchestration."""
+def load_project_render_input(path: Path) -> ProjectRenderInput:
+    """Capture exact render bytes and timing without a second live-project read."""
 
     from .project_document import ProjectDocument
 
     document = ProjectDocument.load(path)
     snapshot = build_project_snapshot(document)
-    return {
-        "revision": document.revision,
-        "fps": document.fps,
-        "duration_frames": snapshot["duration_frames"],
-        "markers": snapshot["markers"],
-    }
+    return ProjectRenderInput(
+        source=document.source,
+        revision=document.revision,
+        fps=document.fps,
+        duration_frames=int(snapshot["duration_frames"]),
+        markers=list(snapshot["markers"]),
+    )

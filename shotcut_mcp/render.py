@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import re
 import subprocess
@@ -12,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .errors import RequestCancelled, ToolError
+from .errors import ConflictError, RequestCancelled, ToolError
 from .platform import (
     creation_flags,
     discover_executables,
@@ -20,7 +21,7 @@ from .platform import (
     ensure_melt_ready,
     require_executable,
 )
-from .project_snapshot import project_timing
+from .project_snapshot import load_project_render_input
 from .protocol import cancellation_requested, report_progress
 from .render_jobs import (
     TERMINAL_STATUSES,
@@ -30,10 +31,11 @@ from .render_jobs import (
     read_job,
     read_progress,
     release_gate,
+    render_input_snapshot,
     request_cancel,
     write_job,
 )
-from .storage import OutputTransaction, process_is_alive
+from .storage import OutputTransaction, RenderInputSnapshot, process_is_alive
 
 RUNNING_JOBS: dict[str, subprocess.Popen[Any]] = {}
 _RUNNING_JOBS_LOCK = threading.Lock()
@@ -215,7 +217,6 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
             recommended_action="check_project_path_and_retry",
             details={"path": str(project_path)},
         )
-    enforce_project_resource_policy(project_path)
     overwrite = arguments.get("overwrite", False)
     if not isinstance(overwrite, bool):
         raise ToolError("overwrite must be a boolean.")
@@ -234,27 +235,39 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("marker_id cannot be combined with in_frame or out_frame.")
     if marker_id is None and (raw_in is None) != (raw_out is None):
         raise ToolError("in_frame and out_frame must be provided together.")
+    expected_revision = arguments.get("expected_revision")
+    if expected_revision is not None and (
+        not isinstance(expected_revision, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_revision) is None
+    ):
+        raise ToolError("expected_revision must be a lowercase SHA-256 digest.")
+
+    render_input = load_project_render_input(project_path)
+    project_revision = render_input.revision
+    if expected_revision is not None and expected_revision != project_revision:
+        raise ConflictError(
+            f"The project changed. Expected {expected_revision}, current "
+            f"{project_revision}.",
+            expected_revision=expected_revision,
+            current_revision=project_revision,
+        )
     in_frame: int | None = None
     out_frame: int | None = None
-    source_duration_frames: int | None = None
-    project_revision: str | None = None
+    source_duration_frames = render_input.duration_frames
     marker_text: str | None = None
+    if source_duration_frames <= 0:
+        raise ToolError(
+            "The project has no renderable frames.",
+            code="project_has_no_renderable_frames",
+            recommended_action="inspect_project_and_add_timeline_content",
+            recommended_tool="inspect_project",
+            details={"project_path": str(project_path)},
+        )
     if raw_in is not None or raw_out is not None or marker_id is not None:
-        timing = project_timing(project_path)
-        source_duration_frames = int(timing["duration_frames"])
-        project_revision = str(timing["revision"])
-        if source_duration_frames <= 0:
-            raise ToolError(
-                "The project has no renderable frames.",
-                code="project_has_no_renderable_frames",
-                recommended_action="inspect_project_and_add_timeline_content",
-                recommended_tool="inspect_project",
-                details={"project_path": str(project_path)},
-            )
         if marker_id is not None:
             markers = [
                 marker
-                for marker in timing["markers"]
+                for marker in render_input.markers
                 if marker.get("marker_id") == marker_id
             ]
             if len(markers) != 1:
@@ -297,20 +310,35 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
             raise ToolError(
                 f"out_frame must be below the project duration ({source_duration_frames})."
             )
-    total_frames = (
+    range_duration_frames = (
         out_frame - in_frame + 1
         if in_frame is not None and out_frame is not None
         else None
     )
-    report_progress(0, 3, "Preparing durable render job.")
+    total_frames = range_duration_frames or source_duration_frames
+    report_progress(0, 4, "Preparing revision-bound render job.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
-    report_progress(1, 3, "Render toolchain is ready.")
-    output = OutputTransaction.prepare(
-        output_path, overwrite=overwrite, protected_paths=(project_path,)
-    )
+    report_progress(1, 4, "Render toolchain is ready.")
     prune_jobs()
     job_id = uuid.uuid4().hex
+    snapshot = RenderInputSnapshot.create(
+        project_path,
+        job_id,
+        render_input.source,
+        project_revision,
+    )
+    try:
+        enforce_project_resource_policy(snapshot.path)
+        output = OutputTransaction.prepare(
+            output_path,
+            overwrite=overwrite,
+            protected_paths=(project_path, snapshot.path),
+        )
+    except Exception:
+        snapshot.cleanup_if_owned()
+        raise
+    report_progress(2, 4, "Immutable project snapshot prepared.")
     metadata = {
         "job_id": job_id,
         "pid": None,
@@ -319,6 +347,9 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "status": "queued",
         "return_code": None,
         "project_path": str(project_path),
+        "source_project_path": str(project_path),
+        "render_project_path": str(snapshot.path),
+        "editable_project_path": str(snapshot.path),
         "output_path": str(output_path),
         "temporary_output_path": str(output.temporary),
         "output_transaction": output.serialize(),
@@ -328,9 +359,10 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "in_frame": in_frame,
         "out_frame": out_frame,
         "total_frames": total_frames,
-        "range_duration_frames": total_frames,
+        "range_duration_frames": range_duration_frames or source_duration_frames,
         "source_duration_frames": source_duration_frames,
         "project_revision": project_revision,
+        "rendered_project_revision": project_revision,
         "marker_id": marker_id,
         "marker_text": marker_text,
         "melt_path": str(melt),
@@ -342,8 +374,13 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         "current_frame": None,
         "progress_samples": [],
     }
-    write_job(metadata)
-    report_progress(2, 3, "Render job metadata persisted.")
+    try:
+        write_job(metadata)
+    except Exception:
+        output.cleanup()
+        snapshot.cleanup_if_owned()
+        raise
+    report_progress(3, 4, "Render job metadata persisted.")
     try:
         process = subprocess.Popen(
             [sys.executable, "-m", "shotcut_mcp.render_worker", job_id],
@@ -355,6 +392,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         )
     except OSError as exc:
         output.cleanup()
+        snapshot.cleanup_if_owned()
         metadata.update(
             status="failed",
             status_note=f"Could not start the render supervisor: {exc}",
@@ -376,7 +414,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     metadata.update(pid=process.pid, worker_pid=process.pid, status="running")
     write_job(metadata)
     release_gate(job_id)
-    report_progress(3, 3, "Render supervisor started.")
+    report_progress(4, 4, "Render supervisor started.")
     return metadata
 
 
@@ -419,6 +457,65 @@ def _eta(metadata: dict[str, Any]) -> tuple[float | None, str | None, str | None
     return max(0.0, eta), confidence, "smoothed_progress_percent"
 
 
+def _cleanup_render_input(metadata: dict[str, Any]) -> None:
+    try:
+        render_input_snapshot(metadata).cleanup_if_owned()
+    except (OSError, ToolError, TypeError, ValueError):
+        return
+
+
+def _artifact_mime_type(path: Path, *, editable: bool = False) -> str:
+    if editable:
+        return "application/xml"
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or "application/octet-stream"
+
+
+def _completed_artifacts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    if metadata.get("status") != "completed":
+        return []
+    revision = metadata.get("rendered_project_revision") or metadata.get(
+        "project_revision"
+    )
+    editable_value = metadata.get("editable_project_path")
+    output_value = metadata.get("output_path")
+    if (
+        not isinstance(revision, str)
+        or not isinstance(editable_value, str)
+        or not isinstance(output_value, str)
+        or metadata.get("editable_project_verified") is not True
+    ):
+        return []
+    editable = Path(editable_value)
+    output = Path(output_value)
+    if not output.is_file() or not editable.is_file():
+        return []
+    try:
+        snapshot = render_input_snapshot(metadata)
+        if snapshot.path != editable or not snapshot.is_exact():
+            return []
+        return [
+            {
+                "kind": "rendered_media",
+                "path": str(output),
+                "uri": output.resolve().as_uri(),
+                "mime_type": _artifact_mime_type(output),
+                "size_bytes": output.stat().st_size,
+                "revision": revision,
+            },
+            {
+                "kind": "editable_project",
+                "path": str(editable),
+                "uri": editable.resolve().as_uri(),
+                "mime_type": _artifact_mime_type(editable, editable=True),
+                "size_bytes": editable.stat().st_size,
+                "revision": revision,
+            },
+        ]
+    except OSError:
+        return []
+
+
 def render_status(job_id: str) -> dict[str, Any]:
     metadata = read_job(job_id)
     with _RUNNING_JOBS_LOCK:
@@ -456,6 +553,7 @@ def render_status(job_id: str) -> dict[str, Any]:
                     OutputTransaction.deserialize(
                         metadata.get("output_transaction")
                     ).cleanup()
+                    _cleanup_render_input(metadata)
                 write_job(metadata)
         elif (
             worker_pid is None
@@ -467,6 +565,7 @@ def render_status(job_id: str) -> dict[str, Any]:
                 finished_at=time.time(),
             )
             OutputTransaction.deserialize(metadata.get("output_transaction")).cleanup()
+            _cleanup_render_input(metadata)
             write_job(metadata)
     output_path = Path(metadata["output_path"])
     progress, log_tail = read_progress(Path(metadata["log_path"]))
@@ -494,6 +593,15 @@ def render_status(job_id: str) -> dict[str, Any]:
     metadata["eta_seconds"] = eta_seconds
     metadata["eta_confidence"] = eta_confidence
     metadata["eta_basis"] = eta_basis
+    editable_value = metadata.get("editable_project_path")
+    metadata["editable_project_exists"] = (
+        isinstance(editable_value, str) and Path(editable_value).is_file()
+    )
+    metadata["rendered_project_revision"] = metadata.get(
+        "rendered_project_revision"
+    ) or metadata.get("project_revision")
+    metadata["artifacts"] = _completed_artifacts(metadata)
+    metadata["delivery_complete"] = len(metadata["artifacts"]) == 2
     return metadata
 
 

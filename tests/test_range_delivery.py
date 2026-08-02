@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,7 @@ from unittest.mock import patch
 
 from shotcut_mcp import render as render_module
 from shotcut_mcp import render_worker
-from shotcut_mcp.errors import ToolError
+from shotcut_mcp.errors import ConflictError, ToolError
 from shotcut_mcp.project import create_project, edit_project, export_marker_chapters
 from shotcut_mcp.storage import OutputTransaction
 
@@ -21,9 +22,20 @@ class RangeRenderAndChapterTests(unittest.TestCase):
         fake_process = SimpleNamespace(pid=4321)
         fake_thread = SimpleNamespace(start=lambda: None)
         job_directory = Path(str(arguments["project_path"])).parent / "render-jobs"
+        project_path = Path(str(arguments["project_path"]))
+        render_input = SimpleNamespace(
+            source=project_path.read_bytes(),
+            revision=timing["revision"],
+            fps=timing.get("fps", 30.0),
+            duration_frames=timing["duration_frames"],
+            markers=timing["markers"],
+        )
         with (
             patch("shotcut_mcp.render_jobs.JOB_DIR", job_directory),
-            patch("shotcut_mcp.render.project_timing", return_value=timing),
+            patch(
+                "shotcut_mcp.render.load_project_render_input",
+                return_value=render_input,
+            ),
             patch(
                 "shotcut_mcp.render.discover_executables",
                 return_value=SimpleNamespace(melt=Path("melt")),
@@ -42,9 +54,10 @@ class RangeRenderAndChapterTests(unittest.TestCase):
             root = Path(directory)
             project = root / "project.mlt"
             project.write_text("<mlt/>\n", encoding="utf-8")
+            revision = hashlib.sha256(project.read_bytes()).hexdigest()
             timing = {
                 "duration_frames": 100,
-                "revision": "a" * 64,
+                "revision": revision,
                 "markers": [
                     {
                         "marker_id": "7",
@@ -65,8 +78,15 @@ class RangeRenderAndChapterTests(unittest.TestCase):
             self.assertEqual((job["in_frame"], job["out_frame"]), (20, 30))
             self.assertEqual(job["range_duration_frames"], 11)
             self.assertEqual(job["marker_text"], "Scene")
+            self.assertEqual(job["rendered_project_revision"], revision)
+            self.assertNotEqual(job["editable_project_path"], str(project))
+            self.assertEqual(
+                Path(str(job["editable_project_path"])).read_bytes(),
+                project.read_bytes(),
+            )
             output = OutputTransaction.deserialize(job["output_transaction"])
             command = render_worker._command(job, output)
+            self.assertEqual(command[1], job["editable_project_path"])
             self.assertEqual(command[2:5], ["in=20", "out=30", "-progress2"])
 
             with self.assertRaisesRegex(ToolError, "provided together"):
@@ -78,6 +98,43 @@ class RangeRenderAndChapterTests(unittest.TestCase):
                     },
                     timing,
                 )
+
+    def test_full_render_captures_revision_and_rejects_a_stale_expectation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project.mlt"
+            project.write_text("<mlt/>\n", encoding="utf-8")
+            revision = hashlib.sha256(project.read_bytes()).hexdigest()
+            timing = {
+                "duration_frames": 90,
+                "revision": revision,
+                "markers": [],
+            }
+            job = self._start(
+                {
+                    "project_path": str(project),
+                    "output_path": str(root / "full.mp4"),
+                    "expected_revision": revision,
+                },
+                timing,
+            )
+            self.assertEqual(job["rendered_project_revision"], revision)
+            self.assertEqual(job["total_frames"], 90)
+
+            with self.assertRaises(ConflictError) as caught:
+                self._start(
+                    {
+                        "project_path": str(project),
+                        "output_path": str(root / "stale.mp4"),
+                        "expected_revision": "f" * 64,
+                    },
+                    timing,
+                )
+            self.assertEqual(caught.exception.code, "project_revision_conflict")
+            snapshots = list(root.glob(f"{project.stem}.render-*{project.suffix}"))
+            self.assertEqual(len(snapshots), 1)
 
     def test_chapter_export_matches_shotcut_text_format(self) -> None:
         with (

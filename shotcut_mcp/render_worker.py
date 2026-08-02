@@ -22,6 +22,7 @@ from .render_jobs import (
     gate_path,
     log_path,
     read_job,
+    render_input_snapshot,
     validate_job_id,
     write_job,
 )
@@ -49,7 +50,7 @@ def _command(metadata: dict[str, Any], output: OutputTransaction) -> list[str]:
         ]
     return [
         str(metadata["melt_path"]),
-        str(metadata["project_path"]),
+        str(metadata["render_project_path"]),
         *frame_range,
         "-progress2",
         "-consumer",
@@ -139,6 +140,8 @@ def run_worker(job_id: str) -> int:
 
     metadata = read_job(job_id)
     output = OutputTransaction.deserialize(metadata.get("output_transaction"))
+    snapshot = render_input_snapshot(metadata)
+    snapshot.require_exact()
     metadata.update(worker_pid=os.getpid(), status="running")
     write_job(metadata)
     process: subprocess.Popen[Any] | None = None
@@ -148,6 +151,7 @@ def run_worker(job_id: str) -> int:
                 status="cancelled", return_code=None, finished_at=time.time()
             )
             output.cleanup()
+            snapshot.cleanup_if_owned()
             write_job(metadata)
             return 0
 
@@ -233,13 +237,16 @@ def run_worker(job_id: str) -> int:
         if cancel_requested(job_id):
             metadata["status"] = "cancelled"
             output.cleanup()
+            snapshot.cleanup_if_owned()
         elif return_code != 0 or not output.temporary.is_file():
             metadata["status"] = "failed"
             metadata["status_note"] = (
                 f"Melt exited with code {return_code}; no output was promoted."
             )
             output.cleanup()
+            snapshot.cleanup_if_owned()
         else:
+            snapshot.require_exact()
             try:
                 output.commit()
             except (OSError, ToolError) as exc:
@@ -252,12 +259,15 @@ def run_worker(job_id: str) -> int:
                 metadata["status"] = "completed"
                 metadata["progress_percent"] = 100
                 metadata["output_size_bytes"] = output.target.stat().st_size
+                metadata["editable_project_size_bytes"] = snapshot.path.stat().st_size
+                metadata["editable_project_verified"] = True
         write_job(metadata)
         return 0 if metadata["status"] == "completed" else 1
     except Exception as exc:
         if process is not None:
             _stop_renderer(process)
         output.cleanup()
+        snapshot.cleanup_if_owned()
         metadata.update(
             status="failed",
             status_note=f"Render supervisor failed: {exc}",
@@ -280,6 +290,8 @@ def _record_unhandled_failure(job_id: str, exc: Exception) -> None:
         return
     with suppress(OSError, ToolError, TypeError, ValueError):
         OutputTransaction.deserialize(metadata.get("output_transaction")).cleanup()
+    with suppress(OSError, ToolError, TypeError, ValueError):
+        render_input_snapshot(metadata).cleanup_if_owned()
     now = time.time()
     metadata.update(
         status="failed",

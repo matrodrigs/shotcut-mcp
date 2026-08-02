@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -281,7 +282,19 @@ class RenderLifecycleTests(unittest.TestCase):
     def _start_with_python_renderer(
         renderer_path: Path, output_path: Path
     ) -> dict[str, object]:
+        source = renderer_path.read_bytes()
+        render_input = SimpleNamespace(
+            source=source,
+            revision=hashlib.sha256(source).hexdigest(),
+            fps=30.0,
+            duration_frames=100,
+            markers=[],
+        )
         with (
+            patch(
+                "shotcut_mcp.render.load_project_render_input",
+                return_value=render_input,
+            ),
             patch(
                 "shotcut_mcp.render.discover_executables",
                 return_value=SimpleNamespace(melt=Path(sys.executable)),
@@ -321,6 +334,22 @@ class RenderLifecycleTests(unittest.TestCase):
                     output_path.is_file(),
                     "the worker must promote output without a render_status request",
                 )
+                status = render_status(str(job["job_id"]))
+                self.assertEqual(
+                    status["rendered_project_revision"], job["project_revision"]
+                )
+                self.assertTrue(status["delivery_complete"])
+                self.assertEqual(
+                    [item["kind"] for item in status["artifacts"]],
+                    ["rendered_media", "editable_project"],
+                )
+                editable = Path(str(status["editable_project_path"]))
+                self.assertEqual(editable.read_bytes(), renderer_path.read_bytes())
+
+                editable.write_bytes(b"user-modified-project")
+                changed = render_status(str(job["job_id"]))
+                self.assertFalse(changed["delivery_complete"])
+                self.assertEqual(changed["artifacts"], [])
             finally:
                 if worker.poll() is None:
                     worker.wait(timeout=15)
@@ -370,10 +399,56 @@ class RenderLifecycleTests(unittest.TestCase):
 
                 self.assertEqual(cancelled["status"], "cancelled")
                 self.assertFalse(output_path.exists())
+                self.assertFalse(Path(str(job["editable_project_path"])).exists())
             finally:
                 if worker.poll() is None:
                     worker.terminate()
                     worker.wait(timeout=5)
+
+    def test_failed_render_removes_its_generated_project_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer_path = Path(directory) / "failed_renderer.py"
+            output_path = Path(directory) / "output.mp4"
+            renderer_path.write_text("raise SystemExit(3)\n", encoding="utf-8")
+            job = self._start_with_python_renderer(renderer_path, output_path)
+            worker = render_module.RUNNING_JOBS[str(job["job_id"])]
+            try:
+                worker.wait(timeout=15)
+                status = self._wait_for_status(str(job["job_id"]), "failed")
+                self.assertEqual(status["status"], "failed")
+                self.assertFalse(Path(str(job["editable_project_path"])).exists())
+                self.assertFalse(status["delivery_complete"])
+                self.assertEqual(status["artifacts"], [])
+            finally:
+                if worker.poll() is None:
+                    worker.wait(timeout=15)
+
+    def test_promotion_conflict_keeps_snapshot_and_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer_path = Path(directory) / "slow_success.py"
+            output_path = Path(directory) / "output.mp4"
+            renderer_path.write_text(
+                "from pathlib import Path\n"
+                "import sys, time\n"
+                "time.sleep(0.5)\n"
+                "target = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\n"
+                "Path(target).write_bytes(b'rendered')\n",
+                encoding="utf-8",
+            )
+            job = self._start_with_python_renderer(renderer_path, output_path)
+            worker = render_module.RUNNING_JOBS[str(job["job_id"])]
+            output_path.write_bytes(b"concurrent-output")
+            try:
+                worker.wait(timeout=15)
+                status = self._wait_for_status(str(job["job_id"]), "promotion_failed")
+                self.assertEqual(status["status"], "promotion_failed")
+                self.assertEqual(output_path.read_bytes(), b"concurrent-output")
+                self.assertTrue(Path(str(job["editable_project_path"])).is_file())
+                self.assertFalse(status["delivery_complete"])
+                self.assertEqual(status["artifacts"], [])
+            finally:
+                if worker.poll() is None:
+                    worker.wait(timeout=15)
 
 
 if __name__ == "__main__":

@@ -183,6 +183,14 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed", result.get("log_tail"))
             self.assertTrue(result["output_exists"])
             self.assertGreater(result["output_size_bytes"], 1000)
+            self.assertTrue(result["delivery_complete"])
+            self.assertEqual(result["rendered_project_revision"], edited["revision"])
+            self.assertEqual(
+                [artifact["kind"] for artifact in result["artifacts"]],
+                ["rendered_media", "editable_project"],
+            )
+            editable = Path(result["editable_project_path"])
+            self.assertEqual(editable.read_bytes(), Path(edited["path"]).read_bytes())
 
     def test_timewarp_timeremap_and_contact_sheet_validate_with_real_mlt(self) -> None:
         executables = discover_executables()
