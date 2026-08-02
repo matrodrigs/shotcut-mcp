@@ -1,6 +1,6 @@
 """Shotcut MCP package."""
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 # Keep the validated editor/runtime contract here so project creation,
 # diagnostics, capabilities, and release checks cannot drift independently.
