@@ -16,6 +16,11 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Render previews and exports to protected sibling files and promote them atomically only if the
   original target has not changed.
 - Supervise renders outside the MCP stdio process so completion and cancellation survive restart.
+- Never infer export authorization from editing, validation, preview, or visual-review intent. Treat
+  an explicit export request in the active task as approval; otherwise present project, output,
+  preset, range/duration, and overwrite behavior and wait for approval without asking twice.
+- After inspection and committed edits, guide callers to surface concise result summaries and a
+  managed contact sheet or exact preview when the changes are visual.
 - Return opaque `item_ref` values for clip and transition occurrences, scope them to the inspected
   project revision, and resolve them against item identity throughout one sequential edit batch.
   Preserve legacy track/index selectors and support bounded transaction-local aliases for newly
@@ -73,6 +78,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Normalize source/project color metadata and own SDR/HLG/PQ project annotations as one semantic edit.
 - Smoke-test hardware encoders instead of trusting FFmpeg's advertised encoder list.
 - Persist bounded progress samples, elapsed time, ETA inputs, terminal metrics, and paginated history.
+- Guide callers to poll durable render status to a terminal state and surface only meaningful
+  status, progress, or ETA changes instead of unchanged polls or raw log spam.
 - Diagnose missing media with bounded Shotcut-hash/basename search and require an explicit relink edit.
 - Analyze media quality with independently bounded FFmpeg silence, black, freeze, interlace,
   and EBU R128 loudness checks, returning partial structured results when a filter or stream is
@@ -86,6 +93,12 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Render exactly one of the complete project, one explicit inclusive frame range, or one non-empty
   Shotcut range marker while preserving the durable render-job lifecycle. Accept at most 50
   scalar advanced consumer properties and keep the default safe single-file allowlist.
+- Capture exact project bytes and SHA-256 revision for every render mode, accept an optional
+  `expected_revision`, and make the worker consume only a uniquely named sibling snapshot so
+  relative resources retain their original base and live-project edits cannot change the job.
+- Retain the verified successful snapshot as the exact editable project artifact. Return it with
+  the rendered media in structured `artifacts`; add `resource_link` content only for MCP
+  `2025-06-18` and `2025-11-25`, while legacy revisions receive both paths in text content.
 - Export point markers in Shotcut's chapter text format, with opt-in range markers and marker-color
   filtering, through the same atomic output protection used by other generated files.
 - Emit strictly increasing request-scoped MCP progress notifications only when the caller provides

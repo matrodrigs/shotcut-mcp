@@ -5,6 +5,18 @@
 ### Changed
 
 - Make the MCPB Python command select the correct executable name on Windows, macOS, and Linux.
+- Require explicit export intent or a user-approved render summary in agent guidance, surface
+  concise edit/preview outcomes, and monitor only meaningful durable progress changes.
+
+### Added
+
+- Return completed rendered media and the exact revision-bound editable Shotcut project as
+  structured artifacts, with MCP resource links on supported protocol revisions.
+
+### Fixed
+
+- Render every full, range, and marker job from an immutable byte-for-byte sibling project
+  snapshot so concurrent live-project edits cannot change the render or its editable delivery.
 
 ## 1.5.0 (2026-07-27)
 

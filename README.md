@@ -208,13 +208,17 @@ marker named "Trailer" with the H.264 web preset.
 Describe the result you want in ordinary language. The MCP client receives tool-specific guidance
 at runtime, so you do not need to know individual tool names or request schemas.
 
-1. Start by asking the client to check that Shotcut MCP and the local media tools are ready.
-2. Share the saved `.mlt` project and source media you want to use, then describe the intended edit.
-3. For cleanup work, ask for measurements such as silence, black frames, freezes, interlacing, or
-   loudness before deciding what to change.
-4. For a large or sensitive edit, ask to review the proposed changes before they are applied.
-5. Review representative frames or a contact sheet, and request adjustments if needed.
-6. Export the full project or a named range, then ask the client to monitor the render to completion.
+1. Begin with a readiness check for Shotcut MCP and the local media tools.
+2. Provide the saved `.mlt` project and source media, then describe the result you want.
+3. For cleanup work, review measurements such as silence, black frames, freezes, interlacing, or
+   loudness before choosing which changes to apply.
+4. For a large or sensitive edit, review the proposed changes before applying them.
+5. After each visual edit batch, you receive a concise change summary and representative frames or
+   a contact sheet, making it easy to request another adjustment.
+6. When the edit is ready, request an export. If export was not already explicit, confirm the
+   project, output, preset, range or duration, and overwrite behavior first. During rendering, you
+   receive meaningful progress updates; on completion, you receive both the video and its exact
+   editable project.
 
 Let an MCP edit finish before saving the same project from the Shotcut GUI. After manual adjustments,
 save in Shotcut and ask the client to inspect the project again before continuing.
@@ -244,7 +248,9 @@ Every project edit uses the following safeguards:
 
 Existing preview and render outputs are also protected: output is written to a temporary sibling,
 the target is checked again for concurrent changes, and promotion is atomic. A dedicated render
-supervisor owns completion and cancellation independently of the MCP stdio process.
+supervisor owns completion and cancellation independently of the MCP stdio process. Every render
+uses an immutable byte-for-byte sibling project snapshot, so later edits to the live project cannot
+change the running job; the successful snapshot is retained as the exact editable delivery artifact.
 
 ## MCP tools
 
@@ -263,7 +269,7 @@ integrators, and anyone who wants to understand the available tool surface.
 | `diagnose_missing_media` | Search bounded roots by Shotcut hash/basename and optionally render a visual candidate sheet |
 | `plan_project_edit` | Validate stable-reference operations and preview their snapshot/XML diff without changing the project |
 | `create_project` | Create a Shotcut-compatible multitrack MLT project |
-| `edit_project` | Apply up to 500 timeline operations using stable item references and aliases in one validated transaction |
+| `edit_project` | Apply up to 500 timeline operations using stable item references and aliases in one validated transaction, then summarize and visually review relevant changes |
 | `list_mlt_services` | List locally available MLT filters, transitions, producers, consumers, or links |
 | `describe_mlt_service` | Return metadata for one installed MLT service |
 | `validate_project` | Report first-frame Melt `valid` status and dependency-complete `ready` status |
@@ -272,9 +278,9 @@ integrators, and anyone who wants to understand the available tool surface.
 | `render_contact_sheet` | Render exact or evenly sampled frames into one atomic review image |
 | `detect_hardware_encoders` | Distinguish built, advertised, and smoke-tested FFmpeg hardware encoders |
 | `open_in_shotcut` | Open a project or media path in the Shotcut GUI |
-| `start_render` | Start a durable full-project, inclusive-frame-range, or range-marker render |
+| `start_render` | After explicit export intent or approval, snapshot one revision and start a durable full-project, range, or marker render |
 | `export_marker_chapters` | Atomically export point markers as Shotcut chapter text |
-| `render_status` | Return render state, progress, output information, and log tail |
+| `render_status` | Monitor meaningful progress to a terminal state and return media plus exact editable-project artifacts on completion |
 | `list_render_jobs` | Return bounded newest-first render history with cursor pagination |
 | `cancel_render` | Cancel a supervised render, including after an MCP server restart |
 | `list_project_backups` | List retained project backups and revisions |
@@ -294,9 +300,18 @@ for request parameters.
 | Intermediate | `prores`, `dnxhd` |
 | Audio | `audio-flac`, `audio-mp3` |
 
-Ask the client to render the complete project, a precise frame range, or a named range marker.
-Renders run under a durable supervisor, so progress can still be checked or cancellation requested
-after the MCP client restarts.
+Ask the client to render the complete project, a precise frame range, or a named range marker. If
+export was not already explicit, the client should first show the project, output, preset,
+range/duration, and overwrite behavior and wait for approval; it should not ask twice after an
+explicit export request. Renders run under a durable supervisor, so progress can still be checked
+or cancellation requested after the MCP client restarts. Clients should report material status,
+progress, or ETA changes rather than unchanged polls or raw logs.
+
+`start_render` accepts the inspected `expected_revision` and captures the saved project once into a
+sibling `<project>.render-<job_id>.mlt` file before the worker starts. Melt reads only this immutable
+snapshot. When `render_status` reaches `completed`, modern MCP clients receive resource links for
+both the rendered media and that exact editable project; older clients receive both canonical paths
+and artifact metadata in text.
 
 HDR presets use verified 10-bit software encoders; codec and hardware availability still depend on
 the local build. Preview and final outputs are written transactionally and replace their destination
