@@ -155,7 +155,7 @@ class ReleaseBundleTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            readme = (
+            reference = (
                 "# Fixture\n\n"
                 "## MCP tools\n\n"
                 "| Tool | Purpose |\n"
@@ -163,7 +163,8 @@ class ReleaseBundleTests(unittest.TestCase):
                 "| `first_tool` | Concise human summary |\n"
                 "| `second_tool` | Another human summary |\n"
             )
-            (root / "README.md").write_text(readme, encoding="utf-8")
+            reference_path = root / "docs" / "reference.md"
+            reference_path.write_text(reference, encoding="utf-8")
             (root / "docs" / "index.html").write_text(
                 "See all 1 MCP tools\n",
                 encoding="utf-8",
@@ -181,13 +182,41 @@ class ReleaseBundleTests(unittest.TestCase):
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["tools"], entries)
             self.assertIs(manifest["tools_generated"], False)
-            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), readme)
+            self.assertEqual(reference_path.read_text(encoding="utf-8"), reference)
             self.assertIn(
                 "See all 2 MCP tools",
                 (root / "docs" / "index.html").read_text(encoding="utf-8"),
             )
             validate_tool_contracts(root, entries)
             self.assertEqual(sync_tool_contracts(root, entries), ())
+
+    def test_tool_reference_rejects_missing_extra_and_duplicate_tools(self) -> None:
+        entries = runtime_tool_entries()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            for relative in ("manifest.json", "docs/index.html", "docs/reference.md"):
+                shutil.copy2(ROOT / relative, root / relative)
+            reference_path = root / "docs" / "reference.md"
+            reference = reference_path.read_text(encoding="utf-8")
+            row = next(
+                line
+                for line in reference.splitlines()
+                if line.startswith("| `shotcut_status` |")
+            )
+            cases = (
+                (reference.replace(row, ""), r"missing=\['shotcut_status'\]"),
+                (
+                    reference.replace(row, row + "\n| `unknown_tool` | Unknown |"),
+                    r"extra=\['unknown_tool'\]",
+                ),
+                (reference.replace(row, row + "\n" + row), "duplicate names"),
+            )
+            for source, message in cases:
+                with self.subTest(message=message):
+                    reference_path.write_text(source, encoding="utf-8")
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        validate_tool_contracts(root, entries)
 
     def test_client_adapters_match_runtime_release_and_entry_point(self) -> None:
         validate_client_adapters(ROOT, self.version)

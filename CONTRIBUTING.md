@@ -20,7 +20,8 @@ boundaries and verified behavior.
 - Tests must use public interfaces, include literal expected outcomes, and be named for their
   domain seam (`project`, `protocol`, `platform`, `media`, or `render`) rather than release age.
 - Add a failing regression test before each bug fix and keep real Shotcut integration opt-in.
-- After changing the runtime tool catalog, keep the README table's concise human summaries current,
+- After changing the runtime tool catalog, keep the concise human summaries in the
+  [tool reference](docs/reference.md#mcp-tools) current,
   then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical
   `manifest.json` descriptions and website tool counts.
 - Install the pinned development tools from `requirements-dev.txt`, then run

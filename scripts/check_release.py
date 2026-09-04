@@ -184,19 +184,19 @@ def _replace_site_count(source: str, count: int) -> str:
     return source
 
 
-def _readme_tool_names(source: str) -> set[str]:
+def _reference_tool_names(source: str) -> set[str]:
     """Read tool names from the human-facing MCP tool table."""
 
     marker = "## MCP tools"
     if marker not in source:
-        raise RuntimeError("README.md is missing the MCP tools section")
+        raise RuntimeError("docs/reference.md is missing the MCP tools section")
     section = source.split(marker, 1)[1].split("\n## ", 1)[0]
     documented = re.findall(r"^\| `([a-z][a-z0-9_]*)` \|", section, re.MULTILINE)
     if not documented:
-        raise RuntimeError("README.md MCP tools table is empty")
+        raise RuntimeError("docs/reference.md MCP tools table is empty")
     names = set(documented)
     if len(names) != len(documented):
-        raise RuntimeError("README.md MCP tools table contains duplicate names")
+        raise RuntimeError("docs/reference.md MCP tools table contains duplicate names")
     return names
 
 
@@ -248,7 +248,7 @@ def _catalog_difference(
 
 
 def validate_tool_contracts(root: Path, entries: list[dict[str, str]]) -> None:
-    """Validate generated projections and the README's editorial tool coverage."""
+    """Validate generated projections and the reference's editorial tool coverage."""
 
     runtime_catalog = _tool_catalog(entries, "runtime")
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
@@ -266,13 +266,15 @@ def validate_tool_contracts(root: Path, entries: list[dict[str, str]]) -> None:
             "manifest.json tools_generated must be false for the static tool catalog"
         )
 
-    readme_names = _readme_tool_names((root / "README.md").read_text(encoding="utf-8"))
+    reference_names = _reference_tool_names(
+        (root / "docs" / "reference.md").read_text(encoding="utf-8")
+    )
     runtime_names = set(runtime_catalog)
-    if runtime_names != readme_names:
-        missing = sorted(runtime_names - readme_names)
-        extra = sorted(readme_names - runtime_names)
+    if runtime_names != reference_names:
+        missing = sorted(runtime_names - reference_names)
+        extra = sorted(reference_names - runtime_names)
         raise RuntimeError(
-            f"README tool catalog mismatch; missing={missing}, extra={extra}"
+            f"docs/reference.md tool catalog mismatch; missing={missing}, extra={extra}"
         )
 
     site = (root / "docs" / "index.html").read_text(encoding="utf-8")
