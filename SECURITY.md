@@ -23,10 +23,10 @@ the MCP lock.
 | Threat | Mitigation |
 | --- | --- |
 | Path traversal or access outside the intended workspace | Canonical resolution plus optional `SHOTCUT_MCP_ALLOWED_ROOTS` and absolute-path enforcement for every user-controlled data path |
-| Network resources embedded in MLT XML | Denied by default and checked across recognized resource properties |
+| Network resources embedded in MLT XML | Denied by default across recognized properties, including remote `file:` authorities and decoded UNC paths |
 | Shell or argument injection | Shotcut, Melt, FFmpeg, and FFprobe run from argument lists without a shell |
 | Unsafe render sidecars or multi-file consumers | Consumer properties use a single-file-safe allowlist unless an administrator opts in |
-| Lost updates from concurrent writers | Revision checks, project locks, post-validation revision recheck, and output identity recheck |
+| Lost updates from concurrent writers | Revision checks, project locks, destination-absence checks for creation, post-validation revision recheck, and output identity recheck |
 | Partial or invalid project replacement | Sibling temporary file, complete MLT validation, `fsync` where supported, isolated backup, and atomic replace |
 | Overwriting existing output | Explicit overwrite authorization plus protected temporary output and atomic promotion |
 | Shared-producer mutation affecting unrelated clips | Clone a shared producer before a clip-local edit |
@@ -38,6 +38,11 @@ results are not duplicated into the text fallback on modern protocol versions. A
 that exceeds the project-size limit is rejected before backup or replacement, so the server never
 writes a project it would refuse to reopen. The default is 128 MiB;
 `SHOTCUT_MCP_MAX_PROJECT_BYTES` can select a limit between 1 MiB and 512 MiB.
+
+Render logs are bounded on disk and during progress parsing. An incomplete progress line is
+limited to 16,384 characters; oversized lines are discarded through the next delimiter so
+untrusted process output cannot accumulate indefinitely in memory. Malformed cancellation
+notifications are ignored, and legacy batches share the normal request limits and cancellation.
 
 ## Administrator hardening
 

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Fixed
+
+- Preserve destinations created concurrently with `create_project(overwrite=False)`, including
+  at atomic publication; decide backup creation under lock for authorized replacements.
+- Preserve surviving clip references across transition creation/removal, and allow updating
+  a track while retaining its current name without accepting real name collisions.
+- Preserve original source bounds when replacing speed maps, including after trim/split,
+  retain requested speed precision, and match MLT's per-frame integration and mapping origin.
+- Ignore malformed cancellation notifications without ending the MCP session. Schedule legacy
+  batch calls through the same bounded cancellation path as individual calls.
+- Bound incomplete render-progress lines in memory and resume parsing after oversized lines.
+- Apply network policy to decoded remote `file:` URIs and UNC paths with mixed separators.
+
+### Changed
+
+- Reject speed-map replacement when legacy or externally modified maps lack trustworthy source
+  bounds. Reject reverse maps landing on source frame zero, where tested MLT integration can
+  return an invalid image; retain constant timewarp as the constant-reversal alternative.
+- Document MCPB installation and updates, diagnostic/recovery routes, compatibility coverage,
+  and the required Windows integration CI gate separately from opt-in local integration.
+- Guide editing models to make creative choices within the user's brief, discover effects,
+  create projects from a destination folder, and reuse existing authorization for the same action.
+
 ## 1.5.2 (2026-09-05)
 
 ### Fixed

@@ -19,7 +19,8 @@ boundaries and verified behavior.
 - Return recoverable user/input problems as tool errors without terminating the MCP server.
 - Tests must use public interfaces, include literal expected outcomes, and be named for their
   domain seam (`project`, `protocol`, `platform`, `media`, or `render`) rather than release age.
-- Add a failing regression test before each bug fix and keep real Shotcut integration opt-in.
+- Add a failing regression test before each bug fix. Real Shotcut integration is opt-in locally
+  and required by the GitHub Actions CI gate; it must use temporary projects and outputs.
 - After changing the runtime tool catalog, keep the concise human summaries in the
   [tool reference](docs/reference.md#mcp-tools) current,
   then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical

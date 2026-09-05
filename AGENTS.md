@@ -33,12 +33,16 @@ project_document -> media, mlt_xml
 project_snapshot -> project_document, mlt_xml, path_policy
 render -> platform, project_snapshot, protocol, render_jobs, storage
 render_worker -> platform, render_jobs, storage
+render_jobs -> storage
 platform -> media, path_policy, processes, protocol, storage
 media -> processes, protocol
 path_policy -> mlt_xml
 processes -> path_policy, protocol
 storage -> processes
 ```
+
+Runtime modules may also import the shared `errors` module. This graph describes
+package dependencies; standard-library imports are omitted.
 
 Module ownership:
 
@@ -146,6 +150,15 @@ requiring the repository README.
 - Prefer improving the existing deep tool interface and its guidance over adding shallow
   aliases for natural-language requests. Add a new tool only when it provides distinct
   behavior or materially reduces what callers must understand.
+- Give the editing model room to make ordinary creative decisions within the user's brief.
+  Examples are starting points, not mandatory recipes. Ask for missing inputs or decisions
+  that materially change intent; existing authorization remains sufficient for the same action.
+  Keep explicit overwrite, recovery, and export boundaries intact.
+- Guide responses toward the visual/audio result in the user's language. Claims about
+  existing footage must be grounded in inspected media or previews; distinguish proposed
+  choices from verified results and expose XML/property details when they help the user.
+- Include both creation and existing-project workflows in runtime guidance. For a new project,
+  a supplied destination folder is sufficient to choose a descriptive, unused filename.
 - Add or update tests that catch drift between handlers, schemas, capability examples,
   manifest descriptions, protocol versions, and the intended agent workflows. Test the
   observable MCP interface rather than private catalog construction details.
@@ -176,7 +189,9 @@ Remove-Item Env:SHOTCUT_MCP_INTEGRATION
 ```
 
 The ordinary suite must remain independent of a local Shotcut installation. Real Shotcut
-integration stays opt-in and must use temporary projects and outputs.
+integration is opt-in locally and must use temporary projects and outputs. The GitHub
+Actions CI gate requires the real Windows integration workflow as well as the ordinary
+cross-platform suite and static checks.
 
 ## Protocol and release compatibility
 
