@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.build_release import validate_python_requirement  # noqa: E402
+
 SERVER_SCRIPT = "scripts/shotcut_mcp_server.py"
 COMMON_PLUGIN_FIELDS = (
     "name",
@@ -327,6 +332,7 @@ def validate_client_adapters(root: Path, version: str) -> None:
     claude_marketplace = _read_json_object(root / ".claude-plugin" / "marketplace.json")
     project_config = _read_json_object(root / ".mcp.json")
     portable_manifest = _read_json_object(root / "manifest.json")
+    validate_python_requirement(portable_manifest)
 
     for field in COMMON_PLUGIN_FIELDS:
         if codex_manifest.get(field) != claude_manifest.get(field):

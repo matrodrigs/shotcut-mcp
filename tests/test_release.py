@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.build_release import ROOT, build_release, package_members
+from scripts.build_release import ROOT, build_release, package_members, verify_bundle
 from scripts.check_release import (
     runtime_compatibility_contract,
     runtime_tool_entries,
@@ -259,6 +259,46 @@ class ReleaseBundleTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "MCPB launcher"):
                 validate_client_adapters(root, self.version)
+
+    def test_mcpb_python_requirement_is_a_semver_range(self) -> None:
+        manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["compatibility"]["runtimes"], {"python": ">=3.10.0 <4.0.0"}
+        )
+
+    def test_release_checks_reject_invalid_python_requirements(self) -> None:
+        for requirement in (">=3.10,<4.0", ">=3.9.0 <4.0.0", ">=3.10.0", None):
+            with (
+                self.subTest(requirement=requirement),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                self._copy_client_adapter_fixture(root)
+                manifest_path = root / "manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["compatibility"]["runtimes"]["python"] = requirement
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "Python runtime requirement"):
+                    validate_client_adapters(root, self.version)
+
+    def test_bundle_verification_rejects_invalid_python_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = build_release(self.version, root)
+            modified = root / "invalid.mcpb"
+            with (
+                zipfile.ZipFile(result["artifact"]) as source,
+                zipfile.ZipFile(modified, "w") as target,
+            ):
+                for name in source.namelist():
+                    content = source.read(name)
+                    if name == "manifest.json":
+                        manifest = json.loads(content)
+                        manifest["compatibility"]["runtimes"]["python"] = ">=3.10,<4.0"
+                        content = json.dumps(manifest).encode("utf-8")
+                    target.writestr(name, content)
+            with self.assertRaisesRegex(RuntimeError, "Python runtime requirement"):
+                verify_bundle(modified, self.version)
 
     def test_client_adapter_validation_bounds_codex_default_prompts(self) -> None:
         invalid_prompts = (

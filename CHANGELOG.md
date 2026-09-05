@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Use a semver-compatible Python requirement in the MCPB manifest so supported Python
+  installations pass Claude Desktop's installation check; reject invalid requirements
+  during source and packaged-artifact release validation (#2).
+
 ## 1.5.1 (2026-08-02)
 
 ### Changed
