@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from shotcut_mcp import project as project_module
 from shotcut_mcp import project_document as project_document_module
 from shotcut_mcp.errors import ConflictError, ToolError
 from shotcut_mcp.project import (
@@ -15,9 +18,80 @@ from shotcut_mcp.project import (
     plan_project_edit,
     restore_backup,
 )
+from shotcut_mcp.storage import publish_new_file
 
 
 class ProjectTransactionTests(unittest.TestCase):
+    def test_atomic_creation_refuses_an_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "candidate.mlt"
+            target = Path(directory) / "target.mlt"
+            candidate.write_bytes(b"validated candidate")
+            target.write_bytes(b"another writer")
+            with self.assertRaises(ConflictError):
+                publish_new_file(candidate, target)
+            self.assertEqual(target.read_bytes(), b"another writer")
+            self.assertEqual(candidate.read_bytes(), b"validated candidate")
+            new_target = Path(directory) / "new.mlt"
+            publish_new_file(candidate, new_target)
+            self.assertEqual(new_target.read_bytes(), b"validated candidate")
+
+    def test_authorized_creation_backs_up_a_target_that_appears_before_lock(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "project.mlt"
+            external = b'<mlt producer="another-writer"/>'
+            real_lock = project_module.project_lock
+
+            @contextmanager
+            def concurrent_creation(target: Path) -> Iterator[None]:
+                target.write_bytes(external)
+                with real_lock(target):
+                    yield
+
+            with (
+                patch("shotcut_mcp.project.project_lock", concurrent_creation),
+                patch(
+                    "shotcut_mcp.project.validate_project_file",
+                    return_value={"valid": True},
+                ),
+            ):
+                created = create_project({"project_path": str(path), "overwrite": True})
+            self.assertIsNotNone(created["backup_path"])
+            self.assertEqual(Path(created["backup_path"]).read_bytes(), external)
+
+    def test_create_preserves_a_target_created_during_media_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "project.mlt"
+            media = Path(directory) / "source.mp4"
+            media.touch()
+            external = b'<mlt producer="another-writer"/>'
+
+            def probe(_path: Path) -> dict[str, object]:
+                path.write_bytes(external)
+                return {"format": {"duration": "10"}, "streams": []}
+
+            with (
+                patch(
+                    "shotcut_mcp.project_document.probe_media_raw", side_effect=probe
+                ),
+                patch(
+                    "shotcut_mcp.project.validate_project_file",
+                    return_value={"valid": True},
+                ),
+                self.assertRaises(ToolError),
+            ):
+                create_project(
+                    {
+                        "project_path": str(path),
+                        "overwrite": False,
+                        "clips": [{"path": str(media)}],
+                    }
+                )
+            self.assertEqual(path.read_bytes(), external)
+            self.assertEqual(list_backups(path)["backup_count"], 0)
+
     def test_default_project_size_limit_is_128_mib(self) -> None:
         self.assertEqual(
             project_document_module.MAX_PROJECT_BYTES,

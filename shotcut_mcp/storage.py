@@ -58,6 +58,32 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def publish_new_file(temporary: Path, target: Path) -> None:
+    """Atomically publish a complete sibling file only if its target is absent."""
+
+    try:
+        if os.name == "nt":
+            # Windows rename refuses an existing destination, including on filesystems
+            # without hardlinks. POSIX rename would silently replace it.
+            os.rename(temporary, target)
+        else:
+            os.link(temporary, target)
+    except FileExistsError as exc:
+        raise ConflictError(
+            f"The output was created by another writer and was not replaced: {target}",
+            code="output_exists",
+            recommended_action="choose_another_output_or_authorize_overwrite",
+            details={"path": str(target)},
+        ) from exc
+    except OSError as exc:
+        raise ToolError(
+            f"The filesystem could not safely publish the new output: {exc}",
+            code="output_publication_failed",
+            recommended_action="choose_a_filesystem_supporting_atomic_publication",
+            details={"path": str(target)},
+        ) from exc
+
+
 def _file_signature(path: Path) -> tuple[int, int, int, int] | None:
     try:
         stat = path.stat()
