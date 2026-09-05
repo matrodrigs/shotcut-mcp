@@ -244,7 +244,7 @@ def process_is_alive(pid: int) -> bool:
 
     if pid <= 0:
         return False
-    if os.name == "nt":
+    if sys.platform == "win32":
         # os.kill(pid, 0) is not a harmless existence probe on Windows.
         import ctypes
         from ctypes import wintypes
@@ -273,13 +273,14 @@ def process_is_alive(pid: int) -> bool:
             raise ctypes.WinError(ctypes.get_last_error())
         finally:
             kernel.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
+    else:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
         return True
-    return True
 
 
 def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:
