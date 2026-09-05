@@ -21,6 +21,21 @@ STATIC_MEMBERS = (
 VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 
 
+def validate_python_requirement(manifest: dict[str, Any]) -> None:
+    """Require our supported Python interval in the installer's semver syntax."""
+
+    compatibility = manifest.get("compatibility")
+    runtimes = (
+        compatibility.get("runtimes") if isinstance(compatibility, dict) else None
+    )
+    # This is the package's compatibility contract, not a general semver parser.
+    # PEP 440's comma separator silently prevents installation in Claude Desktop.
+    if runtimes != {"python": ">=3.10.0 <4.0.0"}:
+        raise RuntimeError(
+            "MCPB Python runtime requirement must be >=3.10.0 <4.0.0 (semver syntax)"
+        )
+
+
 def package_members() -> tuple[Path, ...]:
     """Return the complete, ordered runtime file set for the MCPB."""
 
@@ -69,6 +84,7 @@ def verify_bundle(artifact: Path, version: str) -> tuple[str, ...]:
                 f"MCPB payload mismatch; missing={missing}, extra={extra}"
             )
         manifest = json.loads(bundle.read("manifest.json"))
+        validate_python_requirement(manifest)
         if manifest.get("version") != version:
             raise RuntimeError(
                 f"MCPB manifest version {manifest.get('version')} "
@@ -89,6 +105,7 @@ def build_release(version: str, output_dir: Path) -> dict[str, Any]:
     if VERSION_PATTERN.fullmatch(version) is None:
         raise RuntimeError(f"release version must be X.Y.Z, received {version!r}")
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    validate_python_requirement(manifest)
     if manifest.get("version") != version:
         raise RuntimeError(
             f"release {version} does not match manifest {manifest.get('version')}"
