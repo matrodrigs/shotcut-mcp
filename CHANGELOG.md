@@ -7,6 +7,9 @@
 - Bootstrap the durable render supervisor through an absolute bundled entry point,
   preserving client-relative paths and working without an installed Python package or
   `PYTHONPATH`; retain bounded startup diagnostics when worker imports fail (#3).
+- Use a semver-compatible Python requirement in the MCPB manifest so supported Python
+  installations pass Claude Desktop's installation check; reject invalid requirements
+  during source and packaged-artifact release validation (#2).
 
 ## 1.5.1 (2026-08-02)
 

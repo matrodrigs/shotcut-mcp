@@ -99,7 +99,6 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                     "height": 240,
                     "fps_num": 30,
                     "clips": [{"path": str(media), "in_frame": 0, "out_frame": 59}],
-                    "validate": True,
                 },
             )
             for preset in ("h264-high", "h264-web"):
