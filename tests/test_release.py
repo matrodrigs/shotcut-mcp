@@ -440,7 +440,9 @@ class CiConfigurationTests(unittest.TestCase):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
         self.assertIn("name: CI gate", ci)
-        self.assertIn("needs: [test, quality]", ci)
+        self.assertIn("needs: [test, quality, integration]", ci)
+        self.assertIn("uses: ./.github/workflows/shotcut-integration.yml", ci)
+        self.assertIn('"$INTEGRATION_RESULT" != "success"', ci)
         self.assertIn("if: always()", ci)
 
 

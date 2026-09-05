@@ -52,7 +52,7 @@ jobs:
     needs: [test, quality, integration]
     runs-on: ubuntu-latest
     steps:
-      - name: Require successful test and quality jobs
+      - name: Require successful test, quality, and real integration jobs
         env:
           TEST_RESULT: ${{ needs.test.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
