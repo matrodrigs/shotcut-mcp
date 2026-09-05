@@ -1674,7 +1674,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "diagnose_missing_media",
         "title": "Find missing-media candidates",
-        "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates; never relinks automatically, so let the user choose first.",
+        "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates without changing the project. Apply a source mapping the user already specified; otherwise let the user choose before relinking.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
@@ -1965,7 +1965,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "restore_project_backup",
         "title": "Restore project backup",
-        "description": "Use after list_project_backups and confirmation of the selected backup. Validates and atomically restores it while backing up the current project; pass the current expected_revision unless force=true was explicitly authorized.",
+        "description": "Use after list_project_backups and authorization to restore the selected backup; an explicit request identifying that backup is sufficient. Validates and atomically restores it while backing up the current project; pass the current expected_revision unless force=true was explicitly authorized.",
         "inputSchema": _revision_guarded_input_schema(
             {
                 "project_path": PATH,

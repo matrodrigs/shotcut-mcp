@@ -703,6 +703,12 @@ class ProtocolNegotiationTests(unittest.TestCase):
             self.assertIn(phrase, first_window)
         for phrase in (
             "render_contact_sheet",
+            "create_project",
+            "Creative decisions",
+            "within that brief",
+            "not for every ordinary edit",
+            "starting points, not fixed recipes",
+            "describe_mlt_service",
             "validate_project",
             "valid=True",
             "ready=True",
