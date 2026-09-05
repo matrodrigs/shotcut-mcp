@@ -459,6 +459,8 @@ def render_preview(
                 f"avformat:{output.temporary}",
                 "f=image2",
                 "vcodec=png",
+                "mlt_image_format=rgba",
+                "pix_fmt=rgba",
                 "real_time=-1",
                 "terminate_on_pause=1",
                 "-silent",
