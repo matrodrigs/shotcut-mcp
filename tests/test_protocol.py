@@ -157,6 +157,65 @@ class SchemaValidationTests(unittest.TestCase):
 
 
 class ProtocolValidationTests(unittest.TestCase):
+    def test_malformed_cancellation_does_not_end_the_session(self) -> None:
+        for invalid_id in ([], {}, True, None, 1.5):
+            with self.subTest(request_id=invalid_id):
+                messages = [
+                    request("initialize", {"protocolVersion": "2025-03-26"}),
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/cancelled",
+                        "params": {"requestId": invalid_id},
+                    },
+                    request("ping", request_id=7),
+                ]
+                output = io.BytesIO()
+                serve(
+                    io.BytesIO(
+                        "".join(json.dumps(m) + "\n" for m in messages).encode()
+                    ),
+                    output,
+                )
+                self.assertEqual(
+                    [json.loads(line) for line in output.getvalue().splitlines()][1:],
+                    [{"jsonrpc": "2.0", "id": 7, "result": {}}],
+                )
+
+    def test_batch_tool_calls_share_cancellation_and_response_aggregation(self) -> None:
+        def slow(_arguments: dict[str, object]) -> dict[str, object]:
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if cancellation_requested():
+                    raise RequestCancelled("cancelled in batch")
+                time.sleep(0.005)
+            return {"finished_without_cancellation": True}
+
+        messages = [
+            request("initialize", {"protocolVersion": "2025-03-26"}),
+            [
+                request("tools/call", {"name": "shotcut_status", "arguments": {}}, 9),
+                request("ping", request_id=10),
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            ],
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 9},
+            },
+        ]
+        output = io.BytesIO()
+        with patch.dict(HANDLERS, {"shotcut_status": slow}):
+            serve(
+                io.BytesIO("".join(json.dumps(m) + "\n" for m in messages).encode()),
+                output,
+            )
+        responses = [json.loads(line) for line in output.getvalue().splitlines()]
+        batch = next(item for item in responses if isinstance(item, list))
+        by_id = {item["id"]: item for item in batch}
+        self.assertEqual(set(by_id), {9, 10})
+        self.assertEqual(by_id[9]["error"]["code"], -32800)
+        self.assertEqual(by_id[10]["result"], {})
+
     def test_invalid_jsonrpc_envelope_is_rejected(self) -> None:
         response = handle_request({"jsonrpc": "1.0", "id": 1, "method": "ping"})
         self.assertEqual(response["error"]["code"], -32600)

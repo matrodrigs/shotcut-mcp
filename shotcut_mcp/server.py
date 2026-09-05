@@ -605,7 +605,12 @@ class _StdioRuntime:
             }
         )
 
-    def _complete(self, request_id: str | int | None, future: Future[Any]) -> None:
+    def _complete(
+        self,
+        request_id: str | int | None,
+        respond: Callable[[Any], None],
+        future: Future[Any],
+    ) -> None:
         with self.pending_lock:
             item = self.pending.pop(request_id, None)
             if item is not None and item[2] is not None:
@@ -624,8 +629,7 @@ class _StdioRuntime:
                     flush=True,
                 )
                 response = _error(request_id, -32603, "Internal error.")
-        if response is not None:
-            self.write(response)
+        respond(response)
 
     def _execute(
         self, message: dict[str, Any], cancellation: threading.Event
@@ -642,21 +646,31 @@ class _StdioRuntime:
                 _error(None, -32000, "JSON-RPC batch exceeds the request limit.")
             )
             return
-        batch_responses = [
-            handle_request(item, self.session, self._send_progress)
-            if isinstance(item, dict)
-            else _error(None, -32600, "Invalid Request in batch.")
-            for item in messages
-        ]
-        visible = [item for item in batch_responses if item is not None]
-        if visible:
-            self.write(visible)
+        # Count notifications too so fast workers cannot flush a partial batch.
+        remaining = len(messages)
+        responses: list[Any] = []
+        lock = threading.Lock()
+
+        def collect(response: Any) -> None:
+            nonlocal remaining
+            with lock:
+                if response is not None:
+                    responses.append(response)
+                remaining -= 1
+                completed = list(responses) if remaining == 0 else None
+            if completed:
+                self.write(completed)
+
+        for message in messages:
+            self._dispatch_message(message, collect)
 
     def _cancel_notification(self, message: dict[str, Any]) -> bool:
         if message.get("method") != "notifications/cancelled" or "id" in message:
             return False
         params = message.get("params")
         request_id = params.get("requestId") if isinstance(params, dict) else None
+        if isinstance(request_id, bool) or not isinstance(request_id, (str, int)):
+            return True
         with self.pending_lock:
             item = self.pending.get(request_id)
         if item is not None:
@@ -678,12 +692,14 @@ class _StdioRuntime:
             else None
         )
 
-    def _schedule_tool_call(self, message: dict[str, Any]) -> None:
+    def _schedule_tool_call(
+        self, message: dict[str, Any], respond: Callable[[Any], None]
+    ) -> None:
         request_id = message.get("id")
         if isinstance(request_id, bool) or not isinstance(
             request_id, (str, int, type(None))
         ):
-            self.write(_error(None, -32600, "Invalid Request: invalid id."))
+            respond(_error(None, -32600, "Invalid Request: invalid id."))
             return
         progress_token = self._progress_token(message)
         with self.pending_lock:
@@ -694,13 +710,13 @@ class _StdioRuntime:
                 and progress_token in self.active_progress_tokens
             )
         if duplicate:
-            self.write(_error(request_id, -32600, "Duplicate in-flight request id."))
+            respond(_error(request_id, -32600, "Duplicate in-flight request id."))
             return
         if overloaded:
-            self.write(_error(request_id, -32000, "Too many in-flight requests."))
+            respond(_error(request_id, -32000, "Too many in-flight requests."))
             return
         if duplicate_progress:
-            self.write(
+            respond(
                 _error(
                     request_id,
                     -32602,
@@ -715,23 +731,30 @@ class _StdioRuntime:
             self.pending[request_id] = (future, cancellation, progress_token)
             if progress_token is not None:
                 self.active_progress_tokens.add(progress_token)
-        future.add_done_callback(partial(self._complete, request_id))
+        future.add_done_callback(partial(self._complete, request_id, respond))
 
     def dispatch(self, message: Any) -> None:
         if isinstance(message, list):
             self._dispatch_batch(message)
             return
-        if not isinstance(message, dict):
-            self.write(_error(None, -32600, "Invalid Request: expected a JSON object."))
-            return
-        if self._cancel_notification(message):
-            return
-        if message.get("method") == "tools/call" and "id" in message:
-            self._schedule_tool_call(message)
-            return
-        response = handle_request(message, self.session, self._send_progress)
+        self._dispatch_message(message, self._respond)
+
+    def _respond(self, response: Any) -> None:
         if response is not None:
             self.write(response)
+
+    def _dispatch_message(self, message: Any, respond: Callable[[Any], None]) -> None:
+        if not isinstance(message, dict):
+            respond(_error(None, -32600, "Invalid Request: expected a JSON object."))
+            return
+        if self._cancel_notification(message):
+            respond(None)
+            return
+        if message.get("method") == "tools/call" and "id" in message:
+            self._schedule_tool_call(message, respond)
+            return
+        response = handle_request(message, self.session, self._send_progress)
+        respond(response)
 
 
 def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
