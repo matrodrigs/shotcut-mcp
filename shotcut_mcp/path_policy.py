@@ -103,11 +103,26 @@ def path_policy() -> dict[str, Any]:
     }
 
 
+def _decode_file_resource(value: str) -> str:
+    """Normalize file URIs before either classifying or resolving their paths."""
+
+    if value.partition(":")[0].lower() != "file":
+        return value
+    parsed = urlparse(value)
+    path = unquote(parsed.path)
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        return f"//{unquote(parsed.netloc)}{path}"
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:/", path):
+        path = path[1:]
+    return path
+
+
 def is_network_resource(value: str) -> bool:
     """Return whether an MLT resource points to a network location."""
 
+    value = _decode_file_resource(value)
     return (
-        value.startswith(("//", "\\\\"))
+        value[:2].replace("\\", "/") == "//"
         or value.partition(":")[0].lower() in NETWORK_SCHEMES
     )
 
@@ -119,15 +134,7 @@ def resolve_project_resource(
 
     if not value or is_network_resource(value):
         return None
-    cleaned = value
-    if cleaned.startswith("file://"):
-        parsed = urlparse(cleaned)
-        if parsed.netloc:
-            cleaned = f"//{parsed.netloc}{unquote(parsed.path)}"
-        else:
-            cleaned = unquote(parsed.path)
-            if os.name == "nt" and re.match(r"^/[A-Za-z]:/", cleaned):
-                cleaned = cleaned[1:]
+    cleaned = _decode_file_resource(value)
     candidate = Path(cleaned)
     if candidate.is_absolute():
         return candidate.resolve()
