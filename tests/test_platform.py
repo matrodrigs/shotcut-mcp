@@ -217,6 +217,58 @@ class PathPolicyTests(unittest.TestCase):
                 with self.assertRaisesRegex(ToolError, "network resources"):
                     platform.validate_project_file(project_path)
 
+    def test_remote_file_uris_cannot_bypass_network_policy(self) -> None:
+        from shotcut_mcp.path_policy import (
+            enforce_project_resource_policy,
+            project_network_resources,
+        )
+
+        remote = (
+            r"/\server/share/a.mp4",
+            r"\/server/share/a.mp4",
+            "file://localhost/%5Cserver/share/a.mp4",
+            "//server/share/a.mp4",
+            "file://server/share/a.mp4",
+            "file:////server/share/a.mp4",
+            "FILE://server/share/a.mp4",
+            "file:%2F%2Fserver/share/a.mp4",
+            "file://localhost//server/share/a.mp4",
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                os.environ,
+                {
+                    "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES": "0",
+                    "SHOTCUT_MCP_ALLOWED_ROOTS": "",
+                },
+            ),
+        ):
+            path = Path(directory) / "project.mlt"
+            for value in remote:
+                with self.subTest(resource=value):
+                    path.write_text(
+                        '<mlt><producer><property name="resource">'
+                        + value
+                        + "</property></producer></mlt>"
+                    )
+                    self.assertEqual(project_network_resources(path), [value])
+                    with self.assertRaisesRegex(ToolError, "network resources"):
+                        enforce_project_resource_policy(path)
+            for value in (
+                "file:///tmp/local%20video.mp4",
+                "file://localhost/tmp/local.mp4",
+                "file:///C:/Media/local.mp4",
+            ):
+                with self.subTest(local=value):
+                    path.write_text(
+                        '<mlt><producer><property name="resource">'
+                        + value
+                        + "</property></producer></mlt>"
+                    )
+                    self.assertEqual(project_network_resources(path), [])
+                    enforce_project_resource_policy(path)
+
 
 class ExecutableDiscoveryTests(unittest.TestCase):
     def test_macos_discovers_the_shotcut_bundle_and_sibling_tools(self) -> None:

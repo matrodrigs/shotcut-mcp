@@ -49,6 +49,7 @@ from .storage import (
     is_project_backup,
     list_project_backups,
     project_lock,
+    publish_new_file,
     write_project_backup,
 )
 
@@ -174,6 +175,7 @@ def _write_validated(
     validate: bool,
     timeout: int,
     create_backup: bool,
+    require_absent: bool = False,
 ) -> dict[str, Any]:
     path = document.path
     data = document.to_bytes()
@@ -183,6 +185,13 @@ def _write_validated(
         current = path.read_bytes() if path.is_file() else None
         current_mode = path.stat().st_mode if current is not None else None
         current_revision = project_revision(current) if current is not None else None
+        if require_absent and path.exists():
+            raise ConflictError(
+                "The project was created by another writer and was not replaced.",
+                code="output_exists",
+                recommended_action="choose_another_output_or_authorize_overwrite",
+                details={"project_path": str(path)},
+            )
         if current is not None and not force:
             if not expected_revision:
                 raise ConflictError(
@@ -239,7 +248,10 @@ def _write_validated(
                 if current is not None and create_backup
                 else None
             )
-            os.replace(temporary, path)
+            if require_absent:
+                publish_new_file(temporary, path)
+            else:
+                os.replace(temporary, path)
             fsync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
@@ -299,13 +311,12 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     document.update_main_duration()
     saved = _write_validated(
         document,
-        expected_revision=project_revision(path.read_bytes())
-        if path.exists()
-        else None,
+        expected_revision=None,
         force=overwrite,
         validate=True,
         timeout=_int(arguments.get("timeout_seconds", 60), "timeout_seconds", 1),
-        create_backup=path.exists(),
+        create_backup=True,
+        require_absent=not overwrite,
     )
     loaded = ProjectDocument.load(path)
     return {

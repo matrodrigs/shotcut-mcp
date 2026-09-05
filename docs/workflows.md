@@ -7,6 +7,17 @@
 Describe the result you want in ordinary language. The MCP client receives tool-specific guidance
 at runtime, so you do not need to know individual tool names or request schemas.
 
+Give the assistant your goal, available media, destination folder or saved project, and any
+constraints that matter: audience, approximate length, aspect ratio, tone, or moments to retain.
+These are useful creative inputs, not a required questionnaire. Within your brief, the assistant
+can choose pacing, cuts, framing, titles, and transitions, then show a preview for iteration.
+It can discover installed effects and combine operations beyond the examples below.
+
+For a new project, the assistant can choose a descriptive `.mlt` filename in your destination
+folder. Routine editing choices do not require separate approval. Replacing an existing file,
+restoring a backup, and exporting still follow their explicit authorization rules; an action
+you already requested does not need another confirmation.
+
 1. Begin with a readiness check for Shotcut MCP and the local media tools.
 2. Provide the saved `.mlt` project and source media, then describe the result you want.
 3. For cleanup work, review measurements such as silence, black frames, freezes, interlacing, or
@@ -23,6 +34,12 @@ Let an MCP edit finish before saving the same project from the Shotcut GUI. Afte
 save in Shotcut and ask the client to inspect the project again before continuing.
 
 ## Example prompts
+
+```text
+Turn the travel clips in this folder into a lively 45-second vertical edit for friends.
+Choose the strongest moments, vary the pacing, keep transitions restrained, and use only
+the audio I provided. Save a new project in this destination folder and show me a preview.
+```
 
 ```text
 Create a 1920×1080, 30 fps Shotcut project from every video in this folder.

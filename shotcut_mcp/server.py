@@ -34,8 +34,8 @@ MAX_ERROR_DETAIL_ITEMS = 32
 MAX_ERROR_DETAIL_STRING = 2000
 MAX_ERROR_DETAIL_DEPTH = 4
 SERVER_INSTRUCTIONS = (
-    "Saved state: Use the user-supplied project path; ask if missing. Shotcut MCP sees "
-    "only the project saved on disk; if Shotcut is open, ask the user to save and avoid "
+    "Saved state: Use the supplied project path. Shotcut MCP sees "
+    "only the project saved on disk; if there are unsaved GUI edits, ask the user to save and avoid "
     "concurrent saves.\n"
     "Normal edit: Call inspect_project first and pass expected_revision. Use "
     "shotcut_capabilities for unfamiliar operations. Prefer item_ref; use as/@alias for "
@@ -43,13 +43,26 @@ SERVER_INSTRUCTIONS = (
     "and volume. Batch related edits. Never use force or overwrite without explicit "
     "authorization. On a revision conflict, re-inspect and reconsider; never retry with "
     "force automatically.\n"
+    "Creating: When asked to create a project, use create_project. Choose a descriptive "
+    ".mlt filename in the supplied destination folder; ask for a destination only if "
+    "none is available.\n"
+    "Creative decisions: Follow the user's brief and constraints. Make reasonable "
+    "choices for pacing, cuts, transitions, framing, titles, and sound within that brief; "
+    "briefly state material assumptions. Ask only when missing inputs or a decision "
+    "would materially change the scope or intended result, not for every ordinary edit. "
+    "Treat examples as starting points, not fixed recipes. Discover installed effects "
+    "with list_mlt_services and describe_mlt_service, and use focused "
+    "shotcut_capabilities schemas before constructing unfamiliar edits. Explain the "
+    "visual and audio result in the user's language. Base claims about existing footage "
+    "on inspected media and previews; distinguish proposed choices from verified results.\n"
     "Readiness: Use validate_project when readiness is unknown or media/service "
     "dependencies changed before preview or render. A successful edit_project already "
     "validates its candidate with Melt, so do not repeat validate_project routinely. "
     "valid=True means local Melt processed the first project frame; ready=True also "
     "requires local resources and required MLT services. Surface failed or unavailable "
-    "checks. For missing media, use diagnose_missing_media and let the user choose before "
-    "relinking; for runtime gaps, use shotcut_doctor or list_mlt_services.\n"
+    "checks. For missing media, use diagnose_missing_media; apply mappings the user "
+    "already specified, otherwise ask them to choose the source before relinking. "
+    "For runtime gaps, use shotcut_doctor or list_mlt_services.\n"
     "Planning and review: Use plan_project_edit for uncertain edits or user review. To "
     "show the current edit, call render_contact_sheet and surface its image when "
     "supported; use render_preview for one exact moment. After inspection or a committed "
@@ -71,7 +84,8 @@ SERVER_INSTRUCTIONS = (
     "list_render_jobs when job_id is unknown and export_marker_chapters for chapters.\n"
     "Recovery: For a tool result with isError=true, follow error_code, "
     "recommended_action, recommended_tool, and details instead of parsing the English "
-    "message. List backups before restoring and confirm the selected backup."
+    "message. List backups before restoring; confirm the selected backup unless the "
+    "user already identified and authorized that restoration."
 )
 
 
@@ -605,7 +619,12 @@ class _StdioRuntime:
             }
         )
 
-    def _complete(self, request_id: str | int | None, future: Future[Any]) -> None:
+    def _complete(
+        self,
+        request_id: str | int | None,
+        respond: Callable[[Any], None],
+        future: Future[Any],
+    ) -> None:
         with self.pending_lock:
             item = self.pending.pop(request_id, None)
             if item is not None and item[2] is not None:
@@ -624,8 +643,7 @@ class _StdioRuntime:
                     flush=True,
                 )
                 response = _error(request_id, -32603, "Internal error.")
-        if response is not None:
-            self.write(response)
+        respond(response)
 
     def _execute(
         self, message: dict[str, Any], cancellation: threading.Event
@@ -642,21 +660,31 @@ class _StdioRuntime:
                 _error(None, -32000, "JSON-RPC batch exceeds the request limit.")
             )
             return
-        batch_responses = [
-            handle_request(item, self.session, self._send_progress)
-            if isinstance(item, dict)
-            else _error(None, -32600, "Invalid Request in batch.")
-            for item in messages
-        ]
-        visible = [item for item in batch_responses if item is not None]
-        if visible:
-            self.write(visible)
+        # Count notifications too so fast workers cannot flush a partial batch.
+        remaining = len(messages)
+        responses: list[Any] = []
+        lock = threading.Lock()
+
+        def collect(response: Any) -> None:
+            nonlocal remaining
+            with lock:
+                if response is not None:
+                    responses.append(response)
+                remaining -= 1
+                completed = list(responses) if remaining == 0 else None
+            if completed:
+                self.write(completed)
+
+        for message in messages:
+            self._dispatch_message(message, collect)
 
     def _cancel_notification(self, message: dict[str, Any]) -> bool:
         if message.get("method") != "notifications/cancelled" or "id" in message:
             return False
         params = message.get("params")
         request_id = params.get("requestId") if isinstance(params, dict) else None
+        if isinstance(request_id, bool) or not isinstance(request_id, (str, int)):
+            return True
         with self.pending_lock:
             item = self.pending.get(request_id)
         if item is not None:
@@ -678,12 +706,14 @@ class _StdioRuntime:
             else None
         )
 
-    def _schedule_tool_call(self, message: dict[str, Any]) -> None:
+    def _schedule_tool_call(
+        self, message: dict[str, Any], respond: Callable[[Any], None]
+    ) -> None:
         request_id = message.get("id")
         if isinstance(request_id, bool) or not isinstance(
             request_id, (str, int, type(None))
         ):
-            self.write(_error(None, -32600, "Invalid Request: invalid id."))
+            respond(_error(None, -32600, "Invalid Request: invalid id."))
             return
         progress_token = self._progress_token(message)
         with self.pending_lock:
@@ -694,13 +724,13 @@ class _StdioRuntime:
                 and progress_token in self.active_progress_tokens
             )
         if duplicate:
-            self.write(_error(request_id, -32600, "Duplicate in-flight request id."))
+            respond(_error(request_id, -32600, "Duplicate in-flight request id."))
             return
         if overloaded:
-            self.write(_error(request_id, -32000, "Too many in-flight requests."))
+            respond(_error(request_id, -32000, "Too many in-flight requests."))
             return
         if duplicate_progress:
-            self.write(
+            respond(
                 _error(
                     request_id,
                     -32602,
@@ -715,23 +745,30 @@ class _StdioRuntime:
             self.pending[request_id] = (future, cancellation, progress_token)
             if progress_token is not None:
                 self.active_progress_tokens.add(progress_token)
-        future.add_done_callback(partial(self._complete, request_id))
+        future.add_done_callback(partial(self._complete, request_id, respond))
 
     def dispatch(self, message: Any) -> None:
         if isinstance(message, list):
             self._dispatch_batch(message)
             return
-        if not isinstance(message, dict):
-            self.write(_error(None, -32600, "Invalid Request: expected a JSON object."))
-            return
-        if self._cancel_notification(message):
-            return
-        if message.get("method") == "tools/call" and "id" in message:
-            self._schedule_tool_call(message)
-            return
-        response = handle_request(message, self.session, self._send_progress)
+        self._dispatch_message(message, self._respond)
+
+    def _respond(self, response: Any) -> None:
         if response is not None:
             self.write(response)
+
+    def _dispatch_message(self, message: Any, respond: Callable[[Any], None]) -> None:
+        if not isinstance(message, dict):
+            respond(_error(None, -32600, "Invalid Request: expected a JSON object."))
+            return
+        if self._cancel_notification(message):
+            respond(None)
+            return
+        if message.get("method") == "tools/call" and "id" in message:
+            self._schedule_tool_call(message, respond)
+            return
+        response = handle_request(message, self.session, self._send_progress)
+        respond(response)
 
 
 def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:

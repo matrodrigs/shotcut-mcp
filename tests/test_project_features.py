@@ -22,6 +22,318 @@ from shotcut_mcp.tools import render_contact_sheet_tool
 
 
 class ProjectFeatureTests(unittest.TestCase):
+    def test_reverse_map_reaching_source_zero_is_rejected_without_changing_project(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            path = Path(directory) / "reverse.mlt"
+            media = Path(directory) / "source.mp4"
+            media.touch()
+            state = create_project(
+                {"project_path": str(path), "clips": [{"path": str(media)}]}
+            )
+            before = path.read_bytes()
+            with self.assertRaises(ToolError) as caught:
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": state["revision"],
+                        "operations": [
+                            {
+                                "op": "set_clip_speed_map",
+                                "track": "V1",
+                                "item_index": 0,
+                                "keyframes": [
+                                    {"frame": 0, "speed": -1},
+                                    {"frame": 10, "speed": -1},
+                                ],
+                            }
+                        ],
+                    }
+                )
+            self.assertEqual(
+                caught.exception.code, "speed_map_reverse_boundary_unsupported"
+            )
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_speed_map_serialization_retains_the_requested_precision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            path = Path(directory) / "precision.mlt"
+            media = Path(directory) / "source.mp4"
+            media.touch()
+            state = create_project(
+                {"project_path": str(path), "clips": [{"path": str(media)}]}
+            )
+            operation = {
+                "op": "set_clip_speed_map",
+                "track": "V1",
+                "item_index": 0,
+                "keyframes": [
+                    {"frame": 0, "speed": 1.499999},
+                    {"frame": 10, "speed": 1.499999},
+                ],
+            }
+            for _ in range(2):
+                state = edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": state["revision"],
+                        "operations": [operation],
+                    }
+                )
+                self.assertEqual(state["project"]["duration_frames"], 201)
+                serialized = state["project"]["links"][0]["properties"]["speed_map"]
+                self.assertEqual(
+                    float(serialized.split(";")[0].split("=")[1]), 1.499999
+                )
+
+    def test_speed_map_keeps_partial_source_frame_and_rejects_unknown_provenance(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            path = Path(directory) / "map.mlt"
+            media = Path(directory) / "clip.mp4"
+            media.touch()
+            state = create_project(
+                {"project_path": str(path), "clips": [{"path": str(media)}]}
+            )
+            operation = {
+                "op": "set_clip_speed_map",
+                "track": "V1",
+                "item_index": 0,
+                "keyframes": [{"frame": 0, "speed": 1.1}, {"frame": 10, "speed": 1.1}],
+            }
+            for _ in range(3):
+                state = edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": state["revision"],
+                        "operations": [operation],
+                    }
+                )
+                self.assertEqual(state["project"]["duration_frames"], 273)
+            tree = ET.parse(path)
+            link = tree.find(".//link")
+            assert link is not None
+            for prop in list(link):
+                if prop.get("name", "").startswith("shotcut:mcp"):
+                    link.remove(prop)
+            tree.write(path)
+            before = path.read_bytes()
+            with self.assertRaises(ToolError) as caught:
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": ProjectDocument.load(path).snapshot()[
+                            "revision"
+                        ],
+                        "operations": [operation],
+                    }
+                )
+            self.assertEqual(caught.exception.code, "speed_map_source_range_unknown")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_speed_map_replacement_preserves_source_range_after_trim_and_split(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            root = Path(directory)
+            media = root / "clip.mp4"
+            media.touch()
+            for direction in (1, -1):
+                with self.subTest(direction=direction):
+                    path = root / f"map-{direction}.mlt"
+                    state = create_project(
+                        {"project_path": str(path), "clips": [{"path": str(media)}]}
+                    )
+
+                    def apply(
+                        operations: list[dict[str, object]], project_path: Path = path
+                    ) -> dict[str, object]:
+                        nonlocal state
+                        state = edit_project(
+                            {
+                                "project_path": str(project_path),
+                                "expected_revision": state["revision"],
+                                "operations": operations,
+                            }
+                        )
+                        return state
+
+                    def speed(value: int, index: int = 0) -> dict[str, object]:
+                        return {
+                            "op": "set_clip_speed_map",
+                            "track": "V1",
+                            "item_index": index,
+                            "keyframes": [
+                                {"frame": 0, "speed": value},
+                                {"frame": 10, "speed": value},
+                            ],
+                        }
+
+                    for _ in range(2):
+                        apply([speed(2 * direction)])
+                        self.assertEqual(state["project"]["duration_frames"], 150)
+                    apply(
+                        [
+                            {
+                                "op": "trim_item",
+                                "track": "V1",
+                                "item_index": 0,
+                                "edge": "start",
+                                "delta": 10,
+                            },
+                            {
+                                "op": "trim_item",
+                                "track": "V1",
+                                "item_index": 0,
+                                "edge": "end",
+                                "delta": -10,
+                            },
+                            {
+                                "op": "split_item",
+                                "track": "V1",
+                                "item_index": 0,
+                                "offset_frame": 65,
+                            },
+                        ]
+                    )
+                    apply([speed(direction, 0), speed(direction, 1)])
+                    self.assertEqual(
+                        [
+                            item["duration_frames"]
+                            for item in state["project"]["tracks"][0]["items"]
+                        ],
+                        [130, 130],
+                    )
+                    apply([speed(-direction, 0), speed(-direction, 1)])
+                    self.assertEqual(
+                        [
+                            item["duration_frames"]
+                            for item in state["project"]["tracks"][0]["items"]
+                        ],
+                        [130, 130],
+                    )
+
+    def test_transition_edits_preserve_references_to_surviving_clips(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "refs.mlt"
+            created = create_project({"project_path": str(path)})
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "color": color,
+                            "duration_frames": 100,
+                        }
+                        for color in ("#ff0000", "#0000ff")
+                    ],
+                }
+            )
+            left, right = state["project"]["tracks"][0]["items"]
+            original = path.read_bytes()
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "operations": [
+                        {
+                            "op": "add_transition",
+                            "item_ref": left["item_ref"],
+                            "duration_frames": 10,
+                        },
+                        {
+                            "op": "add_filter",
+                            "target": "clip",
+                            "item_ref": right["item_ref"],
+                            "service": "brightness",
+                        },
+                    ],
+                }
+            )
+            self.assertEqual(
+                len(state["project"]["tracks"][0]["items"][2]["filters"]), 1
+            )
+            # Removal requires the original shared transition sources; a clip-local
+            # filter intentionally isolates its producer. Exercise removal separately.
+            path.write_bytes(original)
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": ProjectDocument.load(path).snapshot()[
+                        "revision"
+                    ],
+                    "operations": [
+                        {
+                            "op": "add_transition",
+                            "item_ref": left["item_ref"],
+                            "duration_frames": 10,
+                        }
+                    ],
+                }
+            )
+            left, transition, right = state["project"]["tracks"][0]["items"]
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "operations": [
+                        {"op": "remove_transition", "item_ref": transition["item_ref"]},
+                        {
+                            "op": "add_filter",
+                            "target": "clip",
+                            "item_ref": left["item_ref"],
+                            "service": "brightness",
+                        },
+                        {
+                            "op": "add_filter",
+                            "target": "clip",
+                            "item_ref": right["item_ref"],
+                            "service": "volume",
+                        },
+                    ],
+                }
+            )
+            items = state["project"]["tracks"][0]["items"]
+            self.assertEqual([item["duration_frames"] for item in items], [100, 100])
+            self.assertEqual([len(item["filters"]) for item in items], [1, 1])
+
+    def test_update_track_accepts_its_current_name_but_rejects_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tracks.mlt"
+            state = create_project({"project_path": str(path)})
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "operations": [
+                        {
+                            "op": "update_track",
+                            "track": "V1",
+                            "name": "V1",
+                            "muted": True,
+                        },
+                        {"op": "add_track", "kind": "video", "name": "V2"},
+                    ],
+                }
+            )
+            self.assertEqual(state["project"]["tracks"][0]["properties"]["hide"], "2")
+            with self.assertRaisesRegex(ToolError, "already exists"):
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": state["revision"],
+                        "operations": [
+                            {"op": "update_track", "track": "V1", "name": "V2"}
+                        ],
+                    }
+                )
+
     def setUp(self) -> None:
         validation = patch(
             "shotcut_mcp.project.validate_project_file", return_value={"valid": True}
@@ -175,7 +487,9 @@ class ProjectFeatureTests(unittest.TestCase):
                     ],
                 }
             )
-            self.assertEqual(ramped["operation_results"][0]["duration_frames"], 175)
+            # MLT sums speeds at each frame: the first 100 consume 149.5 source
+            # frames, so another 76 frames at 2x are needed to cover the source.
+            self.assertEqual(ramped["operation_results"][0]["duration_frames"], 176)
             document = ProjectDocument.load(second_path)
             producer_id = ramped["project"]["tracks"][0]["items"][0]["producer_id"]
             chain = document.id_map()[producer_id]
@@ -216,8 +530,9 @@ class ProjectFeatureTests(unittest.TestCase):
             chain = document.id_map()[reverse_item["producer_id"]]
             link = chain.find("link")
             assert link is not None
-            self.assertEqual(chain.get("in"), "299")
+            self.assertEqual(chain.get("in"), "0")
             self.assertEqual(chain.get("out"), "473")
+            self.assertEqual(link.get("in"), "299")
             self.assertEqual(reverse_item["in_frame"], 299)
             self.assertEqual(reverse_item["out_frame"], 473)
             self.assertEqual(

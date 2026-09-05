@@ -30,6 +30,32 @@ from .storage import OutputTransaction
 
 MAX_LOG_BYTES = 512 * 1024
 MAX_PROGRESS_SAMPLES = 32
+MAX_PROGRESS_LINE_CHARS = 16 * 1024
+
+
+class _ProgressLines:
+    """Parse bounded Melt lines, discarding an oversized line through its delimiter."""
+
+    def __init__(self) -> None:
+        self.pending = ""
+        self.discarding = False
+
+    def feed(self, text: str) -> list[str]:
+        lines: list[str] = []
+        parts = re.split(r"[\r\n]", text)
+        for index, part in enumerate(parts):
+            if not self.discarding:
+                if len(self.pending) + len(part) > MAX_PROGRESS_LINE_CHARS:
+                    self.pending = ""
+                    self.discarding = True
+                else:
+                    self.pending += part
+            if index < len(parts) - 1:
+                if self.pending and not self.discarding:
+                    lines.append(self.pending)
+                self.pending = ""
+                self.discarding = False
+        return lines
 
 
 def _stop_renderer(process: subprocess.Popen[Any]) -> None:
@@ -174,7 +200,7 @@ def run_worker(job_id: str) -> int:
             )
             reader.start()
             reader_finished = False
-            pending_progress = ""
+            progress_lines = _ProgressLines()
             last_write = time.monotonic()
             while process.poll() is None or not reader_finished:
                 if cancel_requested(job_id):
@@ -192,20 +218,15 @@ def run_worker(job_id: str) -> int:
                 elif chunk:
                     text = chunk.decode("utf-8", errors="replace")
                     log.append(text)
-                    pending_progress += text
-                    lines = pending_progress.splitlines(keepends=True)
-                    pending_progress = ""
-                    if lines and not lines[-1].endswith(("\n", "\r")):
-                        pending_progress = lines.pop()
-                    for line in lines:
+                    for line in progress_lines.feed(text):
                         _observe_progress(metadata, line)
                 if time.monotonic() - last_write >= 0.5:
                     metadata["updated_at"] = time.time()
                     write_job(metadata)
                     last_write = time.monotonic()
             reader.join(timeout=1)
-            if pending_progress:
-                _observe_progress(metadata, pending_progress)
+            for line in progress_lines.feed("\n"):
+                _observe_progress(metadata, line)
             process.wait()
         finally:
             log.close()
@@ -276,6 +297,8 @@ def run_worker(job_id: str) -> int:
         write_job(metadata)
         return 1
     finally:
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
         clear_control_files(job_id)
 
 

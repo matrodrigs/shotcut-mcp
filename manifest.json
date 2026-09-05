@@ -47,7 +47,7 @@
     { "name": "validate_project", "description": "Use when saved-project readiness is unknown or media/service dependencies changed before preview or render; edit_project already validates its candidate, so do not repeat this after every successful edit. Checks XML, local resources, required installed MLT services, and first-frame Melt processing; this is not visual-quality analysis." },
     { "name": "render_preview", "description": "Use to show or inspect one specific moment. Renders one PNG and returns its path; omit output_path for a bounded server-managed preview." },
     { "name": "diagnose_color_workflow", "description": "Use for washed-out colors, HDR/SDR questions, or export compatibility. Reports normalized source color facts and Shotcut 26.6 issues." },
-    { "name": "diagnose_missing_media", "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates; never relinks automatically, so let the user choose first." },
+    { "name": "diagnose_missing_media", "description": "Use when media is missing or offline. Searches authorized roots and ranks candidates without changing the project. Apply a source mapping the user already specified; otherwise let the user choose before relinking." },
     { "name": "render_preview_batch", "description": "Use when exact frames are needed as separate image files. Renders up to 64 requested frames; use render_contact_sheet for one overview image." },
     { "name": "render_contact_sheet", "description": "Use for 'show me the edit', visual review, or a timeline overview. Renders exact frames or 12 evenly sampled frames into one image; omit output_path for managed output." },
     { "name": "detect_hardware_encoders", "description": "Use when choosing or troubleshooting hardware export. Lists advertised FFmpeg encoders and smoke-tests OS-appropriate candidates." },
@@ -58,7 +58,7 @@
     { "name": "list_render_jobs", "description": "Use for 'the latest render', render history, or when job_id is unknown. Returns bounded newest-first durable summaries." },
     { "name": "cancel_render", "description": "Use only when the user asks to stop an active render. Requests supervised cancellation, including after an MCP restart." },
     { "name": "list_project_backups", "description": "Use before undo or recovery. Lists only backups owned by this project, including paths, revisions, sizes, and timestamps." },
-    { "name": "restore_project_backup", "description": "Use after list_project_backups and confirmation of the selected backup. Validates and atomically restores it while backing up the current project; pass the current expected_revision unless force=true was explicitly authorized." }
+    { "name": "restore_project_backup", "description": "Use after list_project_backups and authorization to restore the selected backup; an explicit request identifying that backup is sufficient. Validates and atomically restores it while backing up the current project; pass the current expected_revision unless force=true was explicitly authorized." }
   ],
   "tools_generated": false,
   "keywords": [

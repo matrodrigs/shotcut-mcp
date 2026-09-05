@@ -152,6 +152,15 @@ preserves that directory for relative paths. If worker initialization fails befo
   independently and report `unavailable` or `not_applicable` instead of failing the whole analysis.
 - Speed maps accept wholly forward or wholly reverse non-zero ramps. Zero-crossing ramps and
   third-party/ambiguous chain links remain rejected.
+- Replacing a speed map retains its selected source interval, including after trims or splits.
+  Maps created by older versions without original source bounds, or changed outside the owned
+  mapping, must be rebuilt from the original clip before replacement. Use a backup when needed;
+  the server leaves the project unchanged when it cannot establish the source range safely.
+- The tested MLT timeremap can return an invalid image when negative-speed integration lands
+  on source frame zero. Such maps are rejected with `speed_map_reverse_boundary_unsupported`;
+  no source frames are silently removed and no speed values are perturbed. For constant reversal,
+  use `set_clip_speed`; otherwise choose a source range that stays above zero. This boundary needs
+  an upstream MLT fix before it can be included in the verified interface.
 - Ripple trim can affect only the target track or every unlocked track. Locked tracks are left
   unchanged, and a cross-track removal that intersects a transition is rejected rather than
   rewired speculatively.

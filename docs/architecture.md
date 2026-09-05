@@ -38,12 +38,15 @@ project_document -> media, mlt_xml
 project_snapshot -> project_document, mlt_xml, path_policy
 render -> platform, project_snapshot, protocol, render_jobs, storage
 render_worker -> platform, render_jobs, storage
-platform -> media, path_policy, processes, protocol
+render_jobs -> storage
+platform -> media, path_policy, processes, protocol, storage
 media -> processes, protocol
 path_policy -> mlt_xml
 processes -> path_policy, protocol
 storage -> processes
 ```
+
+Runtime modules may also import the shared `errors` module. Standard-library imports are omitted.
 
 Imports should continue downward through this graph. `project.py` and `platform.py` are stable
 public seams; internal modules may be reorganized without making MCP handlers depend on private
@@ -83,7 +86,9 @@ shotcut-mcp/
 ```
 
 Tests are named for the behavior or seam they cover, not for when a feature was added. The regular
-suite remains independent of a local Shotcut installation; the real Shotcut/MLT suite is opt-in.
+suite remains independent of a local Shotcut installation. The real Shotcut/MLT suite is opt-in
+locally and required by the GitHub Actions CI gate on Windows. Static checks run on Ubuntu;
+the ordinary suite covers Windows, macOS, and Linux. The workflow files define the current matrix.
 
 ## Design constraints
 

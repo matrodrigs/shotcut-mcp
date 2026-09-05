@@ -29,6 +29,243 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_speed_ramps_render_distinguishable_source_frames(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "frame-counter.mkv"
+            # Lossless RGB: red identifies each source frame. Use unmapped MLT
+            # previews as the reference because RGB conversion varies by build.
+            subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "nullsrc=s=64x64:r=30:d=0.8,format=gbrp,geq=r='10+8*N':g=0:b=0",
+                    "-c:v",
+                    "ffv1",
+                    "-pix_fmt",
+                    "bgr0",
+                    str(media),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            cases = (
+                (1, 1, 18, ((0, 4), (1, 5), (17, 21))),
+                (1, 2, 11, ((0, 4), (1, 5), (2, 6), (4, 9), (10, 21))),
+                (-1, -2, 10, ((0, 21), (1, 20), (2, 18), (4, 15), (9, 5))),
+            )
+            reference_path = root / "reference.mlt"
+            create_project(
+                {
+                    "project_path": str(reference_path),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 30,
+                    "clips": [{"path": str(media), "in_frame": 4, "out_frame": 21}],
+                }
+            )
+            reference_pixels = {}
+            for source_frame in range(4, 22):
+                preview = root / f"reference-{source_frame}.png"
+                render_preview(reference_path, preview, source_frame - 4, False)
+                reference_pixels[source_frame] = self._preview_pixel(
+                    executables.ffmpeg, preview
+                )
+            # A one-frame error must remain distinguishable from conversion noise.
+            for source_frame in range(4, 21):
+                self.assertGreater(
+                    reference_pixels[source_frame + 1][0]
+                    - reference_pixels[source_frame][0],
+                    4,
+                    msg=(source_frame, reference_pixels),
+                )
+            for initial_speed, final_speed, duration, expected_frames in cases:
+                with self.subTest(initial_speed=initial_speed, final_speed=final_speed):
+                    path = root / f"ramp-{initial_speed}-{final_speed}.mlt"
+                    state = create_project(
+                        {
+                            "project_path": str(path),
+                            "width": 64,
+                            "height": 64,
+                            "fps_num": 30,
+                            "clips": [
+                                {"path": str(media), "in_frame": 4, "out_frame": 21}
+                            ],
+                        }
+                    )
+                    operation = {
+                        "op": "set_clip_speed_map",
+                        "track": "V1",
+                        "item_index": 0,
+                        "image_mode": "nearest",
+                        "keyframes": [
+                            {"frame": 0, "speed": initial_speed},
+                            {"frame": 4, "speed": final_speed},
+                        ],
+                    }
+                    for _ in range(2):
+                        state = edit_project(
+                            {
+                                "project_path": str(path),
+                                "expected_revision": state["revision"],
+                                "operations": [operation],
+                            }
+                        )
+                        self.assertEqual(state["project"]["duration_frames"], duration)
+                    for frame, source_frame in expected_frames:
+                        with self.subTest(frame=frame, source_frame=source_frame):
+                            preview = (
+                                root / f"ramp-{initial_speed}-{final_speed}-{frame}.png"
+                            )
+                            render_preview(path, preview, frame, False)
+                            actual = self._preview_pixel(executables.ffmpeg, preview)
+                            expected = reference_pixels[source_frame]
+                            for channel, value in enumerate(actual):
+                                self.assertAlmostEqual(
+                                    value,
+                                    expected[channel],
+                                    delta=2,
+                                    msg=(actual, expected),
+                                )
+
+    def test_replacing_speed_maps_preserves_rendered_source_after_trim_and_split(
+        self,
+    ) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "red-blue.mp4"
+            subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=red:s=64x64:r=30:d=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=blue:s=64x64:r=30:d=2",
+                    "-filter_complex",
+                    "[0:v][1:v]concat=n=2:v=1:a=0",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-threads",
+                    "1",
+                    str(media),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            for direction in (1, -1):
+                with self.subTest(direction=direction):
+                    path = root / f"map-{direction}.mlt"
+                    state = create_project(
+                        {
+                            "project_path": str(path),
+                            "width": 64,
+                            "height": 64,
+                            "fps_num": 30,
+                            "clips": [{"path": str(media)}],
+                        }
+                    )
+                    operation = {
+                        "op": "set_clip_speed_map",
+                        "track": "V1",
+                        "item_index": 0,
+                        "keyframes": [
+                            {"frame": 0, "speed": 2 * direction},
+                            {"frame": 10, "speed": 2 * direction},
+                        ],
+                    }
+                    for _ in range(2):
+                        state = edit_project(
+                            {
+                                "project_path": str(path),
+                                "expected_revision": state["revision"],
+                                "operations": [operation],
+                            }
+                        )
+                        self.assertEqual(state["project"]["duration_frames"], 60)
+                    state = edit_project(
+                        {
+                            "project_path": str(path),
+                            "expected_revision": state["revision"],
+                            "operations": [
+                                {
+                                    "op": "trim_item",
+                                    "track": "V1",
+                                    "item_index": 0,
+                                    "edge": "start",
+                                    "delta": 5,
+                                },
+                                {
+                                    "op": "trim_item",
+                                    "track": "V1",
+                                    "item_index": 0,
+                                    "edge": "end",
+                                    "delta": -5,
+                                },
+                                {
+                                    "op": "split_item",
+                                    "track": "V1",
+                                    "item_index": 0,
+                                    "offset_frame": 25,
+                                },
+                                *[
+                                    {
+                                        **operation,
+                                        "item_index": index,
+                                        "keyframes": [
+                                            {"frame": 0, "speed": direction},
+                                            {"frame": 10, "speed": direction},
+                                        ],
+                                    }
+                                    for index in (0, 1)
+                                ],
+                            ],
+                        }
+                    )
+                    self.assertEqual(
+                        [
+                            item["duration_frames"]
+                            for item in state["project"]["tracks"][0]["items"]
+                        ],
+                        [50, 50],
+                    )
+                    for frame, channel in (
+                        (0, 0 if direction == 1 else 2),
+                        (99, 2 if direction == 1 else 0),
+                    ):
+                        preview = root / f"preview-{direction}-{frame}.png"
+                        render_preview(path, preview, frame, False)
+                        pixel = self._preview_pixel(executables.ffmpeg, preview)
+                        self.assertGreater(
+                            pixel[channel], 120, (direction, frame, pixel)
+                        )
+                        self.assertLess(
+                            max(
+                                value
+                                for index, value in enumerate(pixel)
+                                if index != channel
+                            ),
+                            30,
+                            (direction, frame, pixel),
+                        )
+
     def test_packaged_stdio_render_from_external_directory(self) -> None:
         executables = discover_executables()
         self.assertIsNotNone(executables.ffmpeg)

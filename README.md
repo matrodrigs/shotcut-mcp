@@ -26,7 +26,7 @@ you do not need to install the Python package or configure `PYTHONPATH`.
 
 | Client | Installation |
 | --- | --- |
-| MCPB-compatible client | Install the package from the [latest release](https://github.com/matrodrigs/shotcut-mcp/releases/latest). |
+| Claude Desktop / MCPB-compatible client | Follow the [MCPB installation and update guide](docs/installation.md#claude-desktop-and-mcpb). |
 | Codex | Clone the repository and [register the local server](docs/installation.md#codex). |
 | Claude Code | Run `/plugin marketplace add matrodrigs/shotcut-mcp`, then `/plugin install shotcut-mcp@matrodrigs` and `/reload-plugins`. [Details and manual setup](docs/installation.md#claude-code). |
 | Other MCP client | Configure a [local stdio server](docs/installation.md#other-mcp-clients). |
@@ -38,8 +38,8 @@ No `pip install` is required to run the server.
 
 Ask your assistant:
 
-> Check whether Shotcut MCP is ready and report the detected Shotcut, Melt, FFmpeg, and FFprobe
-> versions.
+> Run the full Shotcut MCP readiness check with shotcut_doctor and report the detected Shotcut,
+> Melt, FFmpeg, and FFprobe versions and any failed checks.
 
 A healthy setup reports discovered paths, versions, repository state, RNNoise availability,
 and the active path policy. Resolve anything it flags before editing.
@@ -90,6 +90,10 @@ Read the [transaction and recovery details](docs/reference.md#transactional-safe
 - Available codecs, filters, fonts, and quality analyzers depend on your local installation.
 - Some ambiguous transitions, speed maps, and cross-track edits are rejected. Changing FPS
   preserves recognized frame numbers rather than automatically retiming the edit.
+- Replacing a speed map preserves its source interval after trims and splits. Older maps without
+  recorded source bounds must be rebuilt from the original clip before replacement.
+  Reverse maps landing on source frame zero are outside the verified MLT interface;
+  use constant speed reversal or a source range above zero. [Details](docs/reference.md#limitations).
 - Network resources and unsafe consumer properties are denied by default. Administrators can
   restrict filesystem access through the [runtime configuration](docs/reference.md#configuration).
 
@@ -121,7 +125,8 @@ python -B scripts/check_ci.py all
 ```
 
 Enable it before each push with `git config core.hooksPath .githooks`. Real Shotcut integration
-is opt-in through `SHOTCUT_MCP_INTEGRATION=1`.
+is opt-in locally through `SHOTCUT_MCP_INTEGRATION=1`. The GitHub Actions CI gate requires real
+Windows integration in addition to the ordinary cross-platform suite and static checks.
 
 See [Contributing](CONTRIBUTING.md) for development and release procedures,
 [Changelog](CHANGELOG.md) for release changes, [Issues](https://github.com/matrodrigs/shotcut-mcp/issues)

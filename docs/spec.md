@@ -25,6 +25,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   project revision, and resolve them against item identity throughout one sequential edit batch.
   Preserve legacy track/index selectors and support bounded transaction-local aliases for newly
   created or split items without writing private identity metadata into MLT XML.
+- Preserve surviving clip identities when adding or removing a recognized transition; subsequent
+  operations in the batch must continue to resolve those clips by reference or alias.
 - Support video and audio tracks, gaps, clips, same-track or all-unlocked ripple/non-ripple trim,
   roll, slip, slide, constant timewarp, same-direction forward or reverse timeremap speed maps,
   split, move, ripple/overwrite edits,
@@ -38,6 +40,10 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Provide project inspection and durable render-job management.
 - Return stable, structured JSON from every tool and use English for public tool descriptions,
   server instructions and error messages.
+- Guide the model to make ordinary creative choices within the user's brief, use examples as
+  starting points, and discover installed services for unfamiliar effects. Cover new-project
+  creation as well as existing-project editing. Ask for missing inputs or choices that materially
+  change intent; preserve explicit overwrite/export/recovery authorization without asking twice.
 - Return tool execution failures with `isError`, a stable machine-readable error code,
   recoverability, recommended action/tool, and bounded structured details while preserving the
   legacy human-readable error fields. Publish the error alternative in every current output schema;
@@ -67,12 +73,17 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   schema, example, and transaction guarantees. Enforce that same operation schema before planning
   or applying a batch.
 - Propagate MCP cancellation notifications to subprocess-backed operations.
+- Schedule legacy batch tool calls through the same bounded, cancellable execution path as
+  individual calls, then aggregate their responses. Ignore malformed cancellation notifications
+  without replying or terminating the session.
 - Apply the configured message budget to both incoming and outgoing newline-delimited JSON-RPC.
   Reject an oversized serialized project candidate before backup or replacement, using the same
   limit enforced while loading a project. Default to 128 MiB and allow administrators to configure
   a value clamped between 1 MiB and 512 MiB.
 - Provide a read-only plan/diff operation before transactional edits.
 - Render bounded preview batches and atomically promoted contact sheets at exact frames.
+- Request RGBA processing and PNG pixel format explicitly for preview frames. Codec defaults
+  must not change preview colors across platforms, including clips with timeremap links.
 - Allow single previews and contact sheets to use bounded server-owned output when the caller does
   not need a persistent destination, and embed small review images within the MCP message budget.
 - Normalize source/project color metadata and own SDR/HLG/PQ project annotations as one semantic edit.
@@ -131,6 +142,22 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   may opt in through environment policy and may constrain every tool path to canonical roots.
 - Apply those policies to every recognized MLT path representation, including timewarp, proxy,
   luma, source, filename, and filter resources.
+- Decode `file:` URIs before classifying resources so remote authorities and encoded UNC paths
+  obey the same network policy as direct UNC paths. Local file URIs remain local resources.
+- Preserve the initial expectation that a new project's destination is absent until the write
+  transaction checks it under lock. A file created during probing is not overwrite authorization.
+- Bound both render-log files and incomplete progress lines in memory. Discard an oversized line
+  through its delimiter, then resume parsing later progress messages.
+- Store source bounds separately from the mapped timeline range when creating a speed map.
+  Replacement retains the selected source interval, including after entry trims or splits, and
+  preserves a partial final source frame across repeated replacements. Duration follows MLT's
+  per-frame speed integration. Reject replacement of legacy or externally modified maps when
+  their original source interval cannot be established safely; existing projects remain readable.
+- Anchor timeremap at the link's in point while the containing chain starts at zero, so playlist
+  cuts do not apply the source offset twice. Preserve requested speed precision when serializing
+  keyframes. Reverse duration excludes positions below the selected source interval. Reject maps
+  whose negative integration lands on source frame zero: tested MLT builds can round below zero
+  and return an invalid frame. Constant timewarp reversal remains the alternative for constant speed.
 - Keep HDR display preview, mixed HLG/PQ conversion, zero-crossing speed maps, and ambiguous
   third-party chain edits out of the verified interface. Reverse speed maps must remain entirely
   negative and start from the selected source range's final frame.
@@ -147,6 +174,7 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   semantic transform/audio animation, locked-track ripple editing,
   forward/reverse timeremap validation, still-image trims and replacement, opacity composition,
   preview, media-quality analysis, range rendering, and final render.
-- Manifest/version/tool-catalog validation plus Ruff and Mypy in Windows, macOS, and Linux CI.
-  Real Shotcut/MLT integration remains opt-in. Release tags
+- Manifest/version/tool-catalog validation and ordinary tests in Windows, macOS, and Linux CI.
+  Ruff, Mypy, and Vulture run on Ubuntu. Real Shotcut/MLT integration is opt-in locally and required
+  on Windows by the CI gate. The workflow files define the current Python and Shotcut matrix. Release tags
   must point to a `main` commit whose exact SHA completed that CI successfully.
