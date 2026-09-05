@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.5.2 (2026-09-05)
+
 ### Fixed
 
 - Bootstrap the durable render supervisor through an absolute bundled entry point,
