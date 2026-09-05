@@ -78,6 +78,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 - Normalize source/project color metadata and own SDR/HLG/PQ project annotations as one semantic edit.
 - Smoke-test hardware encoders instead of trusting FFmpeg's advertised encoder list.
 - Persist bounded progress samples, elapsed time, ETA inputs, terminal metrics, and paginated history.
+- Bootstrap durable renders from the bundled package regardless of the client's working directory,
+  without changing relative-path resolution; retain bounded import-failure diagnostics in render status.
 - Guide callers to poll durable render status to a terminal state and surface only meaningful
   status, progress, or ETA changes instead of unchanged polls or raw log spam.
 - Diagnose missing media with bounded Shotcut-hash/basename search and require an explicit relink edit.

@@ -65,6 +65,10 @@ def log_path(job_id: str) -> Path:
     return ensure_job_directory() / f"{validate_job_id(job_id)}.log"
 
 
+def startup_log_path(job_id: str) -> Path:
+    return ensure_job_directory() / f"{validate_job_id(job_id)}.startup.log"
+
+
 def cancel_path(job_id: str) -> Path:
     return ensure_job_directory() / f"{validate_job_id(job_id)}.cancel"
 
@@ -340,6 +344,7 @@ def prune_jobs(max_age_days: int = 30) -> None:
             for related in (
                 metadata_file,
                 log_path(job_id),
+                startup_log_path(job_id),
                 cancel_path(job_id),
                 gate_path(job_id),
             ):

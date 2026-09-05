@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .errors import ConflictError, ToolError
+from .processes import process_is_alive
 
 
 def _invalid_persistent_render_state(message: str, reason: str) -> ToolError:
@@ -55,16 +56,6 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def process_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
 
 
 def _file_signature(path: Path) -> tuple[int, int, int, int] | None:

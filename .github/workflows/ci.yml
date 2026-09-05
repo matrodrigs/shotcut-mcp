@@ -43,18 +43,22 @@ jobs:
       - name: Run shared quality checks
         run: python -B scripts/check_ci.py quality
 
+  integration:
+    uses: ./.github/workflows/shotcut-integration.yml
+
   gate:
     name: CI gate
     if: always()
-    needs: [test, quality]
+    needs: [test, quality, integration]
     runs-on: ubuntu-latest
     steps:
-      - name: Require successful test and quality jobs
+      - name: Require successful test, quality, and real integration jobs
         env:
           TEST_RESULT: ${{ needs.test.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
         run: |
-          if [ "$TEST_RESULT" != "success" ] || [ "$QUALITY_RESULT" != "success" ]; then
-            echo "CI gate failed: test=$TEST_RESULT quality=$QUALITY_RESULT" >&2
+          if [ "$TEST_RESULT" != "success" ] || [ "$QUALITY_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ]; then
+            echo "CI gate failed: test=$TEST_RESULT quality=$QUALITY_RESULT integration=$INTEGRATION_RESULT" >&2
             exit 1
           fi

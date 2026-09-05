@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -218,6 +219,68 @@ def run_capture(
         stdout = stdout_file.read().decode("utf-8", errors="replace")
         stderr = stderr_file.read().decode("utf-8", errors="replace")
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def start_render_supervisor(
+    job_id: str, diagnostic_path: Path
+) -> subprocess.Popen[Any]:
+    """Launch our bundled worker without changing cwd or the inherited environment."""
+
+    launcher = (
+        Path(__file__).resolve().parents[1] / "scripts/shotcut_mcp_render_worker.py"
+    )
+    return subprocess.Popen(
+        [sys.executable, str(launcher), job_id, str(diagnostic_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags(),
+        start_new_session=os.name != "nt",
+    )
+
+
+def process_is_alive(pid: int) -> bool:
+    """Observe a process without signalling it; uncertainty never proves death."""
+
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        # os.kill(pid, 0) is not a harmless existence probe on Windows.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # ERROR_INVALID_PARAMETER: no process with this PID
+                return False
+            if error == 5:  # ERROR_ACCESS_DENIED: cannot establish that it exited
+                return True
+            raise ctypes.WinError(error)
+        try:
+            state = kernel.WaitForSingleObject(handle, 0)
+            if state == 0:  # WAIT_OBJECT_0: process has exited
+                return False
+            if state == 0x102:  # WAIT_TIMEOUT: process is still running
+                return True
+            raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            kernel.CloseHandle(handle)
+    else:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
 
 def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:

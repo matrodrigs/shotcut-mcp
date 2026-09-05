@@ -109,6 +109,39 @@ class ReleaseBundleTests(unittest.TestCase):
 
     def test_checked_in_tool_contracts_match_the_runtime_projection(self) -> None:
         validate_tool_contracts(ROOT, runtime_tool_entries())
+
+    def test_packaged_worker_keeps_bounded_import_failure_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="worker bundle space ") as directory:
+            root = Path(directory)
+            result = build_release(self.version, root / "dist")
+            extracted = root / "extension space"
+            with zipfile.ZipFile(result["artifact"]) as bundle:
+                bundle.extractall(extracted)
+            # Fail before render_worker.main can record job metadata.
+            (extracted / "shotcut_mcp/render_worker.py").write_text(
+                "raise RuntimeError('x' * 20000 + ' bootstrap failure sentinel')\n",
+                encoding="utf-8",
+            )
+            diagnostic = root / "startup.log"
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    str(extracted / "scripts/shotcut_mcp_render_worker.py"),
+                    "a" * 32,
+                    str(diagnostic),
+                ],
+                cwd=root,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(process.returncode, 1)
+            self.assertEqual(process.stdout, b"")
+            self.assertEqual(process.stderr, b"")
+            self.assertLessEqual(diagnostic.stat().st_size, 16384)
+            self.assertIn(
+                "bootstrap failure sentinel", diagnostic.read_text(encoding="utf-8")
+            )
         self.assertEqual(sync_tool_contracts(ROOT, runtime_tool_entries()), ())
 
     def test_documented_compatibility_matches_the_runtime_contract(self) -> None:
@@ -407,7 +440,9 @@ class CiConfigurationTests(unittest.TestCase):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
         self.assertIn("name: CI gate", ci)
-        self.assertIn("needs: [test, quality]", ci)
+        self.assertIn("needs: [test, quality, integration]", ci)
+        self.assertIn("uses: ./.github/workflows/shotcut-integration.yml", ci)
+        self.assertIn('"$INTEGRATION_RESULT" != "success"', ci)
         self.assertIn("if: always()", ci)
 
 

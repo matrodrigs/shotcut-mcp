@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Bootstrap the durable render supervisor through an absolute bundled entry point,
+  preserving client-relative paths and working without an installed Python package or
+  `PYTHONPATH`; retain bounded startup diagnostics when worker imports fail (#3).
+- Check Windows process liveness through a read-only native handle instead of `os.kill`,
+  so render status polling and stale-lock checks cannot signal or terminate a live owner (#3).
 - Use a semver-compatible Python requirement in the MCPB manifest so supported Python
   installations pass Claude Desktop's installation check; reject invalid requirements
   during source and packaged-artifact release validation (#2).

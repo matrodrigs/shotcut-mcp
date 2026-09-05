@@ -40,6 +40,7 @@ from .processes import (
     require_executable,
     run_capture,
     runtime_identity,
+    start_render_supervisor,
     sys_platform,
     terminate_process,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "require_executable",
     "run_capture",
     "shotcut_file_hash",
+    "start_render_supervisor",
     "status",
     "summarize_media",
     "sys_platform",
