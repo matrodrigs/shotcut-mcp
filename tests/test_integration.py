@@ -90,15 +90,24 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                 return payload["structuredContent"]
 
             media = root / "source.mp4"
-            self._create_media(executables.ffmpeg, media)
+            self._create_media(executables.ffmpeg, media, duration=5)
+            image = root / "still.png"
+            self._create_image(executables.ffmpeg, image, "red")
+            # Match #3's profile, three video clips plus a PNG, and 900-frame range.
             project = call_tool(
                 "create_project",
                 {
                     "project_path": str(root / "timeline.mlt"),
-                    "width": 320,
-                    "height": 240,
-                    "fps_num": 30,
-                    "clips": [{"path": str(media), "in_frame": 0, "out_frame": 59}],
+                    "width": 720,
+                    "height": 1200,
+                    "fps_num": 60,
+                    "clips": [
+                        *[
+                            {"path": str(media), "in_frame": 0, "out_frame": 239}
+                            for _ in range(3)
+                        ],
+                        {"path": str(image), "in_frame": 0, "out_frame": 179},
+                    ],
                 },
             )
             for preset in ("h264-high", "h264-web"):
@@ -111,13 +120,13 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                             "output_path": str(output),
                             "preset": preset,
                             "expected_revision": project["revision"],
-                            "in_frame": 5,
-                            "out_frame": 24,
+                            "in_frame": 0,
+                            "out_frame": 899,
                         },
                     )
                     # Each call starts a fresh MCP process: the original owner exits
                     # before polling, as it would after restarting a desktop client.
-                    deadline = time.monotonic() + 60
+                    deadline = time.monotonic() + 180
                     status = call_tool("render_status", {"job_id": job["job_id"]})
                     while (
                         status["status"] in {"queued", "running"}
@@ -132,13 +141,14 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                         Path(project["path"]).read_bytes(),
                     )
                     info = summarize_media(output)
-                    self.assertAlmostEqual(info["duration_seconds"], 20 / 30, delta=0.1)
+                    self.assertAlmostEqual(info["duration_seconds"], 15, delta=0.1)
                     video = next(
                         stream
                         for stream in info["streams"]
                         if stream["type"] == "video"
                     )
-                    self.assertEqual((video["width"], video["height"]), (320, 240))
+                    self.assertEqual((video["width"], video["height"]), (720, 1200))
+                    self.assertEqual(video["frame_rate"], 60)
 
     @staticmethod
     def _create_media(ffmpeg: Path, media: Path, duration: int = 2) -> None:
