@@ -82,6 +82,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   a value clamped between 1 MiB and 512 MiB.
 - Provide a read-only plan/diff operation before transactional edits.
 - Render bounded preview batches and atomically promoted contact sheets at exact frames.
+- Request RGBA processing and PNG pixel format explicitly for preview frames. Codec defaults
+  must not change preview colors across platforms, including clips with timeremap links.
 - Allow single previews and contact sheets to use bounded server-owned output when the caller does
   not need a persistent destination, and embed small review images within the MCP message budget.
 - Normalize source/project color metadata and own SDR/HLG/PQ project annotations as one semantic edit.

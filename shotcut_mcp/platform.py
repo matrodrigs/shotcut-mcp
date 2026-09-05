@@ -449,6 +449,8 @@ def render_preview(
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
     try:
+        # Explicit RGBA avoids codec-selected RGB conversion that shifts timeremap
+        # colors in Windows builds. Keep the processing and PNG formats aligned.
         result = run_capture(
             [
                 str(melt),

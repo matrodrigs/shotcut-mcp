@@ -14,6 +14,8 @@
   batch calls through the same bounded cancellation path as individual calls.
 - Bound incomplete render-progress lines in memory and resume parsing after oversized lines.
 - Apply network policy to decoded remote `file:` URIs and UNC paths with mixed separators.
+- Request explicit RGBA pixels for PNG previews so Windows codec defaults do not shift colors
+  in timeremap output; compare real rendered frames with unmapped native references.
 
 ### Changed
 
