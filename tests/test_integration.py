@@ -57,8 +57,9 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                 timeout=30,
             )
             cases = (
-                (1, 11, ((0, 4), (1, 5), (2, 6), (4, 9), (10, 21))),
-                (-1, 10, ((0, 21), (1, 20), (2, 18), (4, 15), (9, 5))),
+                (1, 1, 18, ((0, 4), (1, 5), (17, 21))),
+                (1, 2, 11, ((0, 4), (1, 5), (2, 6), (4, 9), (10, 21))),
+                (-1, -2, 10, ((0, 21), (1, 20), (2, 18), (4, 15), (9, 5))),
             )
             reference_path = root / "reference.mlt"
             create_project(
@@ -85,9 +86,9 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                     4,
                     msg=(source_frame, reference_pixels),
                 )
-            for direction, duration, expected_frames in cases:
-                with self.subTest(direction=direction):
-                    path = root / f"ramp-{direction}.mlt"
+            for initial_speed, final_speed, duration, expected_frames in cases:
+                with self.subTest(initial_speed=initial_speed, final_speed=final_speed):
+                    path = root / f"ramp-{initial_speed}-{final_speed}.mlt"
                     state = create_project(
                         {
                             "project_path": str(path),
@@ -105,8 +106,8 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                         "item_index": 0,
                         "image_mode": "nearest",
                         "keyframes": [
-                            {"frame": 0, "speed": direction},
-                            {"frame": 4, "speed": 2 * direction},
+                            {"frame": 0, "speed": initial_speed},
+                            {"frame": 4, "speed": final_speed},
                         ],
                     }
                     for _ in range(2):
@@ -119,17 +120,20 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                         )
                         self.assertEqual(state["project"]["duration_frames"], duration)
                     for frame, source_frame in expected_frames:
-                        preview = root / f"ramp-{direction}-{frame}.png"
-                        render_preview(path, preview, frame, False)
-                        actual = self._preview_pixel(executables.ffmpeg, preview)
-                        expected = reference_pixels[source_frame]
-                        for channel, value in enumerate(actual):
-                            self.assertAlmostEqual(
-                                value,
-                                expected[channel],
-                                delta=2,
-                                msg=(direction, frame, source_frame, actual, expected),
+                        with self.subTest(frame=frame, source_frame=source_frame):
+                            preview = (
+                                root / f"ramp-{initial_speed}-{final_speed}-{frame}.png"
                             )
+                            render_preview(path, preview, frame, False)
+                            actual = self._preview_pixel(executables.ffmpeg, preview)
+                            expected = reference_pixels[source_frame]
+                            for channel, value in enumerate(actual):
+                                self.assertAlmostEqual(
+                                    value,
+                                    expected[channel],
+                                    delta=2,
+                                    msg=(actual, expected),
+                                )
 
     def test_replacing_speed_maps_preserves_rendered_source_after_trim_and_split(
         self,
