@@ -37,6 +37,7 @@ platform -> media, path_policy, processes, protocol, storage
 media -> processes, protocol
 path_policy -> mlt_xml
 processes -> path_policy, protocol
+storage -> processes
 ```
 
 Module ownership:

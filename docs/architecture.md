@@ -42,6 +42,7 @@ platform -> media, path_policy, processes, protocol
 media -> processes, protocol
 path_policy -> mlt_xml
 processes -> path_policy, protocol
+storage -> processes
 ```
 
 Imports should continue downward through this graph. `project.py` and `platform.py` are stable

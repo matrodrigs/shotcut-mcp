@@ -239,6 +239,49 @@ def start_render_supervisor(
     )
 
 
+def process_is_alive(pid: int) -> bool:
+    """Observe a process without signalling it; uncertainty never proves death."""
+
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) is not a harmless existence probe on Windows.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # ERROR_INVALID_PARAMETER: no process with this PID
+                return False
+            if error == 5:  # ERROR_ACCESS_DENIED: cannot establish that it exited
+                return True
+            raise ctypes.WinError(error)
+        try:
+            state = kernel.WaitForSingleObject(handle, 0)
+            if state == 0:  # WAIT_OBJECT_0: process has exited
+                return False
+            if state == 0x102:  # WAIT_TIMEOUT: process is still running
+                return True
+            raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:
     """Terminate a child process group, escalating after a grace period."""
 
