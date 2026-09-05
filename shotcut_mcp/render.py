@@ -6,7 +6,6 @@ import mimetypes
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -15,11 +14,11 @@ from typing import Any
 
 from .errors import ConflictError, RequestCancelled, ToolError
 from .platform import (
-    creation_flags,
     discover_executables,
     enforce_project_resource_policy,
     ensure_melt_ready,
     require_executable,
+    start_render_supervisor,
 )
 from .project_snapshot import load_project_render_input
 from .protocol import cancellation_requested, report_progress
@@ -33,6 +32,7 @@ from .render_jobs import (
     release_gate,
     render_input_snapshot,
     request_cancel,
+    startup_log_path,
     write_job,
 )
 from .storage import OutputTransaction, RenderInputSnapshot, process_is_alive
@@ -382,14 +382,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         raise
     report_progress(3, 4, "Render job metadata persisted.")
     try:
-        process = subprocess.Popen(
-            [sys.executable, "-m", "shotcut_mcp.render_worker", job_id],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creation_flags(),
-            start_new_session=os.name != "nt",
-        )
+        process = start_render_supervisor(job_id, startup_log_path(job_id))
     except OSError as exc:
         output.cleanup()
         snapshot.cleanup_if_owned()
@@ -580,7 +573,7 @@ def render_status(job_id: str) -> dict[str, Any]:
     metadata["output_size_bytes"] = (
         output_path.stat().st_size if output_path.is_file() else None
     )
-    metadata["log_tail"] = log_tail
+    metadata["log_tail"] = log_tail or read_progress(startup_log_path(job_id))[1]
     now = float(metadata.get("finished_at") or time.time())
     metadata["elapsed_seconds"] = max(
         0.0, now - float(metadata.get("started_at") or now)

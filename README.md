@@ -19,6 +19,8 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 You need **Python 3.10+**, **Shotcut 26.6.25** with MLT 7.40.0 serialization in the compatible
 7.40.x family, and an MCP client that supports local `stdio` servers. Shotcut provides Melt,
 FFmpeg, FFprobe, codecs, and filters; the server uses only Python's standard library.
+The bundled launchers load the server and background renderer from the extension itself;
+you do not need to install the Python package or configure `PYTHONPATH`.
 
 ### 1. Connect your client
 

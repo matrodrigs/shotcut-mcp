@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -218,6 +219,24 @@ def run_capture(
         stdout = stdout_file.read().decode("utf-8", errors="replace")
         stderr = stderr_file.read().decode("utf-8", errors="replace")
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def start_render_supervisor(
+    job_id: str, diagnostic_path: Path
+) -> subprocess.Popen[Any]:
+    """Launch our bundled worker without changing cwd or the inherited environment."""
+
+    launcher = (
+        Path(__file__).resolve().parents[1] / "scripts/shotcut_mcp_render_worker.py"
+    )
+    return subprocess.Popen(
+        [sys.executable, str(launcher), job_id, str(diagnostic_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags(),
+        start_new_session=os.name != "nt",
+    )
 
 
 def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:

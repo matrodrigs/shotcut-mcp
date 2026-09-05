@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 
+from scripts.build_release import build_release
+from shotcut_mcp import __version__
 from shotcut_mcp.platform import (
     analyze_media_quality,
     discover_executables,
@@ -24,6 +29,118 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_packaged_stdio_render_from_external_directory(self) -> None:
+        executables = discover_executables()
+        self.assertIsNotNone(executables.ffmpeg)
+        with tempfile.TemporaryDirectory(prefix="packaged render space ") as directory:
+            root = Path(directory).resolve()
+            result = build_release(__version__, root / "dist")
+            extension = root / "extension space"
+            with zipfile.ZipFile(result["artifact"]) as bundle:
+                bundle.extractall(extension)
+            client = root / "client working directory"
+            client.mkdir()
+            environment = os.environ.copy()
+            environment.pop("PYTHONPATH", None)
+            environment.update(TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+
+            def call_tool(name: str, arguments: dict) -> dict:
+                messages = [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {},
+                            "clientInfo": {
+                                "name": "packaged-render-test",
+                                "version": "1",
+                            },
+                        },
+                    },
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": name, "arguments": arguments},
+                    },
+                ]
+                response = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        str(extension / "scripts/shotcut_mcp_server.py"),
+                    ],
+                    input="".join(json.dumps(message) + "\n" for message in messages),
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    cwd=client,
+                    env=environment,
+                    timeout=120,
+                    check=False,
+                )
+                self.assertEqual(response.returncode, 0, response.stderr)
+                replies = [json.loads(line) for line in response.stdout.splitlines()]
+                reply = next(item for item in replies if item.get("id") == 2)
+                self.assertNotIn("error", reply)
+                payload = reply["result"]
+                self.assertFalse(payload.get("isError"), payload)
+                return payload["structuredContent"]
+
+            media = root / "source.mp4"
+            self._create_media(executables.ffmpeg, media)
+            project = call_tool(
+                "create_project",
+                {
+                    "project_path": str(root / "timeline.mlt"),
+                    "width": 320,
+                    "height": 240,
+                    "fps_num": 30,
+                    "clips": [{"path": str(media), "in_frame": 0, "out_frame": 59}],
+                    "validate": True,
+                },
+            )
+            for preset in ("h264-high", "h264-web"):
+                with self.subTest(preset=preset):
+                    output = root / f"{preset}.mp4"
+                    job = call_tool(
+                        "start_render",
+                        {
+                            "project_path": project["path"],
+                            "output_path": str(output),
+                            "preset": preset,
+                            "expected_revision": project["revision"],
+                            "in_frame": 5,
+                            "out_frame": 24,
+                        },
+                    )
+                    # Each call starts a fresh MCP process: the original owner exits
+                    # before polling, as it would after restarting a desktop client.
+                    deadline = time.monotonic() + 60
+                    status = call_tool("render_status", {"job_id": job["job_id"]})
+                    while (
+                        status["status"] in {"queued", "running"}
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.2)
+                        status = call_tool("render_status", {"job_id": job["job_id"]})
+                    self.assertEqual(status["status"], "completed", status)
+                    self.assertTrue(status["delivery_complete"], status)
+                    self.assertEqual(
+                        Path(status["editable_project_path"]).read_bytes(),
+                        Path(project["path"]).read_bytes(),
+                    )
+                    info = summarize_media(output)
+                    self.assertAlmostEqual(info["duration_seconds"], 20 / 30, delta=0.1)
+                    video = next(
+                        stream
+                        for stream in info["streams"]
+                        if stream["type"] == "video"
+                    )
+                    self.assertEqual((video["width"], video["height"]), (320, 240))
+
     @staticmethod
     def _create_media(ffmpeg: Path, media: Path, duration: int = 2) -> None:
         subprocess.run(

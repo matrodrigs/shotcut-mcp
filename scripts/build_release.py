@@ -17,6 +17,7 @@ STATIC_MEMBERS = (
     Path("README.md"),
     Path("manifest.json"),
     Path("scripts/shotcut_mcp_server.py"),
+    Path("scripts/shotcut_mcp_render_worker.py"),
 )
 VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 

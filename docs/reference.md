@@ -139,6 +139,9 @@ the target is checked again for concurrent changes, and promotion is atomic. A d
 supervisor owns completion and cancellation independently of the MCP stdio process. Every render
 uses an immutable byte-for-byte sibling project snapshot, so later edits to the live project cannot
 change the running job; the successful snapshot is retained as the exact editable delivery artifact.
+The supervisor loads the bundled package independently of the client's working directory and
+preserves that directory for relative paths. If worker initialization fails before rendering,
+`render_status.log_tail` includes the bounded startup diagnostic when available.
 
 ## Limitations
 

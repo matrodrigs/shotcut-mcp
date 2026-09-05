@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -263,6 +264,47 @@ class RenderJobPersistenceTests(unittest.TestCase):
 
 
 class RenderLifecycleTests(unittest.TestCase):
+    def test_render_from_external_working_directory_preserves_relative_paths(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix="render client space ") as directory:
+            client_root = Path(directory).resolve()
+            # The parent finds the package through its launcher; the real worker must
+            # bootstrap its own imports without relying on cwd or PYTHONPATH.
+            program = f"""
+import os, sys
+from pathlib import Path
+sys.path.insert(0, {str(root)!r})
+from tests.test_rendering import RenderLifecycleTests
+from shotcut_mcp.render import RUNNING_JOBS, render_status
+source = Path('renderer.py').resolve()
+source.write_text("from pathlib import Path\\nimport sys\\ntarget = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\\nPath(target).write_bytes(Path('relative-input.txt').read_bytes())\\n")
+Path('relative-input.txt').write_bytes(b'rendered from client cwd')
+output = Path('output.mp4').resolve()
+job = RenderLifecycleTests._start_with_python_renderer(source, output)
+RUNNING_JOBS[job['job_id']].wait(timeout=15)
+status = render_status(job['job_id'])
+assert status['status'] == 'completed', status
+assert status['delivery_complete'], status
+assert output.read_bytes() == b'rendered from client cwd'
+assert Path(status['editable_project_path']).read_bytes() == source.read_bytes()
+assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.environ
+"""
+            environment = os.environ.copy()
+            environment.pop("PYTHONPATH", None)
+            environment.update(TEMP=directory, TMP=directory, TMPDIR=directory)
+            result = subprocess.run(
+                [sys.executable, "-B", "-c", program],
+                cwd=client_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=25,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     @staticmethod
     def _wait_for_status(
         job_id: str, expected: str, timeout: float = 15

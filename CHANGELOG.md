@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Bootstrap the durable render supervisor through an absolute bundled entry point,
+  preserving client-relative paths and working without an installed Python package or
+  `PYTHONPATH`; retain bounded startup diagnostics when worker imports fail (#3).
+
 ## 1.5.1 (2026-08-02)
 
 ### Changed
