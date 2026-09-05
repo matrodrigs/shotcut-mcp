@@ -35,7 +35,8 @@ class RealShotcutIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             media = root / "frame-counter.mkv"
-            # Lossless RGB: red encodes each source frame as 10 + 8 * frame.
+            # Lossless RGB: red identifies each source frame. Use unmapped MLT
+            # previews as the reference because RGB conversion varies by build.
             subprocess.run(
                 [
                     str(executables.ffmpeg),
@@ -59,6 +60,31 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                 (1, 11, ((0, 4), (1, 5), (2, 6), (4, 9), (10, 21))),
                 (-1, 10, ((0, 21), (1, 20), (2, 18), (4, 15), (9, 5))),
             )
+            reference_path = root / "reference.mlt"
+            create_project(
+                {
+                    "project_path": str(reference_path),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 30,
+                    "clips": [{"path": str(media), "in_frame": 4, "out_frame": 21}],
+                }
+            )
+            reference_pixels = {}
+            for source_frame in range(4, 22):
+                preview = root / f"reference-{source_frame}.png"
+                render_preview(reference_path, preview, source_frame - 4, False)
+                reference_pixels[source_frame] = self._preview_pixel(
+                    executables.ffmpeg, preview
+                )
+            # A one-frame error must remain distinguishable from conversion noise.
+            for source_frame in range(4, 21):
+                self.assertGreater(
+                    reference_pixels[source_frame + 1][0]
+                    - reference_pixels[source_frame][0],
+                    4,
+                    msg=(source_frame, reference_pixels),
+                )
             for direction, duration, expected_frames in cases:
                 with self.subTest(direction=direction):
                     path = root / f"ramp-{direction}.mlt"
@@ -95,16 +121,15 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                     for frame, source_frame in expected_frames:
                         preview = root / f"ramp-{direction}-{frame}.png"
                         render_preview(path, preview, frame, False)
-                        red, green, blue = self._preview_pixel(
-                            executables.ffmpeg, preview
-                        )
-                        self.assertAlmostEqual(
-                            red,
-                            10 + 8 * source_frame,
-                            delta=2,
-                            msg=(direction, frame, source_frame, red),
-                        )
-                        self.assertLess(max(green, blue), 3)
+                        actual = self._preview_pixel(executables.ffmpeg, preview)
+                        expected = reference_pixels[source_frame]
+                        for channel, value in enumerate(actual):
+                            self.assertAlmostEqual(
+                                value,
+                                expected[channel],
+                                delta=2,
+                                msg=(direction, frame, source_frame, actual, expected),
+                            )
 
     def test_replacing_speed_maps_preserves_rendered_source_after_trim_and_split(
         self,
