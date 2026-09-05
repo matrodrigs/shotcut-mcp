@@ -239,7 +239,12 @@ _OPERATION_CATALOG_BASE: dict[str, dict[str, Any]] = {
         "optional": ["image_mode", "pitch_compensation"],
         "notes": (
             "Uses one owned timeremap link. Entirely forward or entirely reverse maps "
-            "are supported; zero speeds and direction changes are rejected."
+            "are supported; zero speeds and direction changes are rejected. Replacing "
+            "a map preserves its selected source range, including after trim/split. "
+            "Legacy or externally changed maps without trustworthy source bounds "
+            "must be rebuilt from the source clip before replacement. Reverse maps "
+            "landing on source frame zero are rejected due to an MLT integration "
+            "boundary; use set_clip_speed for constant reversal."
         ),
     },
 }

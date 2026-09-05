@@ -1264,7 +1264,7 @@ class ProjectDocument:
             name = operation["name"]
             if not isinstance(name, str) or not name.strip():
                 raise ToolError("name must be a non-empty string.")
-            if any(item is not track and item.name == name for item in self.tracks()):
+            if any(item.id != track.id and item.name == name for item in self.tracks()):
                 raise ToolError(f"A track named {name!r} already exists.")
             _set_property(track.playlist, "shotcut:name", name)
             track.name = name
@@ -2057,9 +2057,10 @@ class ProjectDocument:
             _clock_to_frames(left.get("out"), self.fps) or left_in + left_duration - 1
         )
         right_in = _clock_to_frames(right.get("in"), self.fps) or 0
-        pre = copy.deepcopy(left)
+        # These occurrences survive the transition; retain their batch identities.
+        pre = left
         pre.set("out", str(left_out - duration))
-        post = copy.deepcopy(right)
+        post = right
         post.set("in", str(right_in + duration))
         tractor_id = self.new_id("tractor_transition")
         tractor = ET.Element(
@@ -2152,8 +2153,8 @@ class ProjectDocument:
         if not signature_is_known:
             raise ToolError("The transition structure is not recognized.")
         left, right = (
-            copy.deepcopy(sequence[index - 1]),
-            copy.deepcopy(sequence[index + 1]),
+            sequence[index - 1],
+            sequence[index + 1],
         )
         if left.tag != "entry" or right.tag != "entry":
             raise ToolError("The transition does not have recognizable adjacent clips.")
@@ -2910,27 +2911,105 @@ class ProjectDocument:
         }
 
     @staticmethod
-    def _speed_map_duration(
-        source_frames: int, keyframes: list[tuple[int, float]]
-    ) -> int:
-        remaining = float(source_frames)
+    def _speed_map_distance(frames: int, keyframes: list[tuple[int, float]]) -> float:
+        """Sum per-frame speeds, matching MLT's discrete timeremap integration."""
+
+        distance = 0.0
         for (start, speed), (end, next_speed) in itertools.pairwise(keyframes):
             speed = abs(speed)
             next_speed = abs(next_speed)
-            span = end - start
-            slope = (next_speed - speed) / span
-            area = span * (speed + next_speed) / 2
-            if remaining > area:
-                remaining -= area
-                continue
-            if abs(slope) < 1e-12:
-                partial = remaining / speed
-            else:
-                discriminant = speed * speed + 2 * slope * remaining
-                partial = (-speed + math.sqrt(max(0.0, discriminant))) / slope
-            return max(1, math.ceil(start + partial))
+            count = min(max(0, frames - start), end - start)
+            slope = (next_speed - speed) / (end - start)
+            distance += count * speed + slope * count * (count - 1) / 2
+            if frames <= end:
+                return distance
         start, speed = keyframes[-1]
-        return max(1, math.ceil(start + remaining / abs(speed)))
+        return distance + max(0, frames - start) * abs(speed)
+
+    @classmethod
+    def _speed_map_duration(
+        cls, source_frames: int, keyframes: list[tuple[int, float]], *, forward: bool
+    ) -> int:
+        low, high = (
+            1,
+            math.ceil(source_frames / min(abs(speed) for _, speed in keyframes)),
+        )
+        while low < high:
+            middle = (low + high) // 2
+            distance = cls._speed_map_distance(middle, keyframes)
+            past_end = (
+                distance + 1e-9 >= source_frames
+                if forward
+                else distance > source_frames - 1 + 1e-9
+            )
+            if past_end:
+                high = middle
+            else:
+                low = middle + 1
+        return low
+
+    def _speed_map_source_range(
+        self, service: ET.Element, link: ET.Element, frame_in: int, frame_out: int
+    ) -> tuple[int, int]:
+        """Recover the selected source interval after entry-only trims or splits.
+
+        Persisted source bounds preserve the partial last frame across replacements.
+        A legacy or externally changed map lacks that evidence: never guess a range.
+        """
+
+        try:
+            source_in, source_out, mapped_in, mapped_out = (
+                int(_property(link, f"shotcut:mcp{name}") or "")
+                for name in ("SourceIn", "SourceOut", "MapIn", "MapOut")
+            )
+            serialized = _property(link, "speed_map") or ""
+            if not serialized or serialized != _property(link, "shotcut:mcpSpeedMap"):
+                raise ValueError("unowned speed map")
+            if not (
+                0 <= source_in <= source_out
+                and mapped_in <= frame_in <= frame_out <= mapped_out
+            ):
+                raise ValueError("selection outside the mapped interval")
+            if (
+                _clock_to_frames(service.get("in"), self.fps),
+                _clock_to_frames(service.get("out"), self.fps),
+            ) != (0, mapped_out) or (
+                _clock_to_frames(link.get("in"), self.fps),
+                _clock_to_frames(link.get("out"), self.fps),
+            ) != (mapped_in, mapped_out):
+                raise ValueError("changed mapping origin")
+            points = [item.split("=") for item in serialized.split(";")]
+            if not 2 <= len(points) <= 64:
+                raise ValueError("invalid map")
+            previous = [(int(frame), float(speed)) for frame, speed in points]
+            if (
+                previous[0][0] != 0
+                or any(
+                    not math.isfinite(speed)
+                    or not 0.01 <= abs(speed) <= 100
+                    or (speed > 0) != (previous[0][1] > 0)
+                    for _, speed in previous
+                )
+                or any(a[0] >= b[0] for a, b in itertools.pairwise(previous))
+            ):
+                raise ValueError("invalid map")
+        except (ValueError, TypeError) as exc:
+            raise ToolError(
+                "The existing speed map has no trustworthy original source range. "
+                "Restore the source clip from a backup or reinsert it before replacing its map.",
+                code="speed_map_source_range_unknown",
+                recommended_action="restore_source_clip_before_replacing_speed_map",
+                recommended_tool="list_project_backups",
+            ) from exc
+        start = self._speed_map_distance(frame_in - mapped_in, previous)
+        end = self._speed_map_distance(frame_out - mapped_in + 1, previous)
+        if previous[0][1] > 0:
+            selected_in = source_in + math.floor(start + 1e-9)
+            selected_out = source_in + math.ceil(end - 1e-9) - 1
+        else:
+            selected_in = source_out + 1 - math.ceil(end - 1e-9)
+            selected_out = source_out - math.floor(start + 1e-9)
+        return max(source_in, selected_in), min(source_out, selected_out)
 
     @edit_operation(selector_field="item_index")
     def set_clip_speed_map(self, operation: dict[str, Any]) -> dict[str, Any]:
@@ -2990,6 +3069,9 @@ class ProjectDocument:
             service.tag = "chain"
         if timeremap_links:
             link = timeremap_links[0]
+            frame_in, frame_out = self._speed_map_source_range(
+                service, link, frame_in, frame_out
+            )
         else:
             link = ET.Element("link", {"id": self.new_id("link")})
             first_filter = next(
@@ -2998,22 +3080,48 @@ class ProjectDocument:
             )
             service.insert(first_filter, link)
             self.invalidate()
-        serialized = ";".join(f"{frame}={speed:g}" for frame, speed in keyframes)
+        serialized = ";".join(f"{frame}={speed:.17g}" for frame, speed in keyframes)
         _set_property(link, "mlt_service", "timeremap")
         _set_property(link, "speed_map", serialized)
         _set_property(link, "image_mode", image_mode)
         _set_property(link, "pitch", 1 if pitch else 0)
         source_frames = frame_out - frame_in + 1
-        duration = self._speed_map_duration(source_frames, keyframes)
+        duration = self._speed_map_duration(source_frames, keyframes, forward=forward)
+        if (
+            not forward
+            and frame_out - self._speed_map_distance(duration - 1, keyframes) <= 1e-9
+        ):
+            raise ToolError(
+                "This reverse speed map reaches source frame zero, where the tested MLT "
+                "timeremap can return an invalid frame due to floating-point integration. "
+                "Use set_clip_speed for constant reversal, or select a source range above zero.",
+                code="speed_map_reverse_boundary_unsupported",
+                recommended_action="use_constant_speed_or_select_source_range_above_zero",
+                recommended_tool="shotcut_capabilities",
+            )
         if keyframes[-1][0] >= duration:
             raise ToolError(
                 "A speed-map keyframe lies beyond the resulting clip duration."
             )
         mapped_in = frame_in if forward else frame_out
         mapped_out = mapped_in + duration - 1
+        # MLT integrates speed_map relative to the link's own in point.
+        # The chain's in point alone does not anchor reverse playback.
+        link.set("in", str(mapped_in))
+        link.set("out", str(mapped_out))
+        for name, value in (
+            ("SourceIn", frame_in),
+            ("SourceOut", frame_out),
+            ("MapIn", mapped_in),
+            ("MapOut", mapped_out),
+            ("SpeedMap", serialized),
+        ):
+            _set_property(link, f"shotcut:mcp{name}", value)
         entry.set("in", str(mapped_in))
         entry.set("out", str(mapped_out))
-        service.set("in", str(mapped_in))
+        # Playlist entry positions are absolute within the chain. Giving the chain
+        # a nonzero in would apply the source offset twice when MLT makes its cut.
+        service.set("in", "0")
         service.set("out", str(mapped_out))
         _set_property(service, "length", mapped_out + 1)
         self.update_main_duration()

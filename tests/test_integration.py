@@ -29,6 +29,214 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_speed_ramps_render_distinguishable_source_frames(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "frame-counter.mkv"
+            # Lossless RGB: red encodes each source frame as 10 + 8 * frame.
+            subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "nullsrc=s=64x64:r=30:d=0.8,format=gbrp,geq=r='10+8*N':g=0:b=0",
+                    "-c:v",
+                    "ffv1",
+                    "-pix_fmt",
+                    "bgr0",
+                    str(media),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            cases = (
+                (1, 11, ((0, 4), (1, 5), (2, 6), (4, 9), (10, 21))),
+                (-1, 10, ((0, 21), (1, 20), (2, 18), (4, 15), (9, 5))),
+            )
+            for direction, duration, expected_frames in cases:
+                with self.subTest(direction=direction):
+                    path = root / f"ramp-{direction}.mlt"
+                    state = create_project(
+                        {
+                            "project_path": str(path),
+                            "width": 64,
+                            "height": 64,
+                            "fps_num": 30,
+                            "clips": [
+                                {"path": str(media), "in_frame": 4, "out_frame": 21}
+                            ],
+                        }
+                    )
+                    operation = {
+                        "op": "set_clip_speed_map",
+                        "track": "V1",
+                        "item_index": 0,
+                        "image_mode": "nearest",
+                        "keyframes": [
+                            {"frame": 0, "speed": direction},
+                            {"frame": 4, "speed": 2 * direction},
+                        ],
+                    }
+                    for _ in range(2):
+                        state = edit_project(
+                            {
+                                "project_path": str(path),
+                                "expected_revision": state["revision"],
+                                "operations": [operation],
+                            }
+                        )
+                        self.assertEqual(state["project"]["duration_frames"], duration)
+                    for frame, source_frame in expected_frames:
+                        preview = root / f"ramp-{direction}-{frame}.png"
+                        render_preview(path, preview, frame, False)
+                        red, green, blue = self._preview_pixel(
+                            executables.ffmpeg, preview
+                        )
+                        self.assertAlmostEqual(
+                            red,
+                            10 + 8 * source_frame,
+                            delta=2,
+                            msg=(direction, frame, source_frame, red),
+                        )
+                        self.assertLess(max(green, blue), 3)
+
+    def test_replacing_speed_maps_preserves_rendered_source_after_trim_and_split(
+        self,
+    ) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "red-blue.mp4"
+            subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=red:s=64x64:r=30:d=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=blue:s=64x64:r=30:d=2",
+                    "-filter_complex",
+                    "[0:v][1:v]concat=n=2:v=1:a=0",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-threads",
+                    "1",
+                    str(media),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            for direction in (1, -1):
+                with self.subTest(direction=direction):
+                    path = root / f"map-{direction}.mlt"
+                    state = create_project(
+                        {
+                            "project_path": str(path),
+                            "width": 64,
+                            "height": 64,
+                            "fps_num": 30,
+                            "clips": [{"path": str(media)}],
+                        }
+                    )
+                    operation = {
+                        "op": "set_clip_speed_map",
+                        "track": "V1",
+                        "item_index": 0,
+                        "keyframes": [
+                            {"frame": 0, "speed": 2 * direction},
+                            {"frame": 10, "speed": 2 * direction},
+                        ],
+                    }
+                    for _ in range(2):
+                        state = edit_project(
+                            {
+                                "project_path": str(path),
+                                "expected_revision": state["revision"],
+                                "operations": [operation],
+                            }
+                        )
+                        self.assertEqual(state["project"]["duration_frames"], 60)
+                    state = edit_project(
+                        {
+                            "project_path": str(path),
+                            "expected_revision": state["revision"],
+                            "operations": [
+                                {
+                                    "op": "trim_item",
+                                    "track": "V1",
+                                    "item_index": 0,
+                                    "edge": "start",
+                                    "delta": 5,
+                                },
+                                {
+                                    "op": "trim_item",
+                                    "track": "V1",
+                                    "item_index": 0,
+                                    "edge": "end",
+                                    "delta": -5,
+                                },
+                                {
+                                    "op": "split_item",
+                                    "track": "V1",
+                                    "item_index": 0,
+                                    "offset_frame": 25,
+                                },
+                                *[
+                                    {
+                                        **operation,
+                                        "item_index": index,
+                                        "keyframes": [
+                                            {"frame": 0, "speed": direction},
+                                            {"frame": 10, "speed": direction},
+                                        ],
+                                    }
+                                    for index in (0, 1)
+                                ],
+                            ],
+                        }
+                    )
+                    self.assertEqual(
+                        [
+                            item["duration_frames"]
+                            for item in state["project"]["tracks"][0]["items"]
+                        ],
+                        [50, 50],
+                    )
+                    for frame, channel in (
+                        (0, 0 if direction == 1 else 2),
+                        (99, 2 if direction == 1 else 0),
+                    ):
+                        preview = root / f"preview-{direction}-{frame}.png"
+                        render_preview(path, preview, frame, False)
+                        pixel = self._preview_pixel(executables.ffmpeg, preview)
+                        self.assertGreater(
+                            pixel[channel], 120, (direction, frame, pixel)
+                        )
+                        self.assertLess(
+                            max(
+                                value
+                                for index, value in enumerate(pixel)
+                                if index != channel
+                            ),
+                            30,
+                            (direction, frame, pixel),
+                        )
+
     def test_packaged_stdio_render_from_external_directory(self) -> None:
         executables = discover_executables()
         self.assertIsNotNone(executables.ffmpeg)
