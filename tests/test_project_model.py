@@ -4,6 +4,7 @@ import copy
 import hashlib
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
@@ -180,6 +181,89 @@ class ProjectModelTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ToolError, "multiple tractors"):
                 inspect_project({"path": str(project_path)})
+
+    def test_edit_preserves_root_content_when_ordering_timeline_services(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ordering.mlt"
+            path.write_text(
+                """<mlt producer="main">
+                  <profile width="1920" height="1080" frame_rate_num="30" frame_rate_den="1"/>
+                  <producer id="early"><property name="mlt_service">color</property></producer>
+                  <playlist id="background"><entry producer="black" in="0" out="29"/></playlist>
+                  <playlist id="video">
+                    <property name="shotcut:video">1</property>
+                    <entry producer="late" in="0" out="29"/>
+                  </playlist>
+                  <!--keep this comment-->
+                  <chain id="late" out="29">
+                    <property name="mlt_service">color</property>
+                    <property name="custom">keep this property</property>
+                  </chain>
+                  <extension id="unknown"><nested value="preserved"/></extension>
+                  <producer id="black" out="29"><property name="length">30</property></producer>
+                  <tractor id="nested"><track producer="early"/></tractor>
+                  <tractor id="main" in="0" out="29">
+                    <property name="shotcut">1</property>
+                    <track producer="background"/>
+                    <track producer="video"/>
+                  </tractor>
+                  <producer id="last"><property name="mlt_service">color</property></producer>
+                </mlt>""",
+                encoding="utf-8",
+            )
+            before = ProjectDocument.load(path)
+            before.to_bytes()
+            preserved = {
+                child.get("id"): ET.tostring(child).rstrip()
+                for child in before.root
+                if child.get("id") not in {None, "main"}
+            }
+            for notes in ("reordered", "already ordered"):
+                with self.subTest(notes=notes):
+                    current = ProjectDocument.load(path)
+                    result = edit_project(
+                        {
+                            "project_path": str(path),
+                            "expected_revision": current.revision,
+                            "operations": [{"op": "set_notes", "notes": notes}],
+                        }
+                    )
+                    updated = ProjectDocument.load(path)
+                    self.assertEqual(
+                        [child.get("id") or child.tag for child in updated.root],
+                        [
+                            "profile",
+                            "early",
+                            "background",
+                            "late",
+                            "nested",
+                            "last",
+                            "video",
+                            ET.Comment,
+                            "unknown",
+                            "black",
+                            "main",
+                        ],
+                    )
+                    for identifier, serialized in preserved.items():
+                        self.assertEqual(
+                            ET.tostring(updated.id_map()[identifier]).rstrip(),
+                            serialized,
+                        )
+                    self.assertEqual(
+                        next(
+                            child.text
+                            for child in updated.root
+                            if child.tag is ET.Comment
+                        ),
+                        "keep this comment",
+                    )
+                    self.assertEqual(result["project"]["notes"], notes)
+                    self.assertEqual(result["project"]["duration_frames"], 30)
+                    self.assertEqual(
+                        result["project"]["tracks"][0]["items"][0]["producer_id"],
+                        "late",
+                    )
 
 
 if __name__ == "__main__":

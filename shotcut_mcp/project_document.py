@@ -826,24 +826,31 @@ class ProjectDocument:
     def normalize_root_service_order(self) -> None:
         """Place existing timeline services before editable track playlists."""
         main = self.main_tractor()
-        editable_playlists = [track.playlist for track in self.tracks()]
+        editable_playlists = {track.playlist for track in self.tracks()}
         children = list(self.root)
-        anchors = [playlist for playlist in editable_playlists if playlist in children]
-        if not anchors:
+        anchor_index = next(
+            (
+                index
+                for index, child in enumerate(children)
+                if child in editable_playlists
+            ),
+            None,
+        )
+        if anchor_index is None:
             return
-        anchor = min(anchors, key=children.index)
-        services = [
-            child
-            for child in children
-            if child is not main
-            and child.tag in {"producer", "chain", "tractor"}
-            and child.get("id") != "black"
-            and children.index(child) > children.index(anchor)
-        ]
-        for service in services:
-            self.root.remove(service)
-            self.root.insert(list(self.root).index(anchor), service)
+        services = []
+        remaining = []
+        for child in children[anchor_index:]:
+            if (
+                child is not main
+                and child.tag in {"producer", "chain", "tractor"}
+                and child.get("id") != "black"
+            ):
+                services.append(child)
+            else:
+                remaining.append(child)
         if services:
+            self.root[:] = children[:anchor_index] + services + remaining
             self.invalidate()
 
     def item_duration(self, element: ET.Element) -> int:

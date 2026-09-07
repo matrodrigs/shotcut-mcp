@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Normalize timeline service order in linear time when preparing edits, preserving
+  service order and unknown XML content without repeated root-list searches.
+
 ## 1.5.3 (2026-09-05)
 
 ### Fixed
