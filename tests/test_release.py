@@ -371,6 +371,51 @@ class ReleaseBundleTests(unittest.TestCase):
 
 
 class SiteAssetTests(unittest.TestCase):
+    def test_demo_toolbar_does_not_render_an_empty_file_glyph(self) -> None:
+        site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("demo-file-icon", site_markup)
+        self.assertNotIn(".demo-file-icon", site_styles)
+
+    def test_validation_badge_stays_clear_of_video_controls(self) -> None:
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            ".floating-chip-right {\n  right: -3.5rem;\n  bottom: 28%;",
+            site_styles,
+        )
+
+    def test_desktop_navigation_uses_lightweight_standalone_links(self) -> None:
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            ".site-nav {\n"
+            "  display: flex;\n"
+            "  align-items: center;\n"
+            "  gap: 1.75rem;\n"
+            "  padding: 0;\n"
+            "  border: 0;\n"
+            "  background: transparent;",
+            site_styles,
+        )
+
+    def test_navigation_tracks_the_visible_section(self) -> None:
+        site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+        site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
+
+        self.assertEqual(site_markup.count("data-section-link"), 3)
+        self.assertIn('setAttribute("aria-current", "location")', site_script)
+        self.assertIn('removeAttribute("aria-current")', site_script)
+
+    def test_pressed_controls_do_not_shrink_inside_their_layout_box(self) -> None:
+        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertNotRegex(
+            site_styles,
+            r":active[^{}]*\{[^{}]*transform:\s*scale\(",
+        )
+
     def test_collapsed_codex_install_panel_does_not_reserve_empty_space(self) -> None:
         site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
 

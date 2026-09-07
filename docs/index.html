@@ -9,7 +9,7 @@
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="theme-color" content="#080b10">
   <link rel="canonical" href="https://matrodrigs.github.io/shotcut-mcp/">
-  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="icon" href="./icon.svg?v=4" type="image/svg+xml">
 
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Shotcut MCP">
@@ -20,7 +20,7 @@
   <meta name="twitter:title" content="Shotcut MCP — Native timeline editing through MCP">
   <meta name="twitter:description" content="A local MCP server for safe, transactional Shotcut editing.">
 
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=5">
   <script>document.documentElement.classList.remove('no-js')</script>
 
   <script type="application/ld+json">
@@ -50,7 +50,7 @@
   <header class="site-header" data-site-header>
     <div class="header-shell">
       <a class="brand" href="#top" aria-label="Shotcut MCP home">
-        <img class="brand-mark" src="./icon.svg" alt="" width="36" height="36">
+        <img class="brand-mark" src="./icon.svg?v=4" alt="" width="36" height="36">
         <span>Shotcut MCP</span>
       </a>
 
@@ -61,20 +61,25 @@
       </button>
 
       <nav class="site-nav" id="site-nav" aria-label="Main navigation" data-site-nav>
-        <a href="#workflow">How it works</a>
-        <a href="#tools">Capabilities</a>
+        <a href="#workflow" data-section-link>How it works</a>
+        <a href="#tools" data-section-link>Capabilities</a>
         <a href="https://github.com/matrodrigs/shotcut-mcp#readme">Documentation</a>
-        <a class="nav-cta" href="#install">Install</a>
+        <a class="nav-cta" href="#install" data-section-link>Install</a>
       </nav>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
+      <div class="hero-ambient" aria-hidden="true">
+        <span class="hero-orb hero-orb-one"></span>
+        <span class="hero-orb hero-orb-two"></span>
+        <span class="hero-grid-glow"></span>
+      </div>
       <div class="shell hero-layout">
         <div class="hero-copy">
-          <p class="overline">Local MCP server <span aria-hidden="true">/</span> MIT licensed</p>
-          <h1>Edit Shotcut timelines. <span>Keep them native.</span></h1>
+          <p class="overline"><span class="live-dot" aria-hidden="true"></span> Local-first editing <span aria-hidden="true">/</span> Open source</p>
+          <h1>Edit at the speed of <span>thought.</span><br>Stay native to Shotcut.</h1>
           <p class="hero-summary">
             Ask your MCP client to trim clips, add titles, relink media, or render a delivery.
             Shotcut MCP applies structured edits to the saved <code>.mlt</code> file, validates them locally,
@@ -88,15 +93,16 @@
             </a>
             <a class="button button-secondary" href="https://github.com/matrodrigs/shotcut-mcp/releases/latest">Download latest release</a>
           </div>
-
-          <ol class="hero-route" aria-label="Example edit flow">
-            <li><span>Intent</span><strong>“Trim the pause and export the marked range.”</strong></li>
-            <li><span>Transaction</span><strong>Native <code>.mlt</code> operations</strong></li>
-            <li><span>Result</span><strong>Validated. Backed up. Editable.</strong></li>
-          </ol>
         </div>
 
-        <figure class="product-demo" aria-labelledby="demo-title">
+        <div class="demo-stage">
+          <div class="floating-chip floating-chip-left" aria-hidden="true">
+            <span>PROJECT</span><strong>look-again.mlt</strong>
+          </div>
+          <div class="floating-chip floating-chip-right" aria-hidden="true">
+            <i></i><span>VALIDATED</span><strong>MLT 7.40</strong>
+          </div>
+          <figure class="product-demo" aria-labelledby="demo-title" data-spotlight-card>
           <div class="demo-toolbar">
             <div class="demo-window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
             <p>shotcut-mcp-demo.mp4</p>
@@ -148,8 +154,20 @@
               <strong id="demo-title">Shotcut MCP demonstration</strong>
               <span>Native timeline edit to H.264 export</span>
             </div>
+            <div class="demo-meta" aria-label="Demo project metadata">
+              <span><b>24</b> FPS</span>
+              <span><b>1080</b> P</span>
+              <span><b>H.264</b> EXPORT</span>
+            </div>
           </figcaption>
-        </figure>
+          </figure>
+        </div>
+
+        <ol class="hero-route" aria-label="Example edit flow">
+          <li><span>01 — Intent</span><strong>“Trim the pause and export the marked range.”</strong></li>
+          <li><span>02 — Transaction</span><strong>Native <code>.mlt</code> operations</strong></li>
+          <li><span>03 — Result</span><strong>Validated. Backed up. Editable.</strong></li>
+        </ol>
       </div>
     </section>
 
@@ -406,7 +424,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
 
   <footer class="site-footer">
     <div class="shell footer-layout">
-      <div class="brand footer-brand"><img class="brand-mark" src="./icon.svg" alt="" width="36" height="36"><span>Shotcut MCP</span></div>
+      <div class="brand footer-brand"><img class="brand-mark" src="./icon.svg?v=4" alt="" width="36" height="36"><span>Shotcut MCP</span></div>
       <p>Independent community project. Not affiliated with or endorsed by Shotcut or the MLT project.</p>
       <nav aria-label="Footer navigation">
         <a href="https://github.com/matrodrigs/shotcut-mcp/blob/main/docs/spec.md">Specification</a>
@@ -416,6 +434,6 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
     </div>
   </footer>
 
-  <script src="./site.js" defer></script>
+  <script src="./site.js?v=4" defer></script>
 </body>
 </html>

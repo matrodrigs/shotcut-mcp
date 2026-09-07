@@ -17,23 +17,55 @@
     header.classList.toggle("is-scrolled", window.scrollY > 20);
   };
 
+  const sectionLinks = [...document.querySelectorAll("[data-section-link]")];
+  const sectionNavigation = sectionLinks
+    .map((link) => ({ link, section: document.querySelector(link.hash) }))
+    .filter(({ section }) => section);
+
+  const updateActiveSection = () => {
+    const activationLine = (header?.offsetHeight || 0) + Math.min(window.innerHeight * 0.22, 160);
+    let activeLink = null;
+
+    sectionNavigation.forEach(({ link, section }) => {
+      if (section.getBoundingClientRect().top <= activationLine) activeLink = link;
+    });
+
+    sectionLinks.forEach((link) => {
+      if (link === activeLink) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  };
+
   let scrollFrame = 0;
   window.addEventListener("scroll", () => {
     if (scrollFrame) return;
     scrollFrame = window.requestAnimationFrame(() => {
       updateHeader();
+      updateActiveSection();
       scrollFrame = 0;
     });
   }, { passive: true });
   updateHeader();
+  updateActiveSection();
 
   menuToggle?.addEventListener("click", () => {
     setMenuOpen(menuToggle.getAttribute("aria-expanded") !== "true");
   });
 
   siteNav?.addEventListener("click", (event) => {
-    if (event.target.closest("a")) setMenuOpen(false);
+    const link = event.target.closest("a");
+    if (!link) return;
+    setMenuOpen(false);
+
+    if (link.matches("[data-section-link]")) {
+      sectionLinks.forEach((candidate) => {
+        if (candidate === link) candidate.setAttribute("aria-current", "location");
+        else candidate.removeAttribute("aria-current");
+      });
+    }
   });
+
+  window.addEventListener("hashchange", updateActiveSection);
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -411,4 +443,49 @@
   } else {
     demoTouchQuery.addListener?.(resetDemoControlsIdleTimer);
   }
+
+  const revealTargets = document.querySelectorAll([
+    ".section-heading",
+    ".safety-copy",
+    ".capability-grid article",
+    ".install-browser",
+    ".faq-layout > div:first-child",
+    ".faq-list details",
+    ".final-cta-layout > div",
+  ].join(","));
+
+  initializeOneShotMotion({
+    targets: revealTargets,
+    pendingClass: "reveal-pending",
+    visibleClass: "reveal-visible",
+    threshold: 0.12,
+    rootMargin: "0px 0px -7% 0px",
+  });
+
+  const spotlightCards = document.querySelectorAll("[data-spotlight-card]");
+  const precisePointer = window.matchMedia("(hover: hover) and (pointer: fine)");
+
+  spotlightCards.forEach((card) => {
+    const resetSpotlight = () => {
+      card.style.setProperty("--spotlight-opacity", "0");
+      card.style.setProperty("--tilt-x", "0deg");
+      card.style.setProperty("--tilt-y", "0deg");
+    };
+
+    card.addEventListener("pointermove", (event) => {
+      if (!precisePointer.matches || reducedMotion.matches) return;
+      const bounds = card.getBoundingClientRect();
+      const x = event.clientX - bounds.left;
+      const y = event.clientY - bounds.top;
+      const horizontal = x / bounds.width - 0.5;
+      const vertical = y / bounds.height - 0.5;
+
+      card.style.setProperty("--spotlight-x", `${x}px`);
+      card.style.setProperty("--spotlight-y", `${y}px`);
+      card.style.setProperty("--spotlight-opacity", "1");
+      card.style.setProperty("--tilt-x", `${horizontal * 1.5}deg`);
+      card.style.setProperty("--tilt-y", `${vertical * -1.2}deg`);
+    });
+    card.addEventListener("pointerleave", resetSpotlight);
+  });
 })();
