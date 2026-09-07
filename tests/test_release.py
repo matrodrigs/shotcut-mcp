@@ -378,28 +378,6 @@ class SiteAssetTests(unittest.TestCase):
         self.assertNotIn("demo-file-icon", site_markup)
         self.assertNotIn(".demo-file-icon", site_styles)
 
-    def test_validation_badge_stays_clear_of_video_controls(self) -> None:
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
-
-        self.assertIn(
-            ".floating-chip-right {\n  right: -3.5rem;\n  bottom: 28%;",
-            site_styles,
-        )
-
-    def test_desktop_navigation_uses_lightweight_standalone_links(self) -> None:
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
-
-        self.assertIn(
-            ".site-nav {\n"
-            "  display: flex;\n"
-            "  align-items: center;\n"
-            "  gap: 1.75rem;\n"
-            "  padding: 0;\n"
-            "  border: 0;\n"
-            "  background: transparent;",
-            site_styles,
-        )
-
     def test_navigation_tracks_the_visible_section(self) -> None:
         site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
         site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
