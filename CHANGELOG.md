@@ -1,11 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.5.4 (2026-09-07)
 
 ### Fixed
 
 - Normalize timeline service order in linear time when preparing edits, preserving
   service order and unknown XML content without repeated root-list searches.
+
+### Changed
+
+- Route validation and contact-sheet handlers directly to project workflows and remove
+  brittle CSS string assertions that did not verify rendered layout.
+- Refresh the project website with a redesigned landing page, refined navigation,
+  and an updated timeline project icon.
 
 ## 1.5.3 (2026-09-05)
 
