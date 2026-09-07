@@ -17,8 +17,8 @@ from shotcut_mcp.project import (
     diagnose_missing_media,
     edit_project,
     plan_project_edit,
+    render_project_contact_sheet,
 )
-from shotcut_mcp.tools import render_contact_sheet_tool
 
 
 class ProjectFeatureTests(unittest.TestCase):
@@ -753,7 +753,7 @@ class ProjectFeatureTests(unittest.TestCase):
                 "shotcut_mcp.project._render_contact_sheet",
                 return_value={"created": True, "path": str(root / "sheet.png")},
             ) as render:
-                result = render_contact_sheet_tool(
+                result = render_project_contact_sheet(
                     {
                         "project_path": str(project_path),
                         "output_path": str(root / "sheet.png"),
@@ -775,7 +775,7 @@ class ProjectFeatureTests(unittest.TestCase):
                 "shotcut_mcp.project._render_contact_sheet",
                 return_value={"created": True, "path": str(root / "managed.png")},
             ) as render:
-                render_contact_sheet_tool(
+                render_project_contact_sheet(
                     {"project_path": str(project_path), "sample_count": 1}
                 )
             self.assertIsNone(render.call_args.args[1])

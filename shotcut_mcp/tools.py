@@ -33,9 +33,7 @@ from .project import (
     plan_project_edit,
     render_project_contact_sheet,
     restore_backup,
-)
-from .project import (
-    validate_project as validate_project_workflow,
+    validate_project,
 )
 from .protocol import report_progress, schema_errors
 from .render import (
@@ -1085,10 +1083,6 @@ def inspect_project(arguments: dict[str, Any]) -> dict[str, Any]:
     return ProjectDocument.load(expand_path(arguments.get("path", ""))).snapshot()
 
 
-def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
-    return validate_project_workflow(arguments)
-
-
 def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     frame = arguments.get("frame", 0)
     if isinstance(frame, bool) or not isinstance(frame, int):
@@ -1128,10 +1122,6 @@ def render_preview_batch_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     return render_preview_batch(
         expand_path(arguments.get("project_path", "")), requests, overwrite
     )
-
-
-def render_contact_sheet_tool(arguments: dict[str, Any]) -> dict[str, Any]:
-    return render_project_contact_sheet(arguments)
 
 
 def open_in_shotcut_tool(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -3615,7 +3605,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "validate_project": validate_project,
     "render_preview": render_preview_tool,
     "render_preview_batch": render_preview_batch_tool,
-    "render_contact_sheet": render_contact_sheet_tool,
+    "render_contact_sheet": render_project_contact_sheet,
     "detect_hardware_encoders": lambda arguments: detect_hardware_encoders(
         arguments.get("refresh", False)
     ),
