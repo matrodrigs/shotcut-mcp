@@ -1,6 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Shotcut MCP">
-  <rect width="48" height="48" rx="12" fill="#115c77"/>
-  <path d="M11 16h15M11 24h26M11 32h15" fill="none" stroke="#f8fbfc" stroke-width="3.5" stroke-linecap="round"/>
-  <path d="M31 12v24" fill="none" stroke="#62c98d" stroke-width="3" stroke-linecap="round"/>
-  <path d="m27.5 12 3.5-4 3.5 4Z" fill="#62c98d"/>
+  <defs>
+    <linearGradient id="surface" x1="8" y1="5" x2="41" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#177a99"/>
+      <stop offset="1" stop-color="#0d465d"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="46" height="46" rx="13" fill="url(#surface)" stroke="#68c3df" stroke-opacity=".28"/>
+  <rect x="8.5" y="10" width="31" height="29" rx="8" fill="#07141b" fill-opacity=".38" stroke="#dff7fc" stroke-opacity=".12"/>
+  <rect x="12" y="14" width="10" height="6" rx="2" fill="#b9edf7"/>
+  <rect x="24" y="14" width="12" height="6" rx="2" fill="#f7fbfc" fill-opacity=".8"/>
+  <rect x="12" y="22" width="16" height="6" rx="2" fill="#f7fbfc" fill-opacity=".9"/>
+  <rect x="30" y="22" width="6" height="6" rx="2" fill="#b9edf7"/>
+  <rect x="12" y="30" width="7" height="6" rx="2" fill="#b9edf7"/>
+  <rect x="21" y="30" width="15" height="6" rx="2" fill="#f7fbfc" fill-opacity=".82"/>
+  <path d="M26 9v30" stroke="#73e2a2" stroke-width="2" stroke-linecap="round"/>
+  <path d="m22.8 10 3.2-3.5 3.2 3.5Z" fill="#73e2a2"/>
 </svg>
