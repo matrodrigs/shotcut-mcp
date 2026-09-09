@@ -8,17 +8,23 @@ import json
 import os
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import BinaryIO
 
 from . import __version__
 from .errors import ConflictError, RequestCancelled, ToolError
-from .protocol import request_cancellation, request_progress, schema_errors
-from .tools import HANDLERS, TOOLS, validate_tool_arguments
+from .protocol import (
+    is_array,
+    is_object,
+    request_cancellation,
+    request_progress,
+    schema_errors,
+)
+from .tools import HANDLERS, TOOLS, ToolDefinition, validate_tool_arguments
 
 SERVER_NAME = "shotcut-mcp"
 LATEST_PROTOCOL_VERSION = "2025-11-25"
@@ -97,15 +103,15 @@ class ProtocolSession:
 
 
 def _error(
-    request_id: Any, code: int, message: str, data: Any = None
-) -> dict[str, Any]:
-    error: dict[str, Any] = {"code": code, "message": message}
+    request_id: object, code: int, message: str, data: object = None
+) -> dict[str, object]:
+    error: dict[str, object] = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
     return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
-def _tools_for_version(protocol_version: str) -> list[dict[str, Any]]:
+def _tools_for_version(protocol_version: str) -> list[ToolDefinition]:
     tools = copy.deepcopy(TOOLS)
     for tool in tools:
         if protocol_version not in STRUCTURED_CONTENT_PROTOCOLS:
@@ -116,17 +122,17 @@ def _tools_for_version(protocol_version: str) -> list[dict[str, Any]]:
         elif protocol_version == "2025-03-26":
             title = tool.pop("title", None)
             annotations = tool.setdefault("annotations", {})
-            if title and isinstance(annotations, dict):
+            if title and is_object(annotations):
                 annotations["title"] = title
     return tools
 
 
 def _tool_result(
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     protocol_version: str,
     is_error: bool = False,
     tool_name: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     structured = protocol_version in STRUCTURED_CONTENT_PROTOCOLS
     if structured:
         if is_error:
@@ -137,7 +143,7 @@ def _tool_result(
             text = _success_result_text(tool_name, payload)
     else:
         text = json.dumps(payload, ensure_ascii=False, indent=2)
-    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    content: list[dict[str, object]] = [{"type": "text", "text": text}]
     image = _inline_image_content(tool_name, payload) if not is_error else None
     if image is not None:
         content.append(image)
@@ -152,10 +158,10 @@ def _tool_result(
     return result
 
 
-def _success_result_text(tool_name: str | None, payload: dict[str, Any]) -> str:
+def _success_result_text(tool_name: str | None, payload: Mapping[str, object]) -> str:
     if tool_name == "edit_project":
         operations = payload.get("operation_results")
-        count = len(operations) if isinstance(operations, list) else 0
+        count = len(operations) if is_array(operations) else 0
         return (
             f"Project edit committed with {count} operation result(s). Summarize the "
             "changes for the user and show a visual review when the edits are visual. "
@@ -190,20 +196,20 @@ def _success_result_text(tool_name: str | None, payload: dict[str, Any]) -> str:
 
 
 def _artifact_resource_links(
-    tool_name: str | None, payload: dict[str, Any]
-) -> list[dict[str, Any]]:
+    tool_name: str | None, payload: Mapping[str, object]
+) -> list[dict[str, object]]:
     if tool_name != "render_status" or payload.get("delivery_complete") is not True:
         return []
     artifacts = payload.get("artifacts")
-    if not isinstance(artifacts, list):
+    if not is_array(artifacts):
         return []
-    links: list[dict[str, Any]] = []
+    links: list[dict[str, object]] = []
     descriptions = {
         "rendered_media": "Completed rendered media",
         "editable_project": "Exact editable Shotcut project used for this render",
     }
     for artifact in artifacts:
-        if not isinstance(artifact, dict):
+        if not is_object(artifact):
             continue
         kind = artifact.get("kind")
         uri = artifact.get("uri")
@@ -250,8 +256,8 @@ def _inline_image_limit() -> int:
 
 
 def _inline_image_content(
-    tool_name: str | None, payload: dict[str, Any]
-) -> dict[str, Any] | None:
+    tool_name: str | None, payload: Mapping[str, object]
+) -> dict[str, object] | None:
     if tool_name not in {"render_preview", "render_contact_sheet"}:
         return None
     value = payload.get("path")
@@ -285,7 +291,7 @@ def _inline_image_content(
     }
 
 
-def _bounded_error_detail(value: Any, depth: int = 0) -> Any:
+def _bounded_error_detail(value: object, depth: int = 0) -> object:
     """Keep diagnostic context useful without letting errors bypass message bounds."""
 
     if value is None or isinstance(value, (bool, int, float)):
@@ -294,7 +300,7 @@ def _bounded_error_detail(value: Any, depth: int = 0) -> Any:
         return value[-MAX_ERROR_DETAIL_STRING:]
     if depth >= MAX_ERROR_DETAIL_DEPTH:
         return str(value)[-MAX_ERROR_DETAIL_STRING:]
-    if isinstance(value, dict):
+    if is_object(value):
         return {
             str(key)[:128]: _bounded_error_detail(item, depth + 1)
             for key, item in list(value.items())[:MAX_ERROR_DETAIL_ITEMS]
@@ -307,8 +313,8 @@ def _bounded_error_detail(value: Any, depth: int = 0) -> Any:
     return str(value)[-MAX_ERROR_DETAIL_STRING:]
 
 
-def _tool_error_payload(exc: ToolError) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+def _tool_error_payload(exc: ToolError) -> dict[str, object]:
+    payload: dict[str, object] = {
         "error": str(exc)[-4000:],
         "error_type": type(exc).__name__,
         "error_code": exc.code,
@@ -326,14 +332,14 @@ def _tool_error_payload(exc: ToolError) -> dict[str, Any]:
 
 
 def _handle_initialize(
-    message: dict[str, Any],
+    message: dict[str, object],
     session: ProtocolSession,
-    request_id: Any,
-) -> dict[str, Any]:
+    request_id: object,
+) -> dict[str, object]:
     if session.enforce_lifecycle and session.initialized:
         return _error(request_id, -32600, "Server is already initialized.")
     raw_params = message.get("params")
-    if not isinstance(raw_params, dict):
+    if not is_object(raw_params):
         return _error(request_id, -32602, "Invalid initialize parameters.")
     requested = raw_params.get("protocolVersion")
     if not isinstance(requested, str):
@@ -358,13 +364,13 @@ def _handle_initialize(
 
 
 def _handle_tool_call(
-    message: dict[str, Any],
+    message: dict[str, object],
     session: ProtocolSession,
-    request_id: Any,
-    progress_callback: Callable[[Any, float, float | None, str | None], None] | None,
-) -> dict[str, Any]:
+    request_id: object,
+    progress_callback: Callable[[object, float, float | None, str | None], None] | None,
+) -> dict[str, object]:
     call_params = message.get("params")
-    if not isinstance(call_params, dict):
+    if not is_object(call_params):
         return _error(request_id, -32602, "Invalid parameters.")
     name = call_params.get("name")
     handler = HANDLERS.get(name) if isinstance(name, str) else None
@@ -372,10 +378,10 @@ def _handle_tool_call(
         return _error(request_id, -32602, f"Unknown tool: {name}")
     assert isinstance(name, str)
     arguments = call_params.get("arguments", {})
-    if not isinstance(arguments, dict):
+    if not is_object(arguments):
         return _error(request_id, -32602, "Tool arguments must be an object.")
     raw_meta = call_params.get("_meta", {})
-    if not isinstance(raw_meta, dict):
+    if not is_object(raw_meta):
         return _error(request_id, -32602, "Tool _meta must be an object.")
     progress_token = raw_meta.get("progressToken")
     if "progressToken" in raw_meta and (
@@ -451,11 +457,11 @@ def _handle_tool_call(
 
 
 def handle_request(
-    message: dict[str, Any],
+    message: dict[str, object],
     session: ProtocolSession | None = None,
-    progress_callback: Callable[[Any, float, float | None, str | None], None]
+    progress_callback: Callable[[object, float, float | None, str | None], None]
     | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     active_session = session or ProtocolSession()
     request_id = message.get("id")
     if message.get("jsonrpc") != "2.0":
@@ -481,7 +487,7 @@ def handle_request(
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "tools/list":
         list_params = message.get("params", {})
-        if not isinstance(list_params, dict):
+        if not is_object(list_params):
             return _error(request_id, -32602, "Invalid tools/list parameters.")
         return {
             "jsonrpc": "2.0",
@@ -503,7 +509,7 @@ def handle_request(
 
 
 def write_message(
-    message: Any,
+    message: object,
     stream: BinaryIO | None = None,
     lock: threading.Lock | None = None,
 ) -> None:
@@ -512,10 +518,10 @@ def write_message(
     )
     maximum = _message_size_limit()
     if len(encoded) + 1 > maximum:
-        if isinstance(message, dict) and "method" in message and "id" not in message:
+        if is_object(message) and "method" in message and "id" not in message:
             compact = dict(message)
             params = compact.get("params")
-            if isinstance(params, dict) and "message" in params:
+            if is_object(params) and "message" in params:
                 compact["params"] = {
                     key: value for key, value in params.items() if key != "message"
                 }
@@ -525,7 +531,7 @@ def write_message(
             if len(encoded) + 1 > maximum:
                 return
         else:
-            request_id = message.get("id") if isinstance(message, dict) else None
+            request_id = message.get("id") if is_object(message) else None
             fallback = _error(
                 request_id,
                 -32603,
@@ -582,7 +588,7 @@ class _StdioRuntime:
         self.pending_lock = threading.Lock()
         self.pending: dict[
             str | int | None,
-            tuple[Future[Any], threading.Event, str | int | None],
+            tuple[Future[dict[str, object] | None], threading.Event, str | int | None],
         ] = {}
         self.active_progress_tokens: set[str | int] = set()
         self.executor = ThreadPoolExecutor(
@@ -590,7 +596,7 @@ class _StdioRuntime:
         )
         self.pending_limit = _pending_limit()
 
-    def write(self, message: Any) -> None:
+    def write(self, message: object) -> None:
         write_message(message, self.output_stream, self.output_lock)
 
     def close(self) -> None:
@@ -598,12 +604,12 @@ class _StdioRuntime:
 
     def _send_progress(
         self,
-        progress_token: Any,
+        progress_token: object,
         progress: float,
         total: float | None,
         message: str | None,
     ) -> None:
-        params: dict[str, Any] = {
+        params: dict[str, object] = {
             "progressToken": progress_token,
             "progress": progress,
         }
@@ -622,13 +628,14 @@ class _StdioRuntime:
     def _complete(
         self,
         request_id: str | int | None,
-        respond: Callable[[Any], None],
-        future: Future[Any],
+        respond: Callable[[dict[str, object] | None], None],
+        future: Future[dict[str, object] | None],
     ) -> None:
         with self.pending_lock:
             item = self.pending.pop(request_id, None)
             if item is not None and item[2] is not None:
                 self.active_progress_tokens.discard(item[2])
+        response: dict[str, object] | None
         if future.cancelled():
             response = _error(request_id, -32800, "Request cancelled.")
         else:
@@ -646,12 +653,12 @@ class _StdioRuntime:
         respond(response)
 
     def _execute(
-        self, message: dict[str, Any], cancellation: threading.Event
-    ) -> dict[str, Any] | None:
+        self, message: dict[str, object], cancellation: threading.Event
+    ) -> dict[str, object] | None:
         with request_cancellation(cancellation):
             return handle_request(message, self.session, self._send_progress)
 
-    def _dispatch_batch(self, messages: list[Any]) -> None:
+    def _dispatch_batch(self, messages: list[object]) -> None:
         if not messages or self.session.protocol_version != "2025-03-26":
             self.write(_error(None, -32600, "JSON-RPC batching is not supported."))
             return
@@ -662,10 +669,10 @@ class _StdioRuntime:
             return
         # Count notifications too so fast workers cannot flush a partial batch.
         remaining = len(messages)
-        responses: list[Any] = []
+        responses: list[dict[str, object]] = []
         lock = threading.Lock()
 
-        def collect(response: Any) -> None:
+        def collect(response: dict[str, object] | None) -> None:
             nonlocal remaining
             with lock:
                 if response is not None:
@@ -678,11 +685,11 @@ class _StdioRuntime:
         for message in messages:
             self._dispatch_message(message, collect)
 
-    def _cancel_notification(self, message: dict[str, Any]) -> bool:
+    def _cancel_notification(self, message: dict[str, object]) -> bool:
         if message.get("method") != "notifications/cancelled" or "id" in message:
             return False
         params = message.get("params")
-        request_id = params.get("requestId") if isinstance(params, dict) else None
+        request_id = params.get("requestId") if is_object(params) else None
         if isinstance(request_id, bool) or not isinstance(request_id, (str, int)):
             return True
         with self.pending_lock:
@@ -694,12 +701,10 @@ class _StdioRuntime:
         return True
 
     @staticmethod
-    def _progress_token(message: dict[str, Any]) -> str | int | None:
+    def _progress_token(message: dict[str, object]) -> str | int | None:
         call_params = message.get("params")
-        raw_meta = call_params.get("_meta") if isinstance(call_params, dict) else None
-        raw_token = (
-            raw_meta.get("progressToken") if isinstance(raw_meta, dict) else None
-        )
+        raw_meta = call_params.get("_meta") if is_object(call_params) else None
+        raw_token = raw_meta.get("progressToken") if is_object(raw_meta) else None
         return (
             raw_token
             if not isinstance(raw_token, bool) and isinstance(raw_token, (str, int))
@@ -707,7 +712,9 @@ class _StdioRuntime:
         )
 
     def _schedule_tool_call(
-        self, message: dict[str, Any], respond: Callable[[Any], None]
+        self,
+        message: dict[str, object],
+        respond: Callable[[dict[str, object] | None], None],
     ) -> None:
         request_id = message.get("id")
         if isinstance(request_id, bool) or not isinstance(
@@ -747,18 +754,20 @@ class _StdioRuntime:
                 self.active_progress_tokens.add(progress_token)
         future.add_done_callback(partial(self._complete, request_id, respond))
 
-    def dispatch(self, message: Any) -> None:
-        if isinstance(message, list):
+    def dispatch(self, message: object) -> None:
+        if is_array(message):
             self._dispatch_batch(message)
             return
         self._dispatch_message(message, self._respond)
 
-    def _respond(self, response: Any) -> None:
+    def _respond(self, response: dict[str, object] | None) -> None:
         if response is not None:
             self.write(response)
 
-    def _dispatch_message(self, message: Any, respond: Callable[[Any], None]) -> None:
-        if not isinstance(message, dict):
+    def _dispatch_message(
+        self, message: object, respond: Callable[[dict[str, object] | None], None]
+    ) -> None:
+        if not is_object(message):
             respond(_error(None, -32600, "Invalid Request: expected a JSON object."))
             return
         if self._cancel_notification(message):
@@ -791,7 +800,7 @@ def serve(input_stream: BinaryIO, output_stream: BinaryIO) -> None:
             if not raw_line.strip():
                 continue
             try:
-                message = json.loads(raw_line.decode("utf-8"))
+                message: object = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 runtime.write(_error(None, -32700, f"Invalid JSON: {exc}"))
                 continue

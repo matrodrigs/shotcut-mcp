@@ -1,15 +1,51 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from shotcut_mcp.media import analyze_media_quality
+from shotcut_mcp.errors import ToolError
+from shotcut_mcp.media import analyze_media_quality, summarize_media
 
 
 class MediaQualityTests(unittest.TestCase):
+    def test_malformed_probe_data_reports_a_structured_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ffprobe = root / "ffprobe"
+            ffprobe.write_bytes(b"executable")
+            for index, payload in enumerate(
+                (
+                    {"streams": "invalid"},
+                    {"format": []},
+                    {"streams": ["invalid"]},
+                    {"streams": [{"codec_type": "video", "width": "wide"}]},
+                    {"streams": [{"codec_type": "audio", "channels": True}]},
+                )
+            ):
+                with self.subTest(payload=payload):
+                    source = root / f"source-{index}.mp4"
+                    source.write_bytes(b"media")
+                    with (
+                        patch(
+                            "shotcut_mcp.media.discover_executables",
+                            return_value=SimpleNamespace(ffprobe=ffprobe),
+                        ),
+                        patch(
+                            "shotcut_mcp.media.run_capture",
+                            return_value=SimpleNamespace(
+                                returncode=0, stdout=json.dumps(payload), stderr=""
+                            ),
+                        ),
+                        self.assertRaises(ToolError) as caught,
+                    ):
+                        summarize_media(source)
+                    self.assertEqual(caught.exception.code, "media_probe_failed")
+                    self.assertEqual(source.read_bytes(), b"media")
+
     def test_quality_analyzers_return_normalized_results(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             media_path = Path(directory) / "source.mp4"

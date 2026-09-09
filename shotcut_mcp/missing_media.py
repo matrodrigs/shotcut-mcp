@@ -12,7 +12,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 from .errors import RequestCancelled, ToolError
 from .platform import (
@@ -21,7 +21,47 @@ from .platform import (
     shotcut_file_hash,
     summarize_media,
 )
-from .protocol import cancellation_requested, report_progress
+from .protocol import cancellation_requested, is_array, report_progress
+
+if TYPE_CHECKING:
+    from .media import MediaSummary
+    from .project_snapshot import ResourceSummary
+
+
+MediaProbeError = TypedDict(
+    "MediaProbeError",
+    {
+        "path": str,
+        "error": str,
+    },
+)
+
+
+MediaCandidate = TypedDict(
+    "MediaCandidate",
+    {
+        "candidate_id": str,
+        "path": str,
+        "score": int,
+        "match": Literal["shotcut_hash", "basename"],
+        "verified": bool,
+        "size_bytes": int,
+        "media": "MediaSummary | MediaProbeError | None",
+    },
+)
+
+
+MissingResourceCandidates = TypedDict(
+    "MissingResourceCandidates",
+    {
+        "reference_id": str,
+        "missing_path": str | None,
+        "stored_resource": str,
+        "candidates": list[MediaCandidate],
+        "candidate_count": int,
+        "candidates_truncated": bool,
+    },
+)
 
 
 @dataclass(frozen=True)
@@ -34,7 +74,7 @@ class _SearchLimits:
     max_probe_candidates: int
 
     @classmethod
-    def from_arguments(cls, arguments: dict[str, Any]) -> _SearchLimits:
+    def from_arguments(cls, arguments: dict[str, object]) -> _SearchLimits:
         limits = cls(
             max_depth=_integer(arguments.get("max_depth", 6), "max_depth", 0),
             max_files=_integer(arguments.get("max_files", 5000), "max_files", 1),
@@ -90,9 +130,9 @@ def _integer(value: object, name: str, minimum: int) -> int:
     return value
 
 
-def _authorized_roots(arguments: dict[str, Any]) -> list[Path]:
+def _authorized_roots(arguments: dict[str, object]) -> list[Path]:
     roots_value = arguments.get("search_roots")
-    if not isinstance(roots_value, list) or not 1 <= len(roots_value) <= 8:
+    if not is_array(roots_value) or not 1 <= len(roots_value) <= 8:
         raise ToolError("search_roots must contain between 1 and 8 paths.")
     roots = [expand_path(value) for value in roots_value]
     invalid_roots = [str(root) for root in roots if not root.is_dir()]
@@ -161,10 +201,10 @@ def _hash_matches(
 
 def _probe_candidate(
     candidate: Path,
-    reference: dict[str, Any],
+    reference: ResourceSummary,
     limits: _SearchLimits,
     state: _SearchState,
-) -> tuple[dict[str, Any] | None, int]:
+) -> tuple[MediaSummary | MediaProbeError | None, int]:
     if state.probe_count >= limits.max_probe_candidates:
         return None, 0
     state.probe_count += 1
@@ -174,7 +214,7 @@ def _probe_candidate(
         return {"path": str(candidate), "error": str(exc)}, 0
 
     score = 0
-    expected = reference.get("expected_media") or {}
+    expected = reference["expected_media"]
     video = next(
         (
             stream
@@ -206,14 +246,14 @@ def _probe_candidate(
 
 
 def _rank_candidates(
-    reference: dict[str, Any],
+    reference: ResourceSummary,
     files: list[Path],
     limits: _SearchLimits,
     state: _SearchState,
-) -> list[dict[str, Any]]:
+) -> list[MediaCandidate]:
     expected_name = Path(reference["decoded_resource"]).name.casefold()
     expected_hash = reference.get("shotcut_hash")
-    candidates: list[dict[str, Any]] = []
+    candidates: list[MediaCandidate] = []
     for candidate in files:
         if state.timed_out:
             break
@@ -240,8 +280,8 @@ def _rank_candidates(
 
 
 def _visualize_candidates(
-    resources: list[dict[str, Any]], arguments: dict[str, Any]
-) -> dict[str, Any] | None:
+    resources: list[MissingResourceCandidates], arguments: dict[str, object]
+) -> dict[str, object] | None:
     visual_output = arguments.get("visual_output_path")
     if visual_output is None:
         return None
@@ -284,8 +324,8 @@ def _visualize_candidates(
 
 
 def diagnose_missing_resources(
-    resources: list[dict[str, Any]], arguments: dict[str, Any]
-) -> dict[str, Any]:
+    resources: list[ResourceSummary], arguments: dict[str, object]
+) -> dict[str, object]:
     """Find bounded, ranked replacements for missing project resources."""
 
     roots = _authorized_roots(arguments)
@@ -296,7 +336,7 @@ def diagnose_missing_resources(
     report_progress(0, progress_total, "Scanning authorized roots for media.")
     files = _discover_files(roots, limits, state)
     report_progress(1, progress_total, f"Examined {len(files)} candidate files.")
-    results: list[dict[str, Any]] = []
+    results: list[MissingResourceCandidates] = []
     for index, reference in enumerate(missing, start=1):
         candidates = _rank_candidates(reference, files, limits, state)
         results.append(

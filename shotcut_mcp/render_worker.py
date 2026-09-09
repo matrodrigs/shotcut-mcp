@@ -11,12 +11,13 @@ import threading
 import time
 from collections import deque
 from contextlib import suppress
-from typing import Any, BinaryIO
+from typing import BinaryIO
 
 from .errors import ToolError
 from .platform import creation_flags, terminate_process
 from .render_jobs import (
     TERMINAL_STATUSES,
+    RenderJob,
     cancel_requested,
     clear_control_files,
     gate_path,
@@ -58,11 +59,11 @@ class _ProgressLines:
         return lines
 
 
-def _stop_renderer(process: subprocess.Popen[Any]) -> None:
+def _stop_renderer(process: subprocess.Popen[bytes]) -> None:
     terminate_process(process, grace_seconds=5)
 
 
-def _command(metadata: dict[str, Any], output: OutputTransaction) -> list[str]:
+def _command(metadata: RenderJob, output: OutputTransaction) -> list[str]:
     properties = metadata.get("consumer_properties")
     if not isinstance(properties, dict):
         raise ValueError("Invalid consumer properties in render metadata.")
@@ -107,7 +108,7 @@ class _BoundedLog:
         self.handle.close()
 
 
-def _read_chunks(stream: Any, messages: queue.Queue[bytes | None]) -> None:
+def _read_chunks(stream: BinaryIO, messages: queue.Queue[bytes | None]) -> None:
     try:
         for chunk in iter(lambda: stream.read(8192), b""):
             messages.put(chunk)
@@ -115,7 +116,7 @@ def _read_chunks(stream: Any, messages: queue.Queue[bytes | None]) -> None:
         messages.put(None)
 
 
-def _observe_progress(metadata: dict[str, Any], line: str) -> bool:
+def _observe_progress(metadata: RenderJob, line: str) -> bool:
     percent_match = re.search(
         r"(?:percentage|percent|progress)\s*[:=]\s*(\d{1,3})", line, re.I
     )
@@ -168,13 +169,13 @@ def run_worker(job_id: str) -> int:
     output = OutputTransaction.deserialize(metadata.get("output_transaction"))
     snapshot = render_input_snapshot(metadata)
     snapshot.require_exact()
-    metadata.update(worker_pid=os.getpid(), status="running")
+    metadata.update({"worker_pid": os.getpid(), "status": "running"})
     write_job(metadata)
-    process: subprocess.Popen[Any] | None = None
+    process: subprocess.Popen[bytes] | None = None
     try:
         if cancel_requested(job_id):
             metadata.update(
-                status="cancelled", return_code=None, finished_at=time.time()
+                {"status": "cancelled", "return_code": None, "finished_at": time.time()}
             )
             output.cleanup()
             snapshot.cleanup_if_owned()
@@ -192,7 +193,7 @@ def run_worker(job_id: str) -> int:
                 creationflags=creation_flags(),
                 start_new_session=os.name != "nt",
             )
-            metadata.update(renderer_pid=process.pid, status="running")
+            metadata.update({"renderer_pid": process.pid, "status": "running"})
             write_job(metadata)
             messages: queue.Queue[bytes | None] = queue.Queue(maxsize=128)
             reader = threading.Thread(
@@ -240,20 +241,20 @@ def run_worker(job_id: str) -> int:
         if metadata.get("total_frames") is not None and return_code == 0:
             rendered_frames = metadata.get("total_frames")
         metadata.update(
-            return_code=return_code,
-            finished_at=finished_at,
-            updated_at=finished_at,
-            elapsed_seconds=elapsed,
-            average_fps=(
-                rendered_frames / elapsed
+            {
+                "return_code": return_code,
+                "finished_at": finished_at,
+                "updated_at": finished_at,
+                "elapsed_seconds": elapsed,
+                "average_fps": rendered_frames / elapsed
                 if isinstance(rendered_frames, int)
                 and rendered_frames > 0
                 and elapsed > 0
                 else current_frame / elapsed
                 if isinstance(current_frame, int) and current_frame > 0 and elapsed > 0
-                else None
-            ),
-            frames_completed=rendered_frames,
+                else None,
+                "frames_completed": rendered_frames,
+            }
         )
         if cancel_requested(job_id):
             metadata["status"] = "cancelled"
@@ -290,9 +291,11 @@ def run_worker(job_id: str) -> int:
         output.cleanup()
         snapshot.cleanup_if_owned()
         metadata.update(
-            status="failed",
-            status_note=f"Render supervisor failed: {exc}",
-            finished_at=time.time(),
+            {
+                "status": "failed",
+                "status_note": f"Render supervisor failed: {exc}",
+                "finished_at": time.time(),
+            }
         )
         write_job(metadata)
         return 1
@@ -317,10 +320,12 @@ def _record_unhandled_failure(job_id: str, exc: Exception) -> None:
         render_input_snapshot(metadata).cleanup_if_owned()
     now = time.time()
     metadata.update(
-        status="failed",
-        status_note=f"Render supervisor failed before initialization: {exc}",
-        finished_at=now,
-        updated_at=now,
+        {
+            "status": "failed",
+            "status_note": f"Render supervisor failed before initialization: {exc}",
+            "finished_at": now,
+            "updated_at": now,
+        }
     )
     with suppress(OSError, ToolError, TypeError, ValueError):
         write_job(metadata)

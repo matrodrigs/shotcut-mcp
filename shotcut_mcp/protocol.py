@@ -5,10 +5,53 @@ from __future__ import annotations
 import math
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import TypedDict, TypeGuard
+
+JsonSchema = TypedDict(
+    "JsonSchema",
+    {
+        "type": str | list[str],
+        "description": str,
+        "properties": "dict[str, JsonSchema]",
+        "items": "JsonSchema",
+        "required": list[str],
+        "enum": Sequence[object],
+        "default": object,
+        "additionalProperties": "bool | JsonSchema",
+        "propertyNames": "JsonSchema",
+        "anyOf": "list[JsonSchema]",
+        "oneOf": "list[JsonSchema]",
+        "minimum": int | float,
+        "maximum": int | float,
+        "minItems": int,
+        "maxItems": int,
+        "minLength": int,
+        "maxLength": int,
+        "minProperties": int,
+        "maxProperties": int,
+        "pattern": str,
+    },
+    total=False,
+)
+
+
+def is_object(value: object) -> TypeGuard[dict[str, object]]:
+    """Narrow a decoded JSON object without trusting its values."""
+    return isinstance(value, dict) and all(isinstance(key, str) for key in value)
+
+
+def is_array(value: object) -> TypeGuard[list[object]]:
+    """Narrow a JSON array while keeping each element untrusted."""
+    return isinstance(value, list)
+
+
+def is_text_array(value: object) -> TypeGuard[list[str]]:
+    """Validate string collections before callers use string operations."""
+    return is_array(value) and all(isinstance(item, str) for item in value)
+
 
 _CANCELLATION_EVENT: ContextVar[threading.Event | None] = ContextVar(
     "shotcut_mcp_cancellation_event", default=None
@@ -44,7 +87,7 @@ _PROGRESS_STATE: ContextVar[_ProgressState | None] = ContextVar(
 
 
 @contextmanager
-def request_cancellation(event: threading.Event):
+def request_cancellation(event: threading.Event) -> Iterator[None]:
     token = _CANCELLATION_EVENT.set(event)
     try:
         yield
@@ -58,7 +101,7 @@ def cancellation_requested() -> bool:
 
 
 @contextmanager
-def request_progress(callback: ProgressCallback | None):
+def request_progress(callback: ProgressCallback | None) -> Iterator[None]:
     """Install an optional request-local MCP progress sink."""
 
     token = _PROGRESS_STATE.set(_ProgressState(callback) if callback else None)
@@ -84,7 +127,7 @@ def report_progress(
     return True
 
 
-def _matches_type(value: Any, expected: str) -> bool:
+def _matches_type(value: object, expected: str) -> bool:
     if expected == "object":
         return isinstance(value, dict)
     if expected == "array":
@@ -103,7 +146,7 @@ def _matches_type(value: Any, expected: str) -> bool:
 
 
 def _object_schema_errors(
-    value: dict[Any, Any], schema: dict[str, Any], path: str
+    value: Mapping[object, object], schema: Mapping[str, object], path: str
 ) -> list[str]:
     errors: list[str] = []
     properties = schema.get("properties", {})
@@ -121,6 +164,7 @@ def _object_schema_errors(
             if isinstance(name, str) and name not in value
         )
     property_names = schema.get("propertyNames")
+    additional_properties = schema.get("additionalProperties")
     if isinstance(properties, dict):
         for name, item in value.items():
             if isinstance(property_names, dict):
@@ -134,13 +178,13 @@ def _object_schema_errors(
             child_schema = properties.get(name)
             if isinstance(child_schema, dict):
                 errors.extend(schema_errors(item, child_schema, f"{path}.{name}"))
-            elif schema.get("additionalProperties") is False:
+            elif additional_properties is False:
                 errors.append(f"{path}.{name} is not allowed.")
-            elif isinstance(schema.get("additionalProperties"), dict):
+            elif isinstance(additional_properties, dict):
                 errors.extend(
                     schema_errors(
                         item,
-                        schema["additionalProperties"],
+                        additional_properties,
                         f"{path}.{name}",
                     )
                 )
@@ -148,7 +192,7 @@ def _object_schema_errors(
 
 
 def _array_schema_errors(
-    value: list[Any], schema: dict[str, Any], path: str
+    value: Sequence[object], schema: Mapping[str, object], path: str
 ) -> list[str]:
     errors: list[str] = []
     minimum_items = schema.get("minItems")
@@ -164,7 +208,9 @@ def _array_schema_errors(
     return errors
 
 
-def _string_schema_errors(value: str, schema: dict[str, Any], path: str) -> list[str]:
+def _string_schema_errors(
+    value: str, schema: Mapping[str, object], path: str
+) -> list[str]:
     errors: list[str] = []
     minimum_length = schema.get("minLength")
     maximum_length = schema.get("maxLength")
@@ -179,7 +225,7 @@ def _string_schema_errors(value: str, schema: dict[str, Any], path: str) -> list
 
 
 def _number_schema_errors(
-    value: int | float, schema: dict[str, Any], path: str
+    value: int | float, schema: Mapping[str, object], path: str
 ) -> list[str]:
     errors: list[str] = []
     minimum = schema.get("minimum")
@@ -191,7 +237,9 @@ def _number_schema_errors(
     return errors
 
 
-def _alternative_errors(value: Any, alternatives: object, path: str) -> list[list[str]]:
+def _alternative_errors(
+    value: object, alternatives: object, path: str
+) -> list[list[str]]:
     if not isinstance(alternatives, list):
         return []
     return [
@@ -202,7 +250,7 @@ def _alternative_errors(value: Any, alternatives: object, path: str) -> list[lis
 
 
 def _composition_schema_errors(
-    value: Any, schema: dict[str, Any], path: str
+    value: object, schema: Mapping[str, object], path: str
 ) -> list[str]:
     errors: list[str] = []
     alternatives = _alternative_errors(value, schema.get("anyOf"), path)
@@ -227,7 +275,9 @@ def _composition_schema_errors(
     return errors
 
 
-def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
+def schema_errors(
+    value: object, schema: Mapping[str, object], path: str = "$"
+) -> list[str]:
     """Return violations from the JSON Schema subset published by this server."""
 
     expected = schema.get("type")

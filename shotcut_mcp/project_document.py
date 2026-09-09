@@ -15,11 +15,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import SupportsFloat, SupportsIndex, TypeVar
 
 from . import MLT_VERSION, SHOTCUT_VERSION
 from .errors import ToolError
-from .media import media_duration, probe_media_raw, shotcut_file_hash
+from .media import ProbePayload, media_duration, probe_media_raw, shotcut_file_hash
 from .mlt_xml import (
     clock_to_frames as _clock_to_frames,
 )
@@ -30,12 +30,14 @@ from .mlt_xml import (
     property_value as _property,
 )
 from .mlt_xml import resource_references
+from .protocol import is_array, is_object
 
 SEQUENCE_TAGS = {"entry", "blank"}
 BACKGROUND_ID = "background"
 MAIN_BIN_IDS = {"main_bin", "main bin"}
 DocumentT = TypeVar("DocumentT", bound="ProjectDocument")
-OperationHandlerT = TypeVar("OperationHandlerT", bound=Callable[..., dict[str, Any]])
+OperationHandler = Callable[["ProjectDocument", dict[str, object]], dict[str, object]]
+OperationHandlerT = TypeVar("OperationHandlerT", bound=OperationHandler)
 ITEM_REF_PATTERN = re.compile(r"(?:item:[0-9a-f]{24}|@[A-Za-z][A-Za-z0-9_-]{0,63})")
 MAX_PROJECT_BYTES = 128 * 1024 * 1024
 MIN_PROJECT_SIZE_LIMIT = 1 * 1024 * 1024
@@ -52,6 +54,7 @@ class EditOperationContract:
 
 
 _EDIT_OPERATION_CONTRACTS: dict[str, EditOperationContract] = {}
+_EDIT_OPERATION_HANDLERS: dict[str, OperationHandler] = {}
 
 
 def edit_operation(
@@ -73,6 +76,7 @@ def edit_operation(
         if name in _EDIT_OPERATION_CONTRACTS:
             raise RuntimeError(f"Duplicate edit operation registration: {name}")
         _EDIT_OPERATION_CONTRACTS[name] = contract
+        _EDIT_OPERATION_HANDLERS[name] = method
         return method
 
     return register
@@ -106,7 +110,7 @@ def _ensure_project_size(path: Path, size: int) -> None:
 
 
 def _unsupported_project_structure(
-    message: str, path: Path, reason: str, **details: Any
+    message: str, path: Path, reason: str, **details: object
 ) -> ToolError:
     """Describe unsafe or ambiguous MLT structure through one recovery family."""
 
@@ -125,7 +129,7 @@ def project_revision(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _set_property(element: ET.Element, name: str, value: Any) -> None:
+def _set_property(element: ET.Element, name: str, value: object) -> None:
     for prop in element.findall("property"):
         if prop.get("name") == name:
             prop.text = str(value)
@@ -145,7 +149,7 @@ def _remove_property(element: ET.Element, name: str) -> None:
             element.remove(prop)
 
 
-def _int(value: Any, label: str, minimum: int | None = None) -> int:
+def _int(value: object, label: str, minimum: int | None = None) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ToolError(f"{label} must be an integer.")
     if minimum is not None and value < minimum:
@@ -153,8 +157,10 @@ def _int(value: Any, label: str, minimum: int | None = None) -> int:
     return value
 
 
-def _number(value: Any, label: str, minimum: float | None = None) -> float:
-    if isinstance(value, bool):
+def _number(value: object, label: str, minimum: float | None = None) -> float:
+    if isinstance(value, bool) or not isinstance(
+        value, (str, bytes, bytearray, SupportsFloat, SupportsIndex)
+    ):
         raise ToolError(f"{label} must be numeric.")
     try:
         result = float(value)
@@ -181,13 +187,13 @@ class _ClipAnimation:
     has_volume: bool
 
 
-def _parse_clip_animation(raw_keyframes: Any, duration: int) -> _ClipAnimation:
+def _parse_clip_animation(raw_keyframes: object, duration: int) -> _ClipAnimation:
     """Validate creative keyframes independently from their MLT encoding."""
 
-    if not isinstance(raw_keyframes, list) or not 1 <= len(raw_keyframes) <= 64:
+    if not is_array(raw_keyframes) or not 1 <= len(raw_keyframes) <= 64:
         raise ToolError("keyframes must contain between 1 and 64 points.")
     transform_fields = ("center_x", "center_y", "scale", "rotation_degrees")
-    object_points = [point for point in raw_keyframes if isinstance(point, dict)]
+    object_points = [point for point in raw_keyframes if is_object(point)]
     has_transform = any(
         any(field in point for field in transform_fields) for point in object_points
     )
@@ -200,7 +206,7 @@ def _parse_clip_animation(raw_keyframes: Any, duration: int) -> _ClipAnimation:
 
     points: list[_AnimationPoint] = []
     for index, raw in enumerate(raw_keyframes):
-        if not isinstance(raw, dict):
+        if not is_object(raw):
             raise ToolError(f"keyframes[{index}] must be an object.")
         frame = _int(raw.get("frame"), f"keyframes[{index}].frame", 0)
         if points and frame <= points[-1].frame:
@@ -268,21 +274,20 @@ def _parse_clip_animation(raw_keyframes: Any, duration: int) -> _ClipAnimation:
     )
 
 
-def _boolean(value: Any, label: str) -> bool:
+def _boolean(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise ToolError(f"{label} must be a boolean.")
     return value
 
 
 def _media_producer_service(
-    payload: dict[str, Any], duration_seconds: float | None
+    payload: ProbePayload, duration_seconds: float | None
 ) -> str:
     if duration_seconds is not None:
         return "avformat-novalidate"
     streams = payload.get("streams")
-    if isinstance(streams, list) and any(
-        isinstance(stream, dict) and stream.get("codec_type") == "video"
-        for stream in streams
+    if is_array(streams) and any(
+        is_object(stream) and stream.get("codec_type") == "video" for stream in streams
     ):
         return "qimage"
     raise ToolError("Media has no duration or still-image video stream.")
@@ -303,11 +308,17 @@ def _srt_time(milliseconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
-def _srt(items: list[dict[str, Any]]) -> str:
+def _srt(items: list[object]) -> str:
+    object_items = [item for item in items if is_object(item)]
+    if len(object_items) != len(items):
+        raise ToolError("Each subtitle item must be an object.")
     lines: list[str] = []
     previous_end = -1
     for index, item in enumerate(
-        sorted(items, key=lambda value: value["start_ms"]), start=1
+        sorted(
+            object_items, key=lambda value: _int(value.get("start_ms"), "start_ms", 0)
+        ),
+        start=1,
     ):
         start = _int(item.get("start_ms"), f"items[{index - 1}].start_ms", 0)
         end = _int(item.get("end_ms"), f"items[{index - 1}].end_ms", 1)
@@ -608,7 +619,7 @@ class ProjectDocument:
             details={"item_ref": reference},
         )
 
-    def _resolve_item_selector(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_item_selector(self, operation: dict[str, object]) -> dict[str, object]:
         name = operation.get("op")
         contract = EDIT_OPERATION_CONTRACTS.get(name) if isinstance(name, str) else None
         selector_field = contract.selector_field if contract is not None else None
@@ -666,7 +677,7 @@ class ProjectDocument:
         resolved[selector_field] = item_index
         return resolved
 
-    def _prepare_item_alias(self, operation: dict[str, Any]) -> str | None:
+    def _prepare_item_alias(self, operation: dict[str, object]) -> str | None:
         alias = operation.get("as")
         if alias is None:
             return None
@@ -700,8 +711,8 @@ class ProjectDocument:
 
     def _bind_item_alias(
         self,
-        operation: dict[str, Any],
-        result: dict[str, Any],
+        operation: dict[str, object],
+        result: dict[str, object],
         reference: str | None,
     ) -> None:
         if reference is None:
@@ -746,7 +757,7 @@ class ProjectDocument:
                 )
         return bindings
 
-    def find_track(self, selector: Any) -> TrackRef:
+    def find_track(self, selector: object) -> TrackRef:
         if not isinstance(selector, str) or not selector.strip():
             raise ToolError("track must be a track name or id.")
         matches = [
@@ -961,7 +972,7 @@ class ProjectDocument:
         return len(sequence)
 
     def place_item(
-        self, playlist: ET.Element, item: ET.Element, position: int | None, mode: str
+        self, playlist: ET.Element, item: ET.Element, position: int | None, mode: object
     ) -> None:
         sequence = self.sequence(playlist)
         if (
@@ -978,6 +989,7 @@ class ProjectDocument:
         if mode not in {"insert", "overwrite"}:
             raise ToolError("mode must be insert or overwrite.")
         start_index = self.split_sequence_at(sequence, frame)
+        removed_service_ids: set[str] = set()
         if mode == "insert":
             sequence.insert(start_index, item)
         else:
@@ -1108,7 +1120,7 @@ class ProjectDocument:
         self.ensure_default_track_transitions()
 
     def _transition(
-        self, service: str, a_track: int, b_track: int, **props: Any
+        self, service: str, a_track: int, b_track: int, **props: object
     ) -> ET.Element:
         transition = ET.Element("transition", {"id": self.new_id("transition")})
         _set_property(transition, "a_track", a_track)
@@ -1176,7 +1188,7 @@ class ProjectDocument:
             _set_property(transition, "b_track", new_b)
 
     @edit_operation()
-    def add_track(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def add_track(self, operation: dict[str, object]) -> dict[str, object]:
         kind = operation.get("kind")
         if kind not in {"video", "audio"}:
             raise ToolError("kind must be video or audio.")
@@ -1233,7 +1245,7 @@ class ProjectDocument:
         return {"track_id": playlist_id, "name": name, "kind": kind}
 
     @edit_operation()
-    def remove_track(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_track(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         removed_service_ids = {
             item.get("producer", "")
@@ -1265,7 +1277,7 @@ class ProjectDocument:
         return {"removed_track": track.name, "track_id": track.id}
 
     @edit_operation()
-    def update_track(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def update_track(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         if "name" in operation:
             name = operation["name"]
@@ -1320,7 +1332,7 @@ class ProjectDocument:
         return {"track_id": track.id, "name": track.name, "updated": True}
 
     @edit_operation()
-    def move_track(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def move_track(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         before = self.find_track(operation.get("before"))
         if track.id == before.id:
@@ -1342,7 +1354,7 @@ class ProjectDocument:
         return {"moved": True, "track_id": track.id, "before": before.id}
 
     def create_media_producer(
-        self, operation: dict[str, Any]
+        self, operation: dict[str, object]
     ) -> tuple[ET.Element, ET.Element]:
         raw_path = operation.get("path")
         if not isinstance(raw_path, str):
@@ -1400,7 +1412,7 @@ class ProjectDocument:
         return producer, entry
 
     @edit_operation(alias_target="created_item")
-    def add_clip(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def add_clip(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         producer, entry = self.create_media_producer(operation)
         position = operation.get("position_frame")
@@ -1416,7 +1428,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index", alias_target="created_item")
-    def duplicate_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def duplicate_item(self, operation: dict[str, object]) -> dict[str, object]:
         source_track = self.find_track(operation.get("track"))
         target_track = self.find_track(
             operation.get("target_track", operation.get("track"))
@@ -1458,7 +1470,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index")
-    def replace_item_media(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def replace_item_media(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, index, item = self._item(track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
@@ -1548,7 +1560,7 @@ class ProjectDocument:
         }
 
     @edit_operation(alias_target="created_item")
-    def add_generator(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def add_generator(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         generator = operation.get("generator")
         if generator not in {"color", "text", "tone", "noise"}:
@@ -1584,7 +1596,7 @@ class ProjectDocument:
                 "filter",
                 {"id": self.new_id("filter"), "in": "0", "out": str(duration - 1)},
             )
-            defaults = {
+            defaults: dict[str, object] = {
                 "mlt_service": "dynamictext",
                 "shotcut:filter": "dynamicText",
                 "argument": text,
@@ -1599,7 +1611,7 @@ class ProjectDocument:
                 "valign": "middle",
             }
             properties = operation.get("properties", {})
-            if not isinstance(properties, dict):
+            if not is_object(properties):
                 raise ToolError("Text generator properties must be an object.")
             defaults.update(properties)
             for name, value in defaults.items():
@@ -1622,7 +1634,7 @@ class ProjectDocument:
         }
 
     def _item(
-        self, track: TrackRef, index: Any
+        self, track: TrackRef, index: object
     ) -> tuple[list[ET.Element], int, ET.Element]:
         item_index = _int(index, "item_index", 0)
         sequence = self.sequence(track.playlist)
@@ -1633,7 +1645,7 @@ class ProjectDocument:
         return sequence, item_index, sequence[item_index]
 
     @edit_operation(selector_field="item_index")
-    def remove_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_item(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, index, item = self._item(track, operation.get("item_index"))
         if self.is_transition(item):
@@ -1652,7 +1664,7 @@ class ProjectDocument:
         return {"removed": True, "duration_frames": duration, "ripple": ripple}
 
     @edit_operation(selector_field="item_index")
-    def trim_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def trim_item(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, index, item = self._item(track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
@@ -1827,7 +1839,7 @@ class ProjectDocument:
                     prop.text = str(max(0, frame + delta))
 
     def _regular_clip(
-        self, track: TrackRef, item_index: Any
+        self, track: TrackRef, item_index: object
     ) -> tuple[list[ET.Element], int, ET.Element, int, int]:
         sequence, index, item = self._item(track, item_index)
         if item.tag != "entry" or self.is_transition(item):
@@ -1855,7 +1867,7 @@ class ProjectDocument:
             )
 
     @edit_operation(selector_field="item_index")
-    def slip_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def slip_item(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         _, _, item, frame_in, frame_out = self._regular_clip(
             track, operation.get("item_index")
@@ -1875,7 +1887,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="left_item_index")
-    def roll_edit(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def roll_edit(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, left_index, left, left_in, left_out = self._regular_clip(
             track, operation.get("left_item_index")
@@ -1903,7 +1915,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index")
-    def slide_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def slide_item(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, index, _selected, selected_in, selected_out = self._regular_clip(
             track, operation.get("item_index")
@@ -1932,7 +1944,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index", alias_target="split_right")
-    def split_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def split_item(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, index, item = self._item(track, operation.get("item_index"))
         if item.tag != "entry" or self.is_transition(item):
@@ -1958,7 +1970,7 @@ class ProjectDocument:
         return {"split": True, "left_index": index, "right_index": index + 1}
 
     @edit_operation(selector_field="item_index")
-    def move_item(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def move_item(self, operation: dict[str, object]) -> dict[str, object]:
         source_track = self.find_track(operation.get("track"))
         target_track = self.find_track(
             operation.get("target_track", operation.get("track"))
@@ -1987,15 +1999,16 @@ class ProjectDocument:
         }
 
     @edit_operation()
-    def insert_gap(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def insert_gap(self, operation: dict[str, object]) -> dict[str, object]:
         duration = _int(operation.get("duration_frames"), "duration_frames", 1)
         position = _int(operation.get("position_frame"), "position_frame", 0)
         selectors = operation.get("tracks")
-        tracks = (
-            self.tracks()
-            if selectors in (None, "all")
-            else [self.find_track(item) for item in selectors]
-        )
+        if selectors is None or selectors == "all":
+            tracks = self.tracks()
+        elif is_array(selectors):
+            tracks = [self.find_track(item) for item in selectors]
+        else:
+            raise ToolError("tracks must be all or an array of track selectors.")
         for track in tracks:
             self.place_item(
                 track.playlist,
@@ -2006,18 +2019,19 @@ class ProjectDocument:
         return {"inserted_gap_frames": duration, "track_count": len(tracks)}
 
     @edit_operation()
-    def remove_range(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_range(self, operation: dict[str, object]) -> dict[str, object]:
         start = _int(operation.get("position_frame"), "position_frame", 0)
         duration = _int(operation.get("duration_frames"), "duration_frames", 1)
         ripple = operation.get("ripple", True)
         if not isinstance(ripple, bool):
             raise ToolError("ripple must be a boolean.")
         selectors = operation.get("tracks")
-        tracks = (
-            self.tracks()
-            if selectors in (None, "all")
-            else [self.find_track(item) for item in selectors]
-        )
+        if selectors is None or selectors == "all":
+            tracks = self.tracks()
+        elif is_array(selectors):
+            tracks = [self.find_track(item) for item in selectors]
+        else:
+            raise ToolError("tracks must be all or an array of track selectors.")
         for track in tracks:
             sequence = self.sequence(track.playlist)
             left = self.split_sequence_at(sequence, start)
@@ -2037,7 +2051,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="left_item_index")
-    def add_transition(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def add_transition(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, left_index, left = self._item(track, operation.get("left_item_index"))
         if left_index + 1 >= len(sequence):
@@ -2101,7 +2115,7 @@ class ProjectDocument:
         video = self._transition(video_service, 0, 1)
         video.set("out", str(duration - 1))
         properties = operation.get("properties", {})
-        if not isinstance(properties, dict):
+        if not is_object(properties):
             raise ToolError("Transition properties must be an object.")
         for name, value in properties.items():
             _set_property(video, name, value)
@@ -2127,7 +2141,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index")
-    def remove_transition(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_transition(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         sequence, index, entry = self._item(track, operation.get("item_index"))
         if not self.is_transition(entry) or index == 0 or index + 1 >= len(sequence):
@@ -2174,7 +2188,7 @@ class ProjectDocument:
         self.update_main_duration()
         return {"removed_transition": entry.get("producer")}
 
-    def _filter_host(self, operation: dict[str, Any]) -> ET.Element:
+    def _filter_host(self, operation: dict[str, object]) -> ET.Element:
         target = operation.get("target", "project")
         if target == "project":
             return self.main_tractor()
@@ -2189,7 +2203,7 @@ class ProjectDocument:
         raise ToolError("target must be project, track, or clip.")
 
     @edit_operation(selector_field="item_index", item_ref_target="clip")
-    def add_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def add_filter(self, operation: dict[str, object]) -> dict[str, object]:
         host = self._filter_host(operation)
         service = operation.get("service")
         if not isinstance(service, str) or not re.fullmatch(
@@ -2208,7 +2222,7 @@ class ProjectDocument:
         if shotcut_filter:
             _set_property(element, "shotcut:filter", shotcut_filter)
         properties = operation.get("properties", {})
-        if not isinstance(properties, dict) or len(properties) > 200:
+        if not is_object(properties) or len(properties) > 200:
             raise ToolError("properties must be an object with at most 200 properties.")
         for name, value in properties.items():
             if not isinstance(name, str) or not name:
@@ -2227,7 +2241,7 @@ class ProjectDocument:
         }
 
     @edit_operation()
-    def update_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def update_filter(self, operation: dict[str, object]) -> dict[str, object]:
         filter_id = operation.get("filter_id")
         element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
         if element is None or element.tag != "filter":
@@ -2241,7 +2255,7 @@ class ProjectDocument:
             if attr in operation:
                 element.set(label, str(_int(operation[attr], attr, 0)))
         properties = operation.get("properties", {})
-        if not isinstance(properties, dict):
+        if not is_object(properties):
             raise ToolError("properties must be an object.")
         for name, value in properties.items():
             if value is None:
@@ -2257,7 +2271,7 @@ class ProjectDocument:
         return {"filter_id": filter_id, "updated": True}
 
     @edit_operation()
-    def move_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def move_filter(self, operation: dict[str, object]) -> dict[str, object]:
         filter_id = operation.get("filter_id")
         element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
         if element is None or element.tag != "filter":
@@ -2319,7 +2333,7 @@ class ProjectDocument:
         }
 
     @edit_operation()
-    def remove_filter(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_filter(self, operation: dict[str, object]) -> dict[str, object]:
         filter_id = operation.get("filter_id")
         element = self.id_map().get(filter_id) if isinstance(filter_id, str) else None
         if element is None or element.tag != "filter":
@@ -2334,7 +2348,7 @@ class ProjectDocument:
         return {"filter_id": filter_id, "removed": True}
 
     @edit_operation()
-    def set_notes(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_notes(self, operation: dict[str, object]) -> dict[str, object]:
         notes = operation.get("notes", "")
         if not isinstance(notes, str):
             raise ToolError("notes must be a string.")
@@ -2364,7 +2378,7 @@ class ProjectDocument:
         return None
 
     @edit_operation()
-    def add_marker(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def add_marker(self, operation: dict[str, object]) -> dict[str, object]:
         container = self.markers_container(create=True)
         assert container is not None
         keys = [
@@ -2378,7 +2392,11 @@ class ProjectDocument:
         end = _int(operation.get("end_frame", start), "end_frame", start)
         text = operation.get("text", f"Marker {key + 1}")
         color = operation.get("color", "#00A0FF")
-        if not isinstance(text, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+        if (
+            not isinstance(text, str)
+            or not isinstance(color, str)
+            or not re.fullmatch(r"#[0-9A-Fa-f]{6}", color)
+        ):
             raise ToolError("Invalid marker text or color.")
         _set_property(marker, "text", text)
         _set_property(marker, "start", _frames_to_clock(start, self.fps))
@@ -2402,7 +2420,7 @@ class ProjectDocument:
         return container, matches[0]
 
     @edit_operation()
-    def update_marker(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def update_marker(self, operation: dict[str, object]) -> dict[str, object]:
         marker_id = str(operation.get("marker_id", ""))
         mutable = {"start_frame", "end_frame", "text", "color"}
         if not any(name in operation for name in mutable):
@@ -2456,20 +2474,20 @@ class ProjectDocument:
         }
 
     @edit_operation()
-    def remove_marker(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_marker(self, operation: dict[str, object]) -> dict[str, object]:
         marker_id = str(operation.get("marker_id", ""))
         container, marker = self._marker(marker_id)
         container.remove(marker)
         return {"marker_id": marker_id, "removed": True}
 
     @edit_operation()
-    def set_subtitle_track(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_subtitle_track(self, operation: dict[str, object]) -> dict[str, object]:
         name = operation.get("name")
         lang = operation.get("language", "por")
         items = operation.get("items")
         if not isinstance(name, str) or not name.strip() or not isinstance(lang, str):
             raise ToolError("name and language must be non-empty strings.")
-        if not isinstance(items, list):
+        if not is_array(items):
             raise ToolError("items must be a list.")
         main = self.main_tractor()
         feed = next(
@@ -2503,7 +2521,7 @@ class ProjectDocument:
             if burn is None:
                 burn = ET.Element("filter", {"id": self.new_id("filter_subtitle_burn")})
                 main.append(burn)
-            defaults = {
+            defaults: dict[str, object] = {
                 "mlt_service": "subtitle",
                 "shotcut:filter": "subtitles",
                 "feed": name,
@@ -2518,7 +2536,7 @@ class ProjectDocument:
                 "halign": "center",
             }
             style = operation.get("style", {})
-            if not isinstance(style, dict):
+            if not is_object(style):
                 raise ToolError("style must be an object.")
             defaults.update(style)
             for key, value in defaults.items():
@@ -2533,7 +2551,7 @@ class ProjectDocument:
         return {"subtitle_track": name, "language": lang, "item_count": len(items)}
 
     @edit_operation()
-    def remove_subtitle_track(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def remove_subtitle_track(self, operation: dict[str, object]) -> dict[str, object]:
         name = operation.get("name")
         if not isinstance(name, str):
             raise ToolError("name must be a string.")
@@ -2552,7 +2570,7 @@ class ProjectDocument:
         return {"subtitle_track": name, "removed_filters": removed}
 
     @edit_operation()
-    def set_color_workflow(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_color_workflow(self, operation: dict[str, object]) -> dict[str, object]:
         workflow = operation.get("workflow")
         if workflow not in {"sdr", "hlg", "pq"}:
             raise ToolError("workflow must be sdr, hlg, or pq.")
@@ -2625,7 +2643,7 @@ class ProjectDocument:
         return element
 
     @staticmethod
-    def _animation_separator(interpolation: Any) -> tuple[str, str]:
+    def _animation_separator(interpolation: object) -> tuple[str, str]:
         separators = {"linear": "=", "discrete": "|=", "smooth": "~="}
         if not isinstance(interpolation, str) or interpolation not in separators:
             raise ToolError("interpolation must be linear, discrete, or smooth.")
@@ -2725,7 +2743,7 @@ class ProjectDocument:
         return volume_filter.get("id")
 
     @edit_operation(selector_field="item_index")
-    def animate_clip(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def animate_clip(self, operation: dict[str, object]) -> dict[str, object]:
         """Compile creative clip animation into owned Shotcut/MLT filters."""
 
         track = self.find_track(operation.get("track"))
@@ -2775,17 +2793,17 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index")
-    def set_clip_opacity(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_clip_opacity(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         _, _, entry, frame_in, frame_out = self._regular_clip(
             track, operation.get("item_index")
         )
         raw_keyframes = operation.get("opacity_keyframes")
-        if not isinstance(raw_keyframes, list) or not 1 <= len(raw_keyframes) <= 64:
+        if not is_array(raw_keyframes) or not 1 <= len(raw_keyframes) <= 64:
             raise ToolError("opacity_keyframes must contain between 1 and 64 points.")
         keyframes: list[tuple[int, float]] = []
         for index, raw in enumerate(raw_keyframes):
-            if not isinstance(raw, dict):
+            if not is_object(raw):
                 raise ToolError(f"opacity_keyframes[{index}] must be an object.")
             frame = _int(raw.get("frame"), f"opacity_keyframes[{index}].frame", 0)
             opacity = _number(
@@ -2845,7 +2863,7 @@ class ProjectDocument:
         }
 
     @edit_operation(selector_field="item_index")
-    def set_clip_speed(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_clip_speed(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         _, _, entry, frame_in, frame_out = self._regular_clip(
             track, operation.get("item_index")
@@ -3019,17 +3037,17 @@ class ProjectDocument:
         return max(source_in, selected_in), min(source_out, selected_out)
 
     @edit_operation(selector_field="item_index")
-    def set_clip_speed_map(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_clip_speed_map(self, operation: dict[str, object]) -> dict[str, object]:
         track = self.find_track(operation.get("track"))
         _, _, entry, frame_in, frame_out = self._regular_clip(
             track, operation.get("item_index")
         )
         raw_keyframes = operation.get("keyframes")
-        if not isinstance(raw_keyframes, list) or not 2 <= len(raw_keyframes) <= 64:
+        if not is_array(raw_keyframes) or not 2 <= len(raw_keyframes) <= 64:
             raise ToolError("keyframes must contain between 2 and 64 points.")
         keyframes: list[tuple[int, float]] = []
         for index, raw in enumerate(raw_keyframes):
-            if not isinstance(raw, dict):
+            if not is_object(raw):
                 raise ToolError(f"keyframes[{index}] must be an object.")
             frame = _int(raw.get("frame"), f"keyframes[{index}].frame", 0)
             speed = _number(raw.get("speed"), f"keyframes[{index}].speed")
@@ -3142,7 +3160,7 @@ class ProjectDocument:
         }
 
     @edit_operation()
-    def relink_media(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def relink_media(self, operation: dict[str, object]) -> dict[str, object]:
         old = operation.get("from")
         new = operation.get("to")
         if not isinstance(old, str) or not isinstance(new, str):
@@ -3191,7 +3209,7 @@ class ProjectDocument:
         }
 
     @edit_operation()
-    def set_profile(self, operation: dict[str, Any]) -> dict[str, Any]:
+    def set_profile(self, operation: dict[str, object]) -> dict[str, object]:
         if not _boolean(
             operation.get("preserve_frame_numbers", False),
             "preserve_frame_numbers",
@@ -3260,8 +3278,8 @@ class ProjectDocument:
                 profile.set(key, str(_int(operation[key], key, minimum)))
         return {"profile_updated": True, "fps": self.fps}
 
-    def apply_operation(self, operation: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(operation, dict):
+    def apply_operation(self, operation: dict[str, object]) -> dict[str, object]:
+        if not is_object(operation):
             raise ToolError("Each operation must be an object.")
         name = operation.get("op")
         if not isinstance(name, str):
@@ -3273,14 +3291,14 @@ class ProjectDocument:
             )
         operation = self._resolve_item_selector(operation)
         alias_reference = self._prepare_item_alias(operation)
-        handler = getattr(self, name)
-        result = handler(operation)
+        handler = _EDIT_OPERATION_HANDLERS[name]
+        result = handler(self, operation)
         self._bind_item_alias(operation, result, alias_reference)
         return {"op": name, **result}
 
     def to_bytes(self) -> bytes:
         ET.indent(self.tree, space="  ")
-        data = ET.tostring(self.root, encoding="utf-8", xml_declaration=True)
+        data: bytes = ET.tostring(self.root, encoding="utf-8", xml_declaration=True)
         _ensure_project_size(self.path, len(data))
         return data
 

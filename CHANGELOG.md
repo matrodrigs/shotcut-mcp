@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Export chapters when external markers share a frame and one lacks an identifier, instead
+  of comparing a null identifier with a string during sorting.
+- Report malformed FFprobe results and persistent render fields as structured errors before
+  using them, while preserving existing media and unknown render metadata extensions.
+
 ## 1.5.4 (2026-09-07)
 
 ### Fixed

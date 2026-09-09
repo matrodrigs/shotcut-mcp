@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from shotcut_mcp import render as render_module
 from shotcut_mcp import render_jobs, render_worker
+from shotcut_mcp.errors import ToolError
 from shotcut_mcp.storage import OutputTransaction, RenderInputSnapshot
 
 
@@ -61,6 +62,54 @@ class RenderMonitoringTests(unittest.TestCase):
                 self.assertEqual(status["current_frame"], 99)
                 self.assertEqual(output.target.read_bytes(), b"rendered")
                 self.assertLess(peak, 4 * 1024 * 1024)
+
+    def test_invalid_persistent_fields_preserve_output_and_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "existing.mp4"
+            output.write_bytes(b"keep existing render")
+            with patch.object(render_jobs, "JOB_DIR", root / "jobs"):
+                for field, value in (
+                    ("started_at", "yesterday"),
+                    ("total_frames", True),
+                    ("consumer_properties", {"vcodec": 1}),
+                    ("progress_samples", [{"at": 1, "percent": "50", "frame": 5}]),
+                ):
+                    with self.subTest(field=field):
+                        job_id = "a" * 32
+                        render_jobs.write_job(
+                            {
+                                "job_id": job_id,
+                                "status": "completed",
+                                "output_path": str(output),
+                                field: value,
+                            }
+                        )
+                        metadata_path = render_jobs.metadata_path(job_id)
+                        original = metadata_path.read_bytes()
+                        with self.assertRaises(ToolError) as caught:
+                            render_module.render_status(job_id)
+                        self.assertEqual(
+                            caught.exception.code, "invalid_render_metadata"
+                        )
+                        self.assertEqual(output.read_bytes(), b"keep existing render")
+                        self.assertEqual(metadata_path.read_bytes(), original)
+
+    def test_persistent_job_preserves_unknown_extension_fields(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(render_jobs, "JOB_DIR", Path(directory)),
+        ):
+            job_id = "b" * 32
+            metadata = {
+                "job_id": job_id,
+                "status": "queued",
+                "extension": {"nested": [1, "two", None]},
+            }
+            render_jobs.write_job(metadata)
+            loaded = render_jobs.read_job(job_id)
+            render_jobs.write_job(loaded)
+            self.assertEqual(render_jobs.read_job(job_id), metadata)
 
     def test_render_log_is_bounded_and_supervisor_is_reaped_without_polling(
         self,

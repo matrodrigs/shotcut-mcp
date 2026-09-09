@@ -114,6 +114,8 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
   `2025-06-18` and `2025-11-25`, while legacy revisions receive both paths in text content.
 - Export point markers in Shotcut's chapter text format, with opt-in range markers and marker-color
   filtering, through the same atomic output protection used by other generated files.
+  External markers without identifiers remain exportable; at equal frames they sort before
+  named markers, and their returned `marker_id` remains null.
 - Emit strictly increasing request-scoped MCP progress notifications only when the caller provides
   a token. Keep durable post-return render progress in `render_status`.
 
@@ -164,6 +166,15 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 
 ## Verification
 
+- Run strict mypy with explicit `Any` forbidden in runtime modules and development scripts.
+  Represent unknown input as `object` and narrow it through checked types before accessing
+  fields; keep JSON Schema validation authoritative for MCP requests. Use standard-library
+  `TypedDict` contracts for stable snapshots, media analyses, render metadata and tool schemas,
+  including nullable and optional fields. Do not replace validation with unchecked casts.
+- Validate known persistent render fields and FFprobe result shapes before using them;
+  preserve unknown render metadata extensions and keep path/revision/output checks in place.
+- Ignore malformed cancellation identifiers without sending a notification response or
+  interrupting the stdio server. Boolean identifiers must not alias integer request IDs.
 - MCP negotiation, schema-validation, batching and cancellation tests.
 - Protocol-version tests for token-scoped, monotonic progress notifications.
 - Unit tests through public project, preview and render APIs.

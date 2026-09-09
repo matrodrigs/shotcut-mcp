@@ -6,6 +6,20 @@ line-length = 88
 select = ["B", "E", "F", "I", "PERF", "RUF", "SIM", "UP"]
 ignore = ["E501"]
 
+# Functional TypedDict declarations avoid Vulture's class-field false positives.
+# Keep dead-code checks enabled; only waive Ruff's preference for class syntax.
+[tool.ruff.lint.per-file-ignores]
+"shotcut_mcp/project_snapshot.py" = ["UP013"]
+"shotcut_mcp/media.py" = ["UP013"]
+"shotcut_mcp/missing_media.py" = ["UP013"]
+"shotcut_mcp/project.py" = ["UP013"]
+"shotcut_mcp/protocol.py" = ["UP013"]
+"shotcut_mcp/tools.py" = ["UP013"]
+"shotcut_mcp/render_jobs.py" = ["UP013"]
+"shotcut_mcp/platform.py" = ["UP013"]
+"scripts/build_release.py" = ["UP013"]
+"scripts/require_green_ci.py" = ["UP013"]
+
 [tool.vulture]
 paths = ["shotcut_mcp", "scripts", "tests"]
 min_confidence = 60
@@ -15,6 +29,8 @@ ignore_names = ["compress_type", "create_system", "external_attr"]
 ignore_decorators = ["@edit_operation"]
 
 [tool.mypy]
+strict = true
+disallow_any_explicit = true
 python_version = "3.10"
 files = ["shotcut_mcp", "scripts"]
 check_untyped_defs = true

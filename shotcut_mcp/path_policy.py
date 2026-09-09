@@ -6,7 +6,6 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .errors import ToolError
@@ -35,7 +34,7 @@ def _enabled(name: str) -> bool:
     return os.environ.get(name, "").lower() in {"1", "true", "yes"}
 
 
-def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
+def expand_path(value: object, *, enforce_policy: bool = True) -> Path:
     """Resolve a user path and enforce the administrator's root policy."""
 
     if not isinstance(value, str) or not value.strip():
@@ -87,7 +86,7 @@ def expand_path(value: str, *, enforce_policy: bool = True) -> Path:
     return resolved
 
 
-def path_policy() -> dict[str, Any]:
+def path_policy() -> dict[str, object]:
     """Describe the effective path and resource policy without mutating it."""
 
     configured = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()

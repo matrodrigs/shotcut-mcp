@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import TypedDict
 
 from . import MLT_VERSION_FAMILY, SHOTCUT_VERSION
 from .errors import ToolError
@@ -35,7 +36,7 @@ from .project import (
     restore_backup,
     validate_project,
 )
-from .protocol import report_progress, schema_errors
+from .protocol import JsonSchema, report_progress, schema_errors
 from .render import (
     RENDER_PRESETS,
     cancel_render,
@@ -44,7 +45,41 @@ from .render import (
     start_render,
 )
 
-_OPERATION_CATALOG_BASE: dict[str, dict[str, Any]] = {
+OperationSummary = TypedDict(
+    "OperationSummary",
+    {
+        "required": list[str],
+        "optional": list[str],
+        "notes": str,
+    },
+    total=False,
+)
+OperationDetails = TypedDict(
+    "OperationDetails",
+    {
+        "required": list[str],
+        "optional": list[str],
+        "notes": str,
+        "schema": JsonSchema,
+        "example": dict[str, object],
+    },
+    total=False,
+)
+ToolDefinition = TypedDict(
+    "ToolDefinition",
+    {
+        "name": str,
+        "title": str,
+        "description": str,
+        "inputSchema": JsonSchema,
+        "outputSchema": JsonSchema,
+        "annotations": dict[str, bool | str],
+    },
+    total=False,
+)
+
+
+_OPERATION_CATALOG_BASE: dict[str, OperationSummary] = {
     "add_track": {
         "required": ["kind"],
         "optional": ["name"],
@@ -253,13 +288,10 @@ if set(_OPERATION_CATALOG_BASE) != set(EDIT_OPERATION_CONTRACTS):
     )
 
 
-def _operation_summary(name: str, base: dict[str, Any]) -> dict[str, Any]:
+def _operation_summary(name: str, base: OperationSummary) -> OperationSummary:
     """Project runtime selector/alias semantics into one public summary."""
 
-    summary = {
-        key: list(value) if isinstance(value, list) else value
-        for key, value in base.items()
-    }
+    summary = copy.deepcopy(base)
     contract = EDIT_OPERATION_CONTRACTS.get(name)
     if contract is None:
         return summary
@@ -284,12 +316,12 @@ def _operation_summary(name: str, base: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-OPERATION_CATALOG: dict[str, dict[str, Any]] = {
+OPERATION_CATALOG: dict[str, OperationSummary] = {
     name: _operation_summary(name, descriptor)
     for name, descriptor in _OPERATION_CATALOG_BASE.items()
 }
 
-OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
+OPERATION_FIELD_SCHEMAS: dict[str, JsonSchema] = {
     "kind": {
         "type": "string",
         "enum": ["video", "audio"],
@@ -669,7 +701,7 @@ OPERATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
-ANIMATION_KEYFRAMES_SCHEMA: dict[str, Any] = {
+ANIMATION_KEYFRAMES_SCHEMA: JsonSchema = {
     "type": "array",
     "minItems": 1,
     "maxItems": 64,
@@ -720,7 +752,7 @@ ANIMATION_KEYFRAMES_SCHEMA: dict[str, Any] = {
     },
 }
 
-OPERATION_EXAMPLES: dict[str, dict[str, Any]] = {
+OPERATION_EXAMPLES: dict[str, dict[str, object]] = {
     "add_track": {"op": "add_track", "kind": "video", "name": "Titles"},
     "remove_track": {"op": "remove_track", "track": "V2"},
     "update_track": {"op": "update_track", "track": "A1", "muted": True},
@@ -910,10 +942,10 @@ if set(OPERATION_EXAMPLES) != set(OPERATION_CATALOG):
     raise RuntimeError("Edit operation examples do not match the public catalog.")
 
 
-def _operation_details(name: str) -> dict[str, Any]:
+def _operation_details(name: str) -> OperationDetails:
     summary = OPERATION_CATALOG[name]
     fields = [*summary.get("required", []), *summary.get("optional", [])]
-    schema: dict[str, Any] = {
+    schema: JsonSchema = {
         "type": "object",
         "properties": {
             "op": {"type": "string", "enum": [name]},
@@ -952,7 +984,7 @@ def _operation_details(name: str) -> dict[str, Any]:
     return {**summary, "schema": schema, "example": OPERATION_EXAMPLES[name]}
 
 
-def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> list[str]:
+def validate_tool_arguments(name: str, arguments: dict[str, object]) -> list[str]:
     """Validate contracts that stay focused outside the compact tools/list schema."""
 
     if name not in {"edit_project", "plan_project_edit"}:
@@ -992,7 +1024,7 @@ TRANSACTION_GUARANTEES = [
 ]
 
 
-def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
+def capabilities(arguments: dict[str, object]) -> dict[str, object]:
     requested = arguments.get("operation")
     if requested is not None and (
         not isinstance(requested, str) or requested not in OPERATION_CATALOG
@@ -1079,11 +1111,11 @@ def capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def inspect_project(arguments: dict[str, Any]) -> dict[str, Any]:
-    return ProjectDocument.load(expand_path(arguments.get("path", ""))).snapshot()
+def inspect_project(arguments: dict[str, object]) -> dict[str, object]:
+    return dict(ProjectDocument.load(expand_path(arguments.get("path", ""))).snapshot())
 
 
-def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+def render_preview_tool(arguments: dict[str, object]) -> dict[str, object]:
     frame = arguments.get("frame", 0)
     if isinstance(frame, bool) or not isinstance(frame, int):
         raise ToolError("frame must be an integer.")
@@ -1104,11 +1136,11 @@ def render_preview_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def render_preview_batch_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+def render_preview_batch_tool(arguments: dict[str, object]) -> dict[str, object]:
     raw_requests = arguments.get("requests")
     if not isinstance(raw_requests, list) or not 1 <= len(raw_requests) <= 64:
         raise ToolError("requests must contain between 1 and 64 frame/output pairs.")
-    requests: list[tuple[int, Any]] = []
+    requests: list[tuple[int, Path]] = []
     for index, item in enumerate(raw_requests):
         if not isinstance(item, dict):
             raise ToolError(f"requests[{index}] must be an object.")
@@ -1124,21 +1156,21 @@ def render_preview_batch_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def open_in_shotcut_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+def open_in_shotcut_tool(arguments: dict[str, object]) -> dict[str, object]:
     fullscreen = arguments.get("fullscreen", False)
     if not isinstance(fullscreen, bool):
         raise ToolError("fullscreen must be a boolean.")
     return open_in_shotcut(expand_path(arguments.get("path", "")), fullscreen)
 
 
-def list_backups_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+def list_backups_tool(arguments: dict[str, object]) -> dict[str, object]:
     return list_backups(expand_path(arguments.get("project_path", "")))
 
 
 def _object_schema(
-    properties: dict[str, Any], required: list[str] | None = None
-) -> dict[str, Any]:
-    result: dict[str, Any] = {
+    properties: dict[str, JsonSchema], required: list[str] | None = None
+) -> JsonSchema:
+    result: JsonSchema = {
         "type": "object",
         "properties": properties,
         "additionalProperties": False,
@@ -1148,11 +1180,11 @@ def _object_schema(
     return result
 
 
-PATH = {"type": "string", "description": "Absolute or relative local path."}
+PATH: JsonSchema = {"type": "string", "description": "Absolute or relative local path."}
 OP_NAMES = list(OPERATION_CATALOG)
 
 
-def _operations_input_schema() -> dict[str, Any]:
+def _operations_input_schema() -> JsonSchema:
     return {
         "type": "array",
         "minItems": 1,
@@ -1167,8 +1199,8 @@ def _operations_input_schema() -> dict[str, Any]:
 
 
 def _revision_guarded_input_schema(
-    properties: dict[str, Any], required: list[str]
-) -> dict[str, Any]:
+    properties: dict[str, JsonSchema], required: list[str]
+) -> JsonSchema:
     schema = _object_schema(properties, required)
     schema["anyOf"] = [
         {"required": ["expected_revision"]},
@@ -1180,7 +1212,7 @@ def _revision_guarded_input_schema(
     return schema
 
 
-def _edit_project_input_schema() -> dict[str, Any]:
+def _edit_project_input_schema() -> JsonSchema:
     return _revision_guarded_input_schema(
         {
             "project_path": PATH,
@@ -1200,7 +1232,7 @@ def _edit_project_input_schema() -> dict[str, Any]:
     )
 
 
-def _start_render_input_schema() -> dict[str, Any]:
+def _start_render_input_schema() -> JsonSchema:
     schema = _object_schema(
         {
             "project_path": PATH,
@@ -1278,7 +1310,7 @@ def _start_render_input_schema() -> dict[str, Any]:
     return schema
 
 
-TOOLS: list[dict[str, Any]] = [
+TOOLS: list[ToolDefinition] = [
     {
         "name": "shotcut_status",
         "title": "Check Shotcut status",
@@ -2048,12 +2080,10 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def _describe_input_schema(schema: dict[str, Any]) -> None:
+def _describe_input_schema(schema: JsonSchema) -> None:
     properties = schema.get("properties")
     if isinstance(properties, dict):
         for name, child in properties.items():
-            if not isinstance(child, dict):
-                continue
             description = PARAMETER_DESCRIPTIONS.get(name)
             if description and (
                 "description" not in child
@@ -2066,30 +2096,27 @@ def _describe_input_schema(schema: dict[str, Any]) -> None:
         _describe_input_schema(items)
 
 
-def _clone_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Copy a schema without preserving aliases between reused field dictionaries."""
-
-    result: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key == "properties" and isinstance(value, dict):
-            result[key] = {
-                name: _clone_schema(child) if isinstance(child, dict) else child
-                for name, child in value.items()
-            }
-        elif key == "items" and isinstance(value, dict):
-            result[key] = _clone_schema(value)
-        else:
-            result[key] = copy.deepcopy(value)
+def _clone_schema(schema: JsonSchema) -> JsonSchema:
+    """Clone each child separately so reused schema fields cannot share mutations."""
+    result = copy.deepcopy(schema)
+    properties = schema.get("properties")
+    if properties is not None:
+        result["properties"] = {
+            name: _clone_schema(child) for name, child in properties.items()
+        }
+    items = schema.get("items")
+    if items is not None:
+        result["items"] = _clone_schema(items)
     return result
 
 
 def _result_schema(
-    properties: dict[str, Any] | None = None,
+    properties: dict[str, JsonSchema] | None = None,
     required: list[str] | None = None,
     *,
     additional_properties: bool = True,
-) -> dict[str, Any]:
-    result: dict[str, Any] = {
+) -> JsonSchema:
+    result: JsonSchema = {
         "type": "object",
         "properties": properties or {},
         "additionalProperties": additional_properties,
@@ -2101,12 +2128,12 @@ def _result_schema(
 
 
 def _output_object(
-    properties: dict[str, Any],
+    properties: dict[str, JsonSchema],
     required: list[str],
     *,
     additional_properties: bool = False,
     description: str | None = None,
-) -> dict[str, Any]:
+) -> JsonSchema:
     result = _result_schema(
         properties,
         required,
@@ -2117,18 +2144,18 @@ def _output_object(
     return result
 
 
-def _output_array(items: dict[str, Any], description: str) -> dict[str, Any]:
+def _output_array(items: JsonSchema, description: str) -> JsonSchema:
     return {"type": "array", "items": items, "description": description}
 
 
-STRING = {"type": "string"}
-INTEGER = {"type": "integer"}
-BOOLEAN = {"type": "boolean"}
-NULLABLE_STRING = {"type": ["string", "null"]}
-NULLABLE_INTEGER = {"type": ["integer", "null"]}
-NULLABLE_NUMBER = {"type": ["number", "null"]}
+STRING: JsonSchema = {"type": "string"}
+INTEGER: JsonSchema = {"type": "integer"}
+BOOLEAN: JsonSchema = {"type": "boolean"}
+NULLABLE_STRING: JsonSchema = {"type": ["string", "null"]}
+NULLABLE_INTEGER: JsonSchema = {"type": ["integer", "null"]}
+NULLABLE_NUMBER: JsonSchema = {"type": ["number", "null"]}
 
-ERROR_OUTPUT_PROPERTIES: dict[str, dict[str, Any]] = {
+ERROR_OUTPUT_PROPERTIES: dict[str, JsonSchema] = {
     "error": {"type": "string", "description": "Human-readable failure summary."},
     "error_type": {
         "type": "string",
@@ -2169,14 +2196,16 @@ ERROR_OUTPUT_REQUIRED = [
 ]
 
 
-def _structured_output_schema(success_schema: dict[str, Any]) -> dict[str, Any]:
+def _structured_output_schema(success_schema: JsonSchema) -> JsonSchema:
     """Publish one object contract that accepts either success or tool-error data."""
 
     result = _clone_schema(success_schema)
     properties = result.setdefault("properties", {})
     if not isinstance(properties, dict):
         raise ValueError("Tool output schemas must publish object properties.")
-    properties.update(_clone_schema(ERROR_OUTPUT_PROPERTIES))
+    properties.update(
+        {name: _clone_schema(field) for name, field in ERROR_OUTPUT_PROPERTIES.items()}
+    )
     success_required = result.pop("required", [])
     if not isinstance(success_required, list) or not success_required:
         raise ValueError("Tool success output schemas must require stable fields.")
@@ -2187,7 +2216,7 @@ def _structured_output_schema(success_schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-PROPERTY_BAG_SCHEMA = {
+PROPERTY_BAG_SCHEMA: JsonSchema = {
     "type": "object",
     "description": "Decoded MLT properties keyed by property name.",
     "additionalProperties": {"type": ["string", "number", "boolean", "null"]},
@@ -2507,7 +2536,7 @@ COUNTS_OUTPUT_SCHEMA = _output_object(
     COUNT_NAMES,
     description="Counts of important MLT element kinds.",
 )
-PROFILE_OUTPUT_SCHEMA = {
+PROFILE_OUTPUT_SCHEMA: JsonSchema = {
     "type": "object",
     "properties": {
         "fps": {
@@ -2597,7 +2626,7 @@ PROJECT_RESOURCE_CHECK_OUTPUT_SCHEMA = _output_object(
     ["status", "checked_count", "missing_resources"],
     description="Local resource readiness for this project.",
 )
-SERVICE_NAME_MAP_OUTPUT_SCHEMA = {
+SERVICE_NAME_MAP_OUTPUT_SCHEMA: JsonSchema = {
     "type": "object",
     "additionalProperties": _output_array(
         STRING, "MLT service names for one service kind."
@@ -3032,7 +3061,7 @@ PROJECT_RESULT_OUTPUT_SCHEMA = _output_object(
     description="Project snapshot; inspect_project publishes its complete schema.",
 )
 
-OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
     "shotcut_status": _result_schema(
         {
             "ready": BOOLEAN,
@@ -3344,7 +3373,10 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "type": ["object", "null"],
                 "properties": {
                     "created": BOOLEAN,
-                    **_clone_schema(ERROR_OUTPUT_PROPERTIES),
+                    **{
+                        name: _clone_schema(field)
+                        for name, field in ERROR_OUTPUT_PROPERTIES.items()
+                    },
                     "path": STRING,
                     "size_bytes": INTEGER,
                     "cells": _output_array(
@@ -3582,12 +3614,12 @@ for tool in TOOLS:
     )
 
 
-HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+HANDLERS: dict[str, Callable[[dict[str, object]], Mapping[str, object]]] = {
     "shotcut_status": lambda _: status(),
     "shotcut_doctor": lambda _: compatibility_doctor(),
     "shotcut_capabilities": capabilities,
-    "probe_media": lambda arguments: summarize_media(
-        expand_path(arguments.get("path", ""))
+    "probe_media": lambda arguments: dict(
+        summarize_media(expand_path(arguments.get("path", "")))
     ),
     "analyze_media_quality": lambda arguments: analyze_media_quality(
         expand_path(arguments.get("path", "")), arguments

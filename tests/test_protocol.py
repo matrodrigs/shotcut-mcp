@@ -52,6 +52,26 @@ def request(
 
 
 class SchemaValidationTests(unittest.TestCase):
+    def test_invalid_cancellation_ids_do_not_stop_the_stdio_server(self) -> None:
+        messages = [request("initialize", {"protocolVersion": "2025-11-25"})]
+        messages.extend(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": invalid_id},
+            }
+            for invalid_id in ([], {}, True, None)
+        )
+        messages.append(request("ping", request_id=2))
+        source = io.BytesIO(
+            b"".join((json.dumps(item) + "\n").encode() for item in messages)
+        )
+        output = io.BytesIO()
+        serve(source, output)
+        responses = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([response["id"] for response in responses], [1, 2])
+        self.assertEqual(responses[-1]["result"], {})
+
     def test_object_errors_preserve_keyword_and_property_order(self) -> None:
         schema = {
             "type": "object",

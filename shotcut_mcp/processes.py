@@ -11,7 +11,6 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from .errors import RequestCancelled, ToolError
 from .path_policy import expand_path
@@ -223,7 +222,7 @@ def run_capture(
 
 def start_render_supervisor(
     job_id: str, diagnostic_path: Path
-) -> subprocess.Popen[Any]:
+) -> subprocess.Popen[bytes]:
     """Launch our bundled worker without changing cwd or the inherited environment."""
 
     launcher = (
@@ -283,7 +282,9 @@ def process_is_alive(pid: int) -> bool:
         return True
 
 
-def terminate_process(process: subprocess.Popen[Any], grace_seconds: float = 2) -> None:
+def terminate_process(
+    process: subprocess.Popen[str] | subprocess.Popen[bytes], grace_seconds: float = 2
+) -> None:
     """Terminate a child process group, escalating after a grace period."""
 
     if process.poll() is not None:

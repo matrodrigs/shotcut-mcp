@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +16,47 @@ from shotcut_mcp.storage import OutputTransaction
 
 
 class RangeRenderAndChapterTests(unittest.TestCase):
+    def test_chapter_export_orders_same_frame_markers_without_an_id(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ),
+        ):
+            root = Path(directory)
+            project = root / "chapters.mlt"
+            created = create_project({"project_path": str(project)})
+            edit_project(
+                {
+                    "project_path": str(project),
+                    "expected_revision": created["revision"],
+                    "operations": [
+                        {"op": "add_marker", "start_frame": 30, "text": "Unnamed"},
+                        {"op": "add_marker", "start_frame": 30, "text": "Named"},
+                    ],
+                }
+            )
+            tree = ET.parse(project)
+            marker = tree.find(".//properties[@name='shotcut:markers']/properties")
+            assert marker is not None
+            del marker.attrib["name"]
+            tree.write(project, encoding="utf-8", xml_declaration=True)
+            original = project.read_bytes()
+            output = root / "chapters.txt"
+            result = export_marker_chapters(
+                {
+                    "project_path": str(project),
+                    "output_path": str(output),
+                }
+            )
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                "00:00 Intro\n00:01 Unnamed\n00:01 Named\n",
+            )
+            self.assertEqual(result["marker_count"], 2)
+            self.assertEqual(project.read_bytes(), original)
+
     @staticmethod
     def _start(
         arguments: dict[str, object], timing: dict[str, object]

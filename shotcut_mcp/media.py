@@ -7,8 +7,17 @@ import json
 import math
 import re
 import threading
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import (
+    Literal,
+    SupportsFloat,
+    SupportsIndex,
+    SupportsInt,
+    TypedDict,
+    TypeGuard,
+    TypeVar,
+)
 
 from .errors import ToolError
 from .processes import (
@@ -17,9 +26,50 @@ from .processes import (
     run_capture,
     runtime_identity,
 )
-from .protocol import report_progress
+from .protocol import is_array, is_object, is_text_array, report_progress
 
-_PROBE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
+ProbePayload = TypedDict(
+    "ProbePayload",
+    {
+        "format": dict[str, object],
+        "streams": list[dict[str, object]],
+    },
+    total=False,
+)
+ProbeField = TypeVar("ProbeField", str, int)
+
+
+def _is_probe_payload(value: object) -> TypeGuard[ProbePayload]:
+    if not is_object(value):
+        return False
+    streams = value.get("streams", [])
+    return (
+        is_object(value.get("format", {}))
+        and is_array(streams)
+        and all(is_object(stream) for stream in streams)
+    )
+
+
+def _probe_field(
+    source: Mapping[str, object], name: str, kind: type[ProbeField]
+) -> ProbeField | None:
+    value = source.get(name)
+    if value is None:
+        return None
+    if isinstance(value, kind) and not isinstance(value, bool):
+        return value
+    raise ToolError(
+        "ffprobe returned an invalid field type.",
+        code="media_probe_failed",
+        recommended_action="run_compatibility_diagnostics",
+        recommended_tool="shotcut_doctor",
+        details={"field": name},
+    )
+
+
+# Raw FFprobe JSON is an extensible external payload. Keep its dynamic type at
+# this boundary; normalized results below expose concrete field contracts.
+_PROBE_CACHE: dict[tuple[object, ...], ProbePayload] = {}
 _PROBE_LOCK = threading.Lock()
 _FILTER_CACHE: dict[tuple[object, ...], set[str]] = {}
 _FILTER_LOCK = threading.Lock()
@@ -33,7 +83,135 @@ QUALITY_ANALYZERS = {
 }
 
 
-def _as_float(value: Any) -> float | None:
+_StreamIdentity = TypedDict(
+    "_StreamIdentity",
+    {
+        "index": int | None,
+        "type": str | None,
+        "codec": str | None,
+        "duration_seconds": float | None,
+    },
+)
+
+
+# Video/audio fields are present only for the matching stream kind.
+_MediaStreamSummaryFields = TypedDict(
+    "_MediaStreamSummaryFields",
+    {
+        "width": int | None,
+        "height": int | None,
+        "pixel_format": str | None,
+        "pixel_bit_depth": int | None,
+        "color_primaries": str | None,
+        "color_transfer": str | None,
+        "color_space": str | None,
+        "color_range": str | None,
+        "dynamic_range": str,
+        "frame_rate": float | None,
+        "sample_rate": float | None,
+        "channels": int | None,
+        "channel_layout": str | None,
+    },
+    total=False,
+)
+
+
+class MediaStreamSummary(_StreamIdentity, _MediaStreamSummaryFields):
+    pass
+
+
+MediaSummary = TypedDict(
+    "MediaSummary",
+    {
+        "path": str,
+        "size_bytes": int,
+        "duration_seconds": float | None,
+        "format": str | None,
+        "bit_rate": float | None,
+        "streams": list[MediaStreamSummary],
+    },
+)
+
+
+QualityAnalyzerCapability = TypedDict(
+    "QualityAnalyzerCapability",
+    {
+        "filter": str,
+        "stream_type": str,
+        "available": bool,
+        "error": str | None,
+    },
+)
+
+
+QualityInterval = TypedDict(
+    "QualityInterval",
+    {
+        "start_seconds": float | None,
+        "end_seconds": float | None,
+        "duration_seconds": float | None,
+    },
+)
+
+
+QualityMetrics = TypedDict(
+    "QualityMetrics",
+    {
+        "intervals": list[QualityInterval],
+        "intervals_truncated": bool,
+        "repeated_fields": dict[str, int],
+        "single_frame_detection": dict[str, int],
+        "multi_frame_detection": dict[str, int],
+        "integrated_lufs": float | None,
+        "loudness_range_lu": float | None,
+        "lra_low_lufs": float | None,
+        "lra_high_lufs": float | None,
+        "true_peak_dbfs": float | None,
+    },
+    total=False,
+)
+_StreamAnalysisFields = TypedDict(
+    "_StreamAnalysisFields",
+    {
+        "stream_index": int | None,
+        "status": Literal["ok", "failed"],
+        "error": str,
+    },
+    total=False,
+)
+
+
+class StreamAnalysis(QualityMetrics, _StreamAnalysisFields):
+    pass
+
+
+AnalyzerResult = TypedDict(
+    "AnalyzerResult",
+    {
+        "status": Literal["ok", "partial", "failed", "unavailable", "not_applicable"],
+        "filter": str,
+        "streams": list[StreamAnalysis],
+        "reason": str,
+    },
+    total=False,
+)
+QualityReport = TypedDict(
+    "QualityReport",
+    {
+        "path": str,
+        "media_duration_seconds": float | None,
+        "start_seconds": float,
+        "duration_seconds": float | None,
+        "streams": dict[str, int | None],
+        "analyzers": dict[str, AnalyzerResult],
+        "requested_analyzers": list[str],
+    },
+)
+
+
+def _as_float(value: object) -> float | None:
+    if not isinstance(value, (str, bytes, bytearray, SupportsFloat, SupportsIndex)):
+        return None
     try:
         result = float(value)
     except (TypeError, ValueError):
@@ -41,7 +219,7 @@ def _as_float(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def _fraction(value: Any) -> float | None:
+def _fraction(value: object) -> float | None:
     if not isinstance(value, str) or "/" not in value:
         return _as_float(value)
     numerator, denominator = value.split("/", 1)
@@ -49,7 +227,7 @@ def _fraction(value: Any) -> float | None:
     return num / den if num is not None and den not in (None, 0) else None
 
 
-def media_duration(payload: dict[str, Any]) -> float | None:
+def media_duration(payload: ProbePayload) -> float | None:
     """Return the longest positive duration reported by FFprobe."""
 
     durations: list[float] = []
@@ -79,10 +257,12 @@ def shotcut_file_hash(media_path: Path) -> str:
     return digest.hexdigest()
 
 
-def _pixel_bit_depth(stream: dict[str, Any]) -> int | None:
+def _pixel_bit_depth(stream: dict[str, object]) -> int | None:
     raw = stream.get("bits_per_raw_sample")
     try:
-        if raw not in (None, "", "0"):
+        if raw not in (None, "", "0") and isinstance(
+            raw, (str, bytes, bytearray, SupportsInt, SupportsIndex)
+        ):
             return int(raw)
     except (TypeError, ValueError):
         pass
@@ -91,7 +271,7 @@ def _pixel_bit_depth(stream: dict[str, Any]) -> int | None:
     return int(match.group(1)) if match else 8 if pixel_format else None
 
 
-def _dynamic_range(transfer: Any) -> str:
+def _dynamic_range(transfer: object) -> str:
     normalized = str(transfer or "").lower()
     if normalized in {"arib-std-b67", "hlg"}:
         return "hlg"
@@ -109,7 +289,7 @@ def _dynamic_range(transfer: Any) -> str:
     return "unknown"
 
 
-def probe_media_raw(media_path: Path) -> dict[str, Any]:
+def probe_media_raw(media_path: Path) -> ProbePayload:
     """Return cached raw FFprobe JSON for a concrete file revision."""
 
     if not media_path.is_file():
@@ -156,7 +336,7 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
             details={"path": str(media_path), "return_code": result.returncode},
         )
     try:
-        payload = json.loads(result.stdout)
+        payload: object = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise ToolError(
             "ffprobe returned invalid JSON.",
@@ -165,7 +345,7 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
             recommended_tool="shotcut_doctor",
             details={"path": str(media_path)},
         ) from exc
-    if not isinstance(payload, dict):
+    if not _is_probe_payload(payload):
         raise ToolError(
             "ffprobe returned an unexpected result.",
             code="media_probe_failed",
@@ -180,38 +360,44 @@ def probe_media_raw(media_path: Path) -> dict[str, Any]:
     return payload
 
 
-def summarize_media(media_path: Path) -> dict[str, Any]:
+def summarize_media(media_path: Path) -> MediaSummary:
     """Return the MCP-facing normalized summary for a media file."""
 
     payload = probe_media_raw(media_path)
-    streams: list[dict[str, Any]] = []
+    streams: list[MediaStreamSummary] = []
     for stream in payload.get("streams", []):
-        item: dict[str, Any] = {
-            "index": stream.get("index"),
-            "type": stream.get("codec_type"),
-            "codec": stream.get("codec_name"),
+        item: MediaStreamSummary = {
+            "index": _probe_field(stream, "index", int),
+            "type": _probe_field(stream, "codec_type", str),
+            "codec": _probe_field(stream, "codec_name", str),
             "duration_seconds": _as_float(stream.get("duration")),
         }
-        if stream.get("codec_type") == "video":
+        if _probe_field(stream, "codec_type", str) == "video":
             item.update(
-                width=stream.get("width"),
-                height=stream.get("height"),
-                pixel_format=stream.get("pix_fmt"),
-                pixel_bit_depth=_pixel_bit_depth(stream),
-                color_primaries=stream.get("color_primaries"),
-                color_transfer=stream.get("color_transfer"),
-                color_space=stream.get("color_space"),
-                color_range=stream.get("color_range"),
-                dynamic_range=_dynamic_range(stream.get("color_transfer")),
-                frame_rate=_fraction(
-                    stream.get("avg_frame_rate") or stream.get("r_frame_rate")
-                ),
+                {
+                    "width": _probe_field(stream, "width", int),
+                    "height": _probe_field(stream, "height", int),
+                    "pixel_format": _probe_field(stream, "pix_fmt", str),
+                    "pixel_bit_depth": _pixel_bit_depth(stream),
+                    "color_primaries": _probe_field(stream, "color_primaries", str),
+                    "color_transfer": _probe_field(stream, "color_transfer", str),
+                    "color_space": _probe_field(stream, "color_space", str),
+                    "color_range": _probe_field(stream, "color_range", str),
+                    "dynamic_range": _dynamic_range(
+                        _probe_field(stream, "color_transfer", str)
+                    ),
+                    "frame_rate": _fraction(
+                        stream.get("avg_frame_rate") or stream.get("r_frame_rate")
+                    ),
+                }
             )
-        elif stream.get("codec_type") == "audio":
+        elif _probe_field(stream, "codec_type", str) == "audio":
             item.update(
-                sample_rate=_as_float(stream.get("sample_rate")),
-                channels=stream.get("channels"),
-                channel_layout=stream.get("channel_layout"),
+                {
+                    "sample_rate": _as_float(stream.get("sample_rate")),
+                    "channels": _probe_field(stream, "channels", int),
+                    "channel_layout": _probe_field(stream, "channel_layout", str),
+                }
             )
         streams.append(item)
     format_info = payload.get("format", {})
@@ -219,14 +405,15 @@ def summarize_media(media_path: Path) -> dict[str, Any]:
         "path": str(media_path),
         "size_bytes": media_path.stat().st_size,
         "duration_seconds": media_duration(payload),
-        "format": format_info.get("format_long_name") or format_info.get("format_name"),
+        "format": _probe_field(format_info, "format_long_name", str)
+        or _probe_field(format_info, "format_name", str),
         "bit_rate": _as_float(format_info.get("bit_rate")),
         "streams": streams,
     }
 
 
 def _quality_number(
-    value: Any,
+    value: object,
     name: str,
     *,
     minimum: float,
@@ -279,7 +466,9 @@ def _available_ffmpeg_filters(ffmpeg: Path) -> set[str]:
     return filters
 
 
-def quality_analyzer_capabilities(ffmpeg: Path | None) -> dict[str, dict[str, Any]]:
+def quality_analyzer_capabilities(
+    ffmpeg: Path | None,
+) -> dict[str, QualityAnalyzerCapability]:
     """Report whether each bounded quality analyzer is available in FFmpeg."""
 
     error: str | None = None
@@ -311,13 +500,13 @@ def _decimal(value: str) -> float | None:
 
 
 def _bounded_intervals(
-    intervals: list[dict[str, Any]], maximum: int
-) -> tuple[list[dict[str, Any]], bool]:
+    intervals: list[QualityInterval], maximum: int
+) -> tuple[list[QualityInterval], bool]:
     return intervals[:maximum], len(intervals) > maximum
 
 
-def _parse_silence(text: str, offset: float, maximum: int) -> dict[str, Any]:
-    intervals: list[dict[str, Any]] = []
+def _parse_silence(text: str, offset: float, maximum: int) -> StreamAnalysis:
+    intervals: list[QualityInterval] = []
     pending: list[float] = []
     for line in text.splitlines():
         start_match = re.search(r"silence_start(?:\.\d+)?:\s*([-+0-9.eE]+)", line)
@@ -355,8 +544,8 @@ def _parse_silence(text: str, offset: float, maximum: int) -> dict[str, Any]:
     return {"intervals": shown, "intervals_truncated": truncated}
 
 
-def _parse_black(text: str, offset: float, maximum: int) -> dict[str, Any]:
-    intervals = []
+def _parse_black(text: str, offset: float, maximum: int) -> StreamAnalysis:
+    intervals: list[QualityInterval] = []
     for match in re.finditer(
         r"black_start:([-+0-9.eE]+)\s+black_end:([-+0-9.eE]+)\s+"
         r"black_duration:([-+0-9.eE]+)",
@@ -375,8 +564,8 @@ def _parse_black(text: str, offset: float, maximum: int) -> dict[str, Any]:
     return {"intervals": shown, "intervals_truncated": truncated}
 
 
-def _parse_freeze(text: str, offset: float, maximum: int) -> dict[str, Any]:
-    intervals: list[dict[str, Any]] = []
+def _parse_freeze(text: str, offset: float, maximum: int) -> StreamAnalysis:
+    intervals: list[QualityInterval] = []
     start: float | None = None
     duration: float | None = None
     for line in text.splitlines():
@@ -411,8 +600,8 @@ def _parse_freeze(text: str, offset: float, maximum: int) -> dict[str, Any]:
     return {"intervals": shown, "intervals_truncated": truncated}
 
 
-def _parse_interlace(text: str) -> dict[str, Any]:
-    result: dict[str, Any] = {}
+def _parse_interlace(text: str) -> StreamAnalysis:
+    result: dict[str, dict[str, int]] = {}
     patterns = {
         "repeated_fields": (
             r"Repeated Fields:\s+Neither:\s*(\d+)\s+Top:\s*(\d+)\s+Bottom:\s*(\d+)",
@@ -436,7 +625,14 @@ def _parse_interlace(text: str) -> dict[str, Any]:
                 label: int(value)
                 for label, value in zip(labels, matches[-1], strict=True)
             }
-    return result
+    metrics: StreamAnalysis = {}
+    if "repeated_fields" in result:
+        metrics["repeated_fields"] = result["repeated_fields"]
+    if "single_frame_detection" in result:
+        metrics["single_frame_detection"] = result["single_frame_detection"]
+    if "multi_frame_detection" in result:
+        metrics["multi_frame_detection"] = result["multi_frame_detection"]
+    return metrics
 
 
 def _last_metric(text: str, pattern: str) -> float | None:
@@ -444,7 +640,7 @@ def _last_metric(text: str, pattern: str) -> float | None:
     return _decimal(matches[-1]) if matches else None
 
 
-def _parse_loudness(text: str) -> dict[str, Any]:
+def _parse_loudness(text: str) -> StreamAnalysis:
     summary = text.rsplit("Summary:", 1)[-1]
     return {
         "integrated_lufs": _last_metric(summary, r"\bI:\s*([-+0-9.eE]+)\s+LUFS"),
@@ -455,7 +651,7 @@ def _parse_loudness(text: str) -> dict[str, Any]:
     }
 
 
-def _quality_filter(name: str, arguments: dict[str, Any]) -> str:
+def _quality_filter(name: str, arguments: dict[str, object]) -> str:
     if name == "silence":
         threshold = _quality_number(
             arguments.get("silence_threshold_db", -60),
@@ -518,8 +714,8 @@ def _quality_filter(name: str, arguments: dict[str, Any]) -> str:
 
 
 def analyze_media_quality(
-    media_path: Path, arguments: dict[str, Any]
-) -> dict[str, Any]:
+    media_path: Path, arguments: dict[str, object]
+) -> QualityReport:
     """Run bounded FFmpeg analyzers and return normalized machine-readable results."""
 
     if not media_path.is_file():
@@ -531,7 +727,7 @@ def analyze_media_quality(
         )
     requested = arguments.get("analyzers", list(QUALITY_ANALYZERS))
     if (
-        not isinstance(requested, list)
+        not is_text_array(requested)
         or not requested
         or len(requested) > len(QUALITY_ANALYZERS)
         or any(
@@ -569,12 +765,12 @@ def analyze_media_quality(
         )
     )
     payload = probe_media_raw(media_path)
-    streams_by_type: dict[str, list[dict[str, Any]]] = {}
+    streams_by_type: dict[str, list[dict[str, object]]] = {}
     for kind in ("audio", "video"):
         available_streams = [
             stream
             for stream in payload.get("streams", [])
-            if isinstance(stream, dict) and stream.get("codec_type") == kind
+            if is_object(stream) and stream.get("codec_type") == kind
         ]
         selector_name = f"{kind}_stream_index"
         selected_index = arguments.get(selector_name)
@@ -618,8 +814,8 @@ def analyze_media_quality(
     total = max(1, invocation_count)
     completed = 0
     report_progress(0, total, "Starting media quality analysis.")
-    results: dict[str, Any] = {}
-    parsers = {
+    results: dict[str, AnalyzerResult] = {}
+    parsers: dict[str, Callable[[str], StreamAnalysis]] = {
         "silence": lambda text: _parse_silence(text, start, maximum_intervals),
         "black": lambda text: _parse_black(text, start, maximum_intervals),
         "freeze": lambda text: _parse_freeze(text, start, maximum_intervals),
@@ -645,9 +841,9 @@ def analyze_media_quality(
                 "reason": f"The media has no {kind} stream.",
             }
             continue
-        stream_results: list[dict[str, Any]] = []
+        stream_results: list[StreamAnalysis] = []
         for stream in streams:
-            stream_index = stream.get("index")
+            stream_index = _probe_field(stream, "index", int)
             command = [
                 str(ffmpeg),
                 "-hide_banner",
@@ -670,13 +866,17 @@ def analyze_media_quality(
                 max_output_bytes=4 * 1024 * 1024,
             )
             text = result.stderr + "\n" + result.stdout
-            item: dict[str, Any] = {"stream_index": stream_index}
+            item: StreamAnalysis
             if result.returncode:
-                item.update(
-                    status="failed", error=(text.strip() or "FFmpeg failed")[-1200:]
-                )
+                item = {
+                    "stream_index": stream_index,
+                    "status": "failed",
+                    "error": (text.strip() or "FFmpeg failed")[-1200:],
+                }
             else:
-                item.update(status="ok", **parsers[name](text))
+                item = parsers[name](text)
+                item["stream_index"] = stream_index
+                item["status"] = "ok"
             stream_results.append(item)
             completed += 1
             report_progress(
@@ -703,12 +903,12 @@ def analyze_media_quality(
         "duration_seconds": duration,
         "streams": {
             "audio_stream_index": (
-                streams_by_type["audio"][0].get("index")
+                _probe_field(streams_by_type["audio"][0], "index", int)
                 if streams_by_type["audio"]
                 else None
             ),
             "video_stream_index": (
-                streams_by_type["video"][0].get("index")
+                _probe_field(streams_by_type["video"][0], "index", int)
                 if streams_by_type["video"]
                 else None
             ),

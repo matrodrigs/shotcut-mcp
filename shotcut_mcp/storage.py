@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .errors import ConflictError, ToolError
-from .processes import process_is_alive
+from .processes import process_is_alive as process_is_alive
 
 
 def _invalid_persistent_render_state(message: str, reason: str) -> ToolError:

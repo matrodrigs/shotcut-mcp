@@ -8,7 +8,7 @@ import json
 import re
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -22,7 +22,7 @@ STATIC_MEMBERS = (
 VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 
 
-def validate_python_requirement(manifest: dict[str, Any]) -> None:
+def validate_python_requirement(manifest: dict[str, object]) -> None:
     """Require our supported Python interval in the installer's semver syntax."""
 
     compatibility = manifest.get("compatibility")
@@ -100,7 +100,20 @@ def verify_bundle(artifact: Path, version: str) -> tuple[str, ...]:
     return names
 
 
-def build_release(version: str, output_dir: Path) -> dict[str, Any]:
+ReleaseArtifacts = TypedDict(
+    "ReleaseArtifacts",
+    {
+        "artifact": str,
+        "checksum": str,
+        "digest": str,
+        "entries": int,
+        "notes": str,
+        "version": str,
+    },
+)
+
+
+def build_release(version: str, output_dir: Path) -> ReleaseArtifacts:
     """Create the versioned MCPB, checksum and release notes."""
 
     if VERSION_PATTERN.fullmatch(version) is None:

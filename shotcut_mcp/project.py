@@ -13,10 +13,10 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, TypedDict
 
 from .errors import ConflictError, RequestCancelled, ToolError
-from .missing_media import diagnose_missing_resources
+from .missing_media import MediaProbeError, diagnose_missing_resources
 from .platform import (
     enforce_project_resource_policy,
     expand_path,
@@ -41,8 +41,18 @@ from .project_document import (
 from .project_document import (
     ProjectDocument as MltProjectDocument,
 )
-from .project_snapshot import build_project_snapshot, project_requirements
-from .protocol import cancellation_requested, report_progress
+from .project_snapshot import (
+    ProjectSnapshot,
+    build_project_snapshot,
+    project_requirements,
+)
+from .protocol import (
+    cancellation_requested,
+    is_array,
+    is_object,
+    is_text_array,
+    report_progress,
+)
 from .storage import (
     OutputTransaction,
     fsync_directory,
@@ -52,6 +62,33 @@ from .storage import (
     publish_new_file,
     write_project_backup,
 )
+
+if TYPE_CHECKING:
+    from .media import MediaSummary
+
+
+Chapter = TypedDict(
+    "Chapter",
+    {
+        "timecode": str,
+        "frame": int,
+        "text": str,
+        "marker_id": str | None,
+    },
+)
+
+
+SavedProject = TypedDict(
+    "SavedProject",
+    {
+        "path": str,
+        "revision": str,
+        "previous_revision": str | None,
+        "backup_path": str | None,
+        "validation": dict[str, object],
+    },
+)
+
 
 MAX_OPERATIONS = 500
 
@@ -81,11 +118,11 @@ __all__ = [
 class ProjectDocument(MltProjectDocument):
     """Public project model with the stable MCP inspection projection."""
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> ProjectSnapshot:
         return build_project_snapshot(self)
 
 
-def validate_project(arguments: dict[str, Any]) -> dict[str, Any]:
+def validate_project(arguments: dict[str, object]) -> dict[str, object]:
     """Validate one project and report whether its local runtime is ready for it."""
 
     path = expand_path(arguments.get("path", ""))
@@ -164,7 +201,7 @@ class EditCandidate:
     expected_revision: str | None
     force: bool
     timeout: int
-    operation_results: list[dict[str, Any]]
+    operation_results: list[dict[str, object]]
 
 
 def _write_validated(
@@ -176,7 +213,7 @@ def _write_validated(
     timeout: int,
     create_backup: bool,
     require_absent: bool = False,
-) -> dict[str, Any]:
+) -> SavedProject:
     path = document.path
     data = document.to_bytes()
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp{path.suffix}")
@@ -215,7 +252,7 @@ def _write_validated(
         if current_mode is not None:
             os.chmod(temporary, current_mode)
         try:
-            validation = (
+            validation: dict[str, object] = (
                 validate_project_file(temporary, timeout=timeout)
                 if validate
                 else {"valid": True}
@@ -265,7 +302,7 @@ def _write_validated(
     }
 
 
-def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
+def create_project(arguments: dict[str, object]) -> dict[str, object]:
     path = expand_path(arguments.get("project_path", ""))
     if path.suffix.lower() not in {".mlt", ".xml"}:
         raise ToolError(
@@ -286,24 +323,29 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     height = _int(arguments.get("height", 1080), "height", 16)
     fps_num = _int(arguments.get("fps_num", 30), "fps_num", 1)
     fps_den = _int(arguments.get("fps_den", 1), "fps_den", 1)
+    notes = arguments.get("notes", "")
     document = ProjectDocument.new(
         path,
         width=width,
         height=height,
         fps_num=fps_num,
         fps_den=fps_den,
-        title=arguments.get("notes", "")
-        if isinstance(arguments.get("notes", ""), str)
-        else "",
+        title=notes if isinstance(notes, str) else "",
     )
     tracks = arguments.get("tracks", [])
-    if not isinstance(tracks, list):
+    if not is_array(tracks):
         raise ToolError("tracks must be a list.")
-    results = [document.add_track({"op": "add_track", **track}) for track in tracks]
+    results: list[dict[str, object]] = []
+    for track in tracks:
+        if not is_object(track):
+            raise ToolError("Each track must be an object.")
+        results.append(document.add_track({"op": "add_track", **track}))
     clips = arguments.get("clips", [])
-    if not isinstance(clips, list):
+    if not is_array(clips):
         raise ToolError("clips must be a list.")
     for clip in clips:
+        if not is_object(clip):
+            raise ToolError("Each clip must be an object.")
         operation = _authorize_operation_paths(
             {"op": "add_clip", "track": "V1", **clip}
         )
@@ -327,7 +369,7 @@ def create_project(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _authorize_operation_paths(operation: dict[str, Any]) -> dict[str, Any]:
+def _authorize_operation_paths(operation: dict[str, object]) -> dict[str, object]:
     """Canonicalize every data path before it reaches the XML domain model."""
 
     result = dict(operation)
@@ -347,10 +389,10 @@ def _authorize_operation_paths(operation: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
+def _build_edit_candidate(arguments: dict[str, object]) -> EditCandidate:
     path = expand_path(arguments.get("project_path", ""))
     operations = arguments.get("operations")
-    if not isinstance(operations, list) or not operations:
+    if not is_array(operations) or not operations:
         raise ToolError("operations must be a non-empty list.")
     if len(operations) > MAX_OPERATIONS:
         raise ToolError(f"A transaction accepts at most {MAX_OPERATIONS} operations.")
@@ -379,14 +421,14 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
             )
     document.prepare_item_references()
     document.ensure_shotcut_structure()
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, object]] = []
     progress_total = len(operations) + 1
     report_progress(0, progress_total, "Preparing project edit.")
     for index, raw_operation in enumerate(operations):
         if cancellation_requested():
             raise RequestCancelled("Project edit cancelled by the MCP client.")
         try:
-            if not isinstance(raw_operation, dict):
+            if not is_object(raw_operation):
                 raise ToolError("Each operation must be an object.")
             operation = _authorize_operation_paths(raw_operation)
             results.append(document.apply_operation(operation))
@@ -397,7 +439,7 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
             )
         except ToolError as exc:
             operation_name = (
-                raw_operation.get("op") if isinstance(raw_operation, dict) else None
+                raw_operation.get("op") if is_object(raw_operation) else None
             )
             semantic_error = exc.code != "tool_error"
             raise ToolError(
@@ -431,7 +473,7 @@ def _build_edit_candidate(arguments: dict[str, Any]) -> EditCandidate:
     )
 
 
-def plan_project_edit(arguments: dict[str, Any]) -> dict[str, Any]:
+def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
     if arguments.get("force") not in (None, False):
         raise ToolError("force is not supported by plan_project_edit.")
     candidate = _build_edit_candidate(arguments)
@@ -493,7 +535,7 @@ def plan_project_edit(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def edit_project(arguments: dict[str, Any]) -> dict[str, Any]:
+def edit_project(arguments: dict[str, object]) -> dict[str, object]:
     candidate = _build_edit_candidate(arguments)
     saved = _write_validated(
         candidate.document,
@@ -530,7 +572,7 @@ def _chapter_timecode(frame: int, fps: float) -> str:
     )
 
 
-def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
+def export_marker_chapters(arguments: dict[str, object]) -> dict[str, object]:
     """Export Shotcut-compatible chapter text through a protected output transaction."""
 
     project_path = expand_path(arguments.get("project_path", ""))
@@ -541,7 +583,7 @@ def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     raw_colors = arguments.get("colors")
     if raw_colors is not None and (
-        not isinstance(raw_colors, list)
+        not is_text_array(raw_colors)
         or not 1 <= len(raw_colors) <= 16
         or any(
             not isinstance(item, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", item)
@@ -550,7 +592,7 @@ def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ToolError("colors must contain between 1 and 16 #RRGGBB values.")
     colors = (
-        {item.upper() for item in raw_colors} if isinstance(raw_colors, list) else None
+        {item.upper() for item in raw_colors} if is_text_array(raw_colors) else None
     )
     expected_revision = arguments.get("expected_revision")
     if expected_revision is not None and not isinstance(expected_revision, str):
@@ -563,7 +605,7 @@ def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
             current_revision=document.revision,
         )
     snapshot = document.snapshot()
-    selected = []
+    selected: list[Chapter] = []
     for marker in snapshot["markers"]:
         start = marker.get("start_frame")
         end = marker.get("end_frame")
@@ -574,18 +616,20 @@ def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
             continue
         if colors is not None and str(marker_color).upper() not in colors:
             continue
-        selected.append(marker)
-    selected.sort(key=lambda marker: (marker["start_frame"], marker["marker_id"]))
-    chapters = [
-        {
-            "timecode": _chapter_timecode(marker["start_frame"], document.fps),
-            "frame": marker["start_frame"],
-            "text": " ".join(str(marker.get("text") or "Chapter").splitlines()).strip()
-            or "Chapter",
-            "marker_id": marker["marker_id"],
-        }
-        for marker in selected
-    ]
+        selected.append(
+            {
+                "timecode": _chapter_timecode(start, document.fps),
+                "frame": start,
+                "text": " ".join(
+                    str(marker.get("text") or "Chapter").splitlines()
+                ).strip()
+                or "Chapter",
+                "marker_id": marker["marker_id"],
+            }
+        )
+    # External MLT markers can lack a name; nullable IDs must still sort safely.
+    selected.sort(key=lambda chapter: (chapter["frame"], chapter["marker_id"] or ""))
+    chapters = list(selected)
     if not any(chapter["frame"] == 0 for chapter in chapters):
         chapters.insert(
             0,
@@ -627,7 +671,7 @@ def export_marker_chapters(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_backups(project_path: Path) -> dict[str, Any]:
+def list_backups(project_path: Path) -> dict[str, object]:
     backups = [
         {
             "path": str(path),
@@ -644,14 +688,15 @@ def list_backups(project_path: Path) -> dict[str, Any]:
     }
 
 
-def diagnose_color_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
+def diagnose_color_workflow(arguments: dict[str, object]) -> dict[str, object]:
     """Report project/source color compatibility without changing the document."""
 
     project_path = expand_path(arguments.get("project_path", ""))
     enforce_project_resource_policy(project_path)
     document = ProjectDocument.load(project_path)
     snapshot = document.snapshot()
-    media: list[dict[str, Any]] = []
+    media: list[MediaSummary | MediaProbeError] = []
+    ranges: set[str] = set()
     seen: set[str] = set()
     for resource in snapshot["resources"]:
         resolved = resource.get("resolved_path")
@@ -661,15 +706,17 @@ def diagnose_color_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
         if len(media) >= 128:
             break
         try:
-            media.append(summarize_media(Path(resolved)))
+            summary = summarize_media(Path(resolved))
+            media.append(summary)
+            ranges.update(
+                dynamic_range
+                for stream in summary["streams"]
+                if stream["type"] == "video"
+                and (dynamic_range := stream.get("dynamic_range")) is not None
+                and dynamic_range != "unknown"
+            )
         except ToolError as exc:
             media.append({"path": resolved, "error": str(exc)})
-    ranges = {
-        stream.get("dynamic_range")
-        for item in media
-        for stream in item.get("streams", [])
-        if stream.get("type") == "video" and stream.get("dynamic_range") != "unknown"
-    }
     color = snapshot["color_workflow"]
     mode = color["processing_mode"]
     issues: list[dict[str, str]] = []
@@ -710,11 +757,7 @@ def diagnose_color_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
         )
     if color["dynamic_range"] in {"hlg", "pq"}:
         unverified = sorted(
-            {
-                item.get("service")
-                for item in [*snapshot["filters"]]
-                if item.get("service")
-            }
+            {service for item in snapshot["filters"] if (service := item["service"])}
         )
         if unverified:
             issues.append(
@@ -736,7 +779,7 @@ def diagnose_color_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def render_project_contact_sheet(arguments: dict[str, Any]) -> dict[str, Any]:
+def render_project_contact_sheet(arguments: dict[str, object]) -> dict[str, object]:
     """Choose project frames and delegate atomic contact-sheet rendering."""
 
     project_path = expand_path(arguments.get("project_path", ""))
@@ -766,7 +809,7 @@ def render_project_contact_sheet(arguments: dict[str, Any]) -> dict[str, Any]:
             ]
         )
     else:
-        if not isinstance(raw_frames, list) or not 1 <= len(raw_frames) <= 64:
+        if not is_array(raw_frames) or not 1 <= len(raw_frames) <= 64:
             raise ToolError("frames must contain between 1 and 64 entries.")
         frames = []
         for index, frame in enumerate(raw_frames):
@@ -795,7 +838,7 @@ def render_project_contact_sheet(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def diagnose_missing_media(arguments: dict[str, Any]) -> dict[str, Any]:
+def diagnose_missing_media(arguments: dict[str, object]) -> dict[str, object]:
     """Search authorized roots for bounded, scored missing-media candidates."""
 
     project_path = expand_path(arguments.get("project_path", ""))
@@ -808,7 +851,7 @@ def diagnose_missing_media(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def restore_backup(arguments: dict[str, Any]) -> dict[str, Any]:
+def restore_backup(arguments: dict[str, object]) -> dict[str, object]:
     project_path = expand_path(arguments.get("project_path", ""))
     backup_path = expand_path(arguments.get("backup_path", ""))
     force = _boolean(arguments.get("force", False), "force")

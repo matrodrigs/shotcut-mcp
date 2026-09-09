@@ -5,21 +5,191 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, TypeGuard
 
 from .errors import ToolError
+from .protocol import is_array, is_object
 from .storage import RenderInputSnapshot, fsync_directory
+
+ProgressSample = TypedDict(
+    "ProgressSample",
+    {
+        "at": float,
+        "percent": float | None,
+        "frame": int | None,
+    },
+)
+RenderJob = TypedDict(
+    "RenderJob",
+    {
+        "job_id": str,
+        "status": str,
+        "project_path": str,
+        "source_project_path": str,
+        "render_project_path": str,
+        "editable_project_path": str,
+        "output_path": str,
+        "temporary_output_path": str,
+        "preset": str,
+        "melt_path": str,
+        "log_path": str,
+        "project_revision": str | None,
+        "rendered_project_revision": str | None,
+        "marker_id": str | None,
+        "marker_text": str | None,
+        "status_note": str | None,
+        "pid": int | None,
+        "worker_pid": int | None,
+        "renderer_pid": int | None,
+        "return_code": int | None,
+        "in_frame": int | None,
+        "out_frame": int | None,
+        "total_frames": int | None,
+        "range_duration_frames": int | None,
+        "source_duration_frames": int | None,
+        "current_frame": int | None,
+        "frames_completed": int | None,
+        "output_size_bytes": int | None,
+        "editable_project_size_bytes": int | None,
+        "progress_percent": int | None,
+        "started_at": float | None,
+        "updated_at": float | None,
+        "finished_at": float | None,
+        "elapsed_seconds": float | None,
+        "average_fps": float | None,
+        "overwrite": bool,
+        "editable_project_verified": bool,
+        "consumer_properties": dict[str, str],
+        "output_transaction": dict[str, object],
+        "progress_samples": list[ProgressSample],
+    },
+    total=False,
+)
+
+
+def _is_progress_sample(value: object) -> TypeGuard[ProgressSample]:
+    if not is_object(value):
+        return False
+    at, percent, frame = value.get("at"), value.get("percent"), value.get("frame")
+    return (
+        isinstance(at, (int, float))
+        and not isinstance(at, bool)
+        and math.isfinite(at)
+        and (
+            percent is None
+            or (
+                isinstance(percent, (int, float))
+                and not isinstance(percent, bool)
+                and math.isfinite(percent)
+            )
+        )
+        and (frame is None or (isinstance(frame, int) and not isinstance(frame, bool)))
+        and all(key in value for key in ("at", "percent", "frame"))
+    )
+
+
+def _is_render_job(value: object) -> TypeGuard[RenderJob]:
+    """Validate known persistent fields; preserve unknown fields for compatibility."""
+    if not is_object(value) or not isinstance(value.get("job_id"), str):
+        return False
+    for key in (
+        "job_id",
+        "status",
+        "project_path",
+        "source_project_path",
+        "render_project_path",
+        "editable_project_path",
+        "output_path",
+        "temporary_output_path",
+        "preset",
+        "melt_path",
+        "log_path",
+    ):
+        if key in value:
+            item = value[key]
+            if not (isinstance(item, str)):
+                return False
+    for key in (
+        "project_revision",
+        "rendered_project_revision",
+        "marker_id",
+        "marker_text",
+        "status_note",
+    ):
+        if key in value:
+            item = value[key]
+            if not (item is None or isinstance(item, str)):
+                return False
+    for key in (
+        "pid",
+        "worker_pid",
+        "renderer_pid",
+        "return_code",
+        "in_frame",
+        "out_frame",
+        "total_frames",
+        "range_duration_frames",
+        "source_duration_frames",
+        "current_frame",
+        "frames_completed",
+        "output_size_bytes",
+        "editable_project_size_bytes",
+        "progress_percent",
+    ):
+        if key in value:
+            item = value[key]
+            if not (
+                item is None or (isinstance(item, int) and not isinstance(item, bool))
+            ):
+                return False
+    for key in (
+        "started_at",
+        "updated_at",
+        "finished_at",
+        "elapsed_seconds",
+        "average_fps",
+    ):
+        if key in value:
+            item = value[key]
+            if not (
+                item is None
+                or (
+                    isinstance(item, (int, float))
+                    and not isinstance(item, bool)
+                    and math.isfinite(item)
+                )
+            ):
+                return False
+    for key in ("overwrite", "editable_project_verified"):
+        if key in value:
+            item = value[key]
+            if not (isinstance(item, bool)):
+                return False
+    properties = value.get("consumer_properties", {})
+    if not is_object(properties) or not all(
+        isinstance(item, str) for item in properties.values()
+    ):
+        return False
+    samples = value.get("progress_samples", [])
+    return (
+        is_object(value.get("output_transaction", {}))
+        and is_array(samples)
+        and all(_is_progress_sample(sample) for sample in samples)
+    )
 
 
 def _owner_key() -> str:
-    if hasattr(os, "getuid"):
-        return str(os.getuid())
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid):
+        return str(getuid())
     home = os.path.normcase(str(Path.home().resolve(strict=False)))
     return hashlib.sha256(home.encode("utf-8")).hexdigest()[:12]
 
@@ -46,7 +216,7 @@ def ensure_job_directory() -> Path:
     return JOB_DIR
 
 
-def validate_job_id(job_id: str) -> str:
+def validate_job_id(job_id: object) -> str:
     if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise ToolError(
             "Invalid job_id.",
@@ -125,8 +295,8 @@ def _read_job_metadata(path: Path) -> str:
             time.sleep(_WINDOWS_FILE_RETRY_INTERVAL)
 
 
-def write_job(metadata: dict[str, Any]) -> None:
-    path = metadata_path(metadata.get("job_id", ""))
+def write_job(metadata: Mapping[str, object]) -> None:
+    path = metadata_path(validate_job_id(metadata.get("job_id", "")))
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
@@ -141,10 +311,10 @@ def write_job(metadata: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def read_job(job_id: str) -> dict[str, Any]:
+def read_job(job_id: str) -> RenderJob:
     path = metadata_path(job_id)
     try:
-        payload = json.loads(_read_job_metadata(path))
+        payload: object = json.loads(_read_job_metadata(path))
     except FileNotFoundError as exc:
         raise ToolError(
             f"Render job not found: {job_id}",
@@ -161,7 +331,7 @@ def read_job(job_id: str) -> dict[str, Any]:
             recommended_action="report_issue",
             details={"job_id": job_id},
         ) from exc
-    if not isinstance(payload, dict) or payload.get("job_id") != job_id:
+    if not _is_render_job(payload) or payload.get("job_id") != job_id:
         raise ToolError(
             "Invalid render metadata.",
             code="invalid_render_metadata",
@@ -172,7 +342,7 @@ def read_job(job_id: str) -> dict[str, Any]:
     return payload
 
 
-def render_input_snapshot(metadata: dict[str, Any]) -> RenderInputSnapshot:
+def render_input_snapshot(metadata: Mapping[str, object]) -> RenderInputSnapshot:
     """Validate and reconstruct the project snapshot owned by job metadata."""
 
     job_id = metadata.get("job_id")
@@ -249,7 +419,7 @@ def read_progress(path: Path) -> tuple[int | None, str | None]:
 
 def list_jobs(
     *, status: str | None = None, cursor: str | None = None, limit: int = 20
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Return bounded newest-first immutable render summaries."""
 
     if status is not None and status not in ALL_STATUSES:
@@ -258,7 +428,7 @@ def list_jobs(
         raise ToolError("limit must be between 1 and 100.")
     if cursor is not None:
         validate_job_id(cursor)
-    jobs: list[dict[str, Any]] = []
+    jobs: list[RenderJob] = []
     candidates: list[tuple[float, Path]] = []
     for index, path in enumerate(ensure_job_directory().glob("*.json")):
         if index >= 5000:
@@ -320,7 +490,8 @@ def list_jobs(
         "average_fps",
         "status_note",
     )
-    summaries = [{key: item.get(key) for key in fields} for item in page]
+    raw_page: list[Mapping[str, object]] = list(page)
+    summaries = [{key: item.get(key) for key in fields} for item in raw_page]
     has_more = start + limit < len(jobs)
     return {
         "jobs": summaries,
@@ -337,7 +508,7 @@ def prune_jobs(max_age_days: int = 30) -> None:
         try:
             if metadata_file.stat().st_mtime >= cutoff:
                 continue
-            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+            metadata = read_job(metadata_file.stem)
             if metadata.get("status") not in TERMINAL_STATUSES:
                 continue
             job_id = metadata_file.stem

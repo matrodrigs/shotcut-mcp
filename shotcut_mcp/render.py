@@ -10,7 +10,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 from .errors import ConflictError, RequestCancelled, ToolError
 from .platform import (
@@ -21,9 +20,10 @@ from .platform import (
     start_render_supervisor,
 )
 from .project_snapshot import load_project_render_input
-from .protocol import cancellation_requested, report_progress
+from .protocol import cancellation_requested, is_object, report_progress
 from .render_jobs import (
     TERMINAL_STATUSES,
+    RenderJob,
     list_jobs,
     log_path,
     prune_jobs,
@@ -33,11 +33,12 @@ from .render_jobs import (
     render_input_snapshot,
     request_cancel,
     startup_log_path,
+    validate_job_id,
     write_job,
 )
 from .storage import OutputTransaction, RenderInputSnapshot, process_is_alive
 
-RUNNING_JOBS: dict[str, subprocess.Popen[Any]] = {}
+RUNNING_JOBS: dict[str, subprocess.Popen[bytes]] = {}
 _RUNNING_JOBS_LOCK = threading.Lock()
 
 RENDER_PRESETS: dict[str, dict[str, str]] = {
@@ -160,10 +161,10 @@ SAFE_SINGLE_FILE_FORMATS = {
 }
 
 
-def _consumer_properties(value: Any) -> dict[str, str]:
+def _consumer_properties(value: object) -> dict[str, str]:
     if value is None:
         return {}
-    if not isinstance(value, dict) or len(value) > 50:
+    if not is_object(value) or len(value) > 50:
         raise ToolError(
             "consumer_properties must be an object with at most 50 options."
         )
@@ -205,7 +206,7 @@ def _consumer_properties(value: Any) -> dict[str, str]:
     return result
 
 
-def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
+def start_render(arguments: dict[str, object]) -> RenderJob:
     from .platform import expand_path
 
     project_path = expand_path(arguments.get("project_path", ""))
@@ -222,7 +223,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("overwrite must be a boolean.")
 
     preset = arguments.get("preset", "h264-high")
-    if preset not in RENDER_PRESETS:
+    if not isinstance(preset, str) or preset not in RENDER_PRESETS:
         raise ToolError(f"Invalid preset. Options: {', '.join(RENDER_PRESETS)}")
     properties = dict(RENDER_PRESETS[preset])
     properties.update(_consumer_properties(arguments.get("consumer_properties")))
@@ -339,7 +340,7 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         snapshot.cleanup_if_owned()
         raise
     report_progress(2, 4, "Immutable project snapshot prepared.")
-    metadata = {
+    metadata: RenderJob = {
         "job_id": job_id,
         "pid": None,
         "worker_pid": None,
@@ -387,9 +388,11 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
         output.cleanup()
         snapshot.cleanup_if_owned()
         metadata.update(
-            status="failed",
-            status_note=f"Could not start the render supervisor: {exc}",
-            finished_at=time.time(),
+            {
+                "status": "failed",
+                "status_note": f"Could not start the render supervisor: {exc}",
+                "finished_at": time.time(),
+            }
         )
         write_job(metadata)
         raise ToolError(
@@ -404,14 +407,16 @@ def start_render(arguments: dict[str, Any]) -> dict[str, Any]:
     threading.Thread(
         target=_reap_supervisor, args=(job_id, process), daemon=True
     ).start()
-    metadata.update(pid=process.pid, worker_pid=process.pid, status="running")
+    metadata.update(
+        {"pid": process.pid, "worker_pid": process.pid, "status": "running"}
+    )
     write_job(metadata)
     release_gate(job_id)
     report_progress(4, 4, "Render supervisor started.")
     return metadata
 
 
-def _reap_supervisor(job_id: str, process: subprocess.Popen[Any]) -> None:
+def _reap_supervisor(job_id: str, process: subprocess.Popen[bytes]) -> None:
     """Release local process handles even when no client polls render status."""
 
     process.wait()
@@ -423,25 +428,23 @@ def _reap_supervisor(job_id: str, process: subprocess.Popen[Any]) -> None:
             RUNNING_JOBS.pop(job_id, None)
 
 
-def _eta(metadata: dict[str, Any]) -> tuple[float | None, str | None, str | None]:
-    samples = [
-        item
-        for item in metadata.get("progress_samples") or []
-        if isinstance(item, dict)
-        and isinstance(item.get("at"), (int, float))
-        and isinstance(item.get("percent"), (int, float))
-    ]
+def _eta(metadata: RenderJob) -> tuple[float | None, str | None, str | None]:
+    samples: list[tuple[float, float]] = []
+    for item in metadata.get("progress_samples") or []:
+        at, percent = item.get("at"), item.get("percent")
+        if isinstance(at, (int, float)) and isinstance(percent, (int, float)):
+            samples.append((float(at), float(percent)))
     advancing = [
         item
         for index, item in enumerate(samples)
-        if index == 0 or item["percent"] > samples[index - 1]["percent"]
+        if index == 0 or item[1] > samples[index - 1][1]
     ]
     if len(advancing) < 2:
         return None, None, None
     first, last = advancing[0], advancing[-1]
-    elapsed = float(last["at"]) - float(first["at"])
-    progress = float(last["percent"])
-    gained = progress - float(first["percent"])
+    elapsed = last[0] - first[0]
+    progress = last[1]
+    gained = progress - first[1]
     if elapsed < 1 or gained <= 0 or progress <= 0 or progress >= 100:
         return None, None, None
     rate = gained / elapsed
@@ -450,7 +453,7 @@ def _eta(metadata: dict[str, Any]) -> tuple[float | None, str | None, str | None
     return max(0.0, eta), confidence, "smoothed_progress_percent"
 
 
-def _cleanup_render_input(metadata: dict[str, Any]) -> None:
+def _cleanup_render_input(metadata: RenderJob) -> None:
     try:
         render_input_snapshot(metadata).cleanup_if_owned()
     except (OSError, ToolError, TypeError, ValueError):
@@ -464,7 +467,7 @@ def _artifact_mime_type(path: Path, *, editable: bool = False) -> str:
     return guessed or "application/octet-stream"
 
 
-def _completed_artifacts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+def _completed_artifacts(metadata: RenderJob) -> list[dict[str, object]]:
     if metadata.get("status") != "completed":
         return []
     revision = metadata.get("rendered_project_revision") or metadata.get(
@@ -509,7 +512,8 @@ def _completed_artifacts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
 
-def render_status(job_id: str) -> dict[str, Any]:
+def render_status(job_id: object) -> dict[str, object]:
+    job_id = validate_job_id(job_id)
     metadata = read_job(job_id)
     with _RUNNING_JOBS_LOCK:
         process = RUNNING_JOBS.get(job_id)
@@ -528,20 +532,20 @@ def render_status(job_id: str) -> dict[str, Any]:
                 )
                 if renderer_alive:
                     metadata.update(
-                        status="orphaned",
-                        status_note=(
-                            "The render supervisor exited while Melt was still running; "
-                            "the temporary output was retained."
-                        ),
-                        finished_at=time.time(),
+                        {
+                            "status": "orphaned",
+                            "status_note": "The render supervisor exited while Melt was still running; "
+                            "the temporary output was retained.",
+                            "finished_at": time.time(),
+                        }
                     )
                 else:
                     metadata.update(
-                        status="failed",
-                        status_note=(
-                            "The render supervisor exited before finalizing the job."
-                        ),
-                        finished_at=time.time(),
+                        {
+                            "status": "failed",
+                            "status_note": "The render supervisor exited before finalizing the job.",
+                            "finished_at": time.time(),
+                        }
                     )
                     OutputTransaction.deserialize(
                         metadata.get("output_transaction")
@@ -550,55 +554,57 @@ def render_status(job_id: str) -> dict[str, Any]:
                 write_job(metadata)
         elif (
             worker_pid is None
-            and time.time() - float(metadata.get("started_at", 0)) > 10
+            and time.time() - float(metadata.get("started_at") or 0) > 10
         ):
             metadata.update(
-                status="failed",
-                status_note="The render supervisor never started.",
-                finished_at=time.time(),
+                {
+                    "status": "failed",
+                    "status_note": "The render supervisor never started.",
+                    "finished_at": time.time(),
+                }
             )
             OutputTransaction.deserialize(metadata.get("output_transaction")).cleanup()
             _cleanup_render_input(metadata)
             write_job(metadata)
+    result: dict[str, object] = dict(metadata)
     output_path = Path(metadata["output_path"])
     progress, log_tail = read_progress(Path(metadata["log_path"]))
-    metadata["progress_percent"] = (
+    result["progress_percent"] = (
         100
         if metadata.get("status") == "completed"
         else progress
         if progress is not None
         else metadata.get("progress_percent")
     )
-    metadata["output_exists"] = output_path.is_file()
-    metadata["output_size_bytes"] = (
+    result["output_exists"] = output_path.is_file()
+    result["output_size_bytes"] = (
         output_path.stat().st_size if output_path.is_file() else None
     )
-    metadata["log_tail"] = log_tail or read_progress(startup_log_path(job_id))[1]
+    result["log_tail"] = log_tail or read_progress(startup_log_path(job_id))[1]
     now = float(metadata.get("finished_at") or time.time())
-    metadata["elapsed_seconds"] = max(
-        0.0, now - float(metadata.get("started_at") or now)
-    )
+    result["elapsed_seconds"] = max(0.0, now - float(metadata.get("started_at") or now))
     eta_seconds, eta_confidence, eta_basis = (
         (None, None, None)
         if metadata.get("status") in TERMINAL_STATUSES
         else _eta(metadata)
     )
-    metadata["eta_seconds"] = eta_seconds
-    metadata["eta_confidence"] = eta_confidence
-    metadata["eta_basis"] = eta_basis
+    result["eta_seconds"] = eta_seconds
+    result["eta_confidence"] = eta_confidence
+    result["eta_basis"] = eta_basis
     editable_value = metadata.get("editable_project_path")
-    metadata["editable_project_exists"] = (
+    result["editable_project_exists"] = (
         isinstance(editable_value, str) and Path(editable_value).is_file()
     )
-    metadata["rendered_project_revision"] = metadata.get(
+    result["rendered_project_revision"] = metadata.get(
         "rendered_project_revision"
     ) or metadata.get("project_revision")
-    metadata["artifacts"] = _completed_artifacts(metadata)
-    metadata["delivery_complete"] = len(metadata["artifacts"]) == 2
-    return metadata
+    artifacts = _completed_artifacts(metadata)
+    result["artifacts"] = artifacts
+    result["delivery_complete"] = len(artifacts) == 2
+    return result
 
 
-def list_render_jobs(arguments: dict[str, Any]) -> dict[str, Any]:
+def list_render_jobs(arguments: dict[str, object]) -> dict[str, object]:
     status = arguments.get("status")
     cursor = arguments.get("cursor")
     limit = arguments.get("limit", 20)
@@ -611,7 +617,8 @@ def list_render_jobs(arguments: dict[str, Any]) -> dict[str, Any]:
     return list_jobs(status=status, cursor=cursor, limit=limit)
 
 
-def cancel_render(job_id: str) -> dict[str, Any]:
+def cancel_render(job_id: object) -> dict[str, object]:
+    job_id = validate_job_id(job_id)
     metadata = read_job(job_id)
     if metadata.get("status") in TERMINAL_STATUSES:
         return render_status(job_id)

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 
 class ToolError(Exception):
     """An expected tool execution failure returned to the MCP caller."""
@@ -14,7 +12,7 @@ class ToolError(Exception):
         recoverable: bool = True,
         recommended_action: str = "review_error_and_correct_request",
         recommended_tool: str | None = None,
-        details: dict[str, Any] | None = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -36,7 +34,7 @@ class ConflictError(ToolError):
         code: str = "project_revision_conflict",
         recommended_action: str = "inspect_project",
         recommended_tool: str | None = "inspect_project",
-        details: dict[str, Any] | None = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         context = dict(details or {})
         if expected_revision is not None:

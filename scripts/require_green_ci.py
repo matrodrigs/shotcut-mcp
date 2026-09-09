@@ -6,10 +6,37 @@ import argparse
 import json
 import subprocess
 import time
-from typing import Any
+from typing import TypedDict, TypeGuard
+
+CiRun = TypedDict(
+    "CiRun",
+    {
+        "databaseId": int,
+        "headBranch": str,
+        "status": str,
+        "conclusion": str | None,
+        "url": str,
+        "createdAt": str,
+    },
+    total=False,
+)
 
 
-def _list_ci_runs(repository: str, commit_sha: str) -> list[dict[str, Any]]:
+def _is_ci_run(value: object) -> TypeGuard[CiRun]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        return False
+    for key in ("headBranch", "status", "url", "createdAt"):
+        if key in value and not isinstance(value[key], str):
+            return False
+    identity = value.get("databaseId")
+    conclusion = value.get("conclusion")
+    return (
+        "databaseId" not in value
+        or (isinstance(identity, int) and not isinstance(identity, bool))
+    ) and (conclusion is None or isinstance(conclusion, str))
+
+
+def _list_ci_runs(repository: str, commit_sha: str) -> list[CiRun]:
     result = subprocess.run(
         [
             "gh",
@@ -37,15 +64,22 @@ def _list_ci_runs(repository: str, commit_sha: str) -> list[dict[str, Any]]:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
         raise RuntimeError(f"Could not inspect CI runs: {detail}")
     try:
-        payload = json.loads(result.stdout)
+        payload: object = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError("GitHub CLI returned invalid CI run data.") from exc
     if not isinstance(payload, list):
         raise RuntimeError("GitHub CLI returned an invalid CI run collection.")
-    return [item for item in payload if isinstance(item, dict)]
+    runs: list[CiRun] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if not _is_ci_run(item):
+            raise RuntimeError("GitHub CLI returned invalid CI run fields.")
+        runs.append(item)
+    return runs
 
 
-def _latest_main_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _latest_main_run(runs: list[CiRun]) -> CiRun | None:
     candidates = [run for run in runs if run.get("headBranch") == "main"]
     if not candidates:
         return None
@@ -58,7 +92,7 @@ def require_green_ci(
     *,
     timeout_seconds: float = 600,
     poll_seconds: float = 10,
-) -> dict[str, Any]:
+) -> CiRun:
     """Wait for the tagged SHA's main push CI and require a successful result."""
 
     if not repository.strip() or not commit_sha.strip():
@@ -69,7 +103,7 @@ def require_green_ci(
         )
 
     deadline = time.monotonic() + timeout_seconds
-    latest: dict[str, Any] | None = None
+    latest: CiRun | None = None
     while True:
         latest = _latest_main_run(_list_ci_runs(repository, commit_sha))
         if latest is not None and latest.get("status") == "completed":

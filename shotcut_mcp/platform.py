@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from . import MLT_VERSION_FAMILY, SHOTCUT_VERSION
 from .errors import RequestCancelled, ToolError
@@ -47,13 +47,17 @@ from .processes import (
 from .protocol import report_progress
 from .storage import OutputTransaction, managed_preview_path
 
-_SERVICE_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
+ServiceList = TypedDict(
+    "ServiceList", {"kind": str, "count": int, "services": list[str]}
+)
+
+_SERVICE_CACHE: dict[tuple[object, ...], ServiceList] = {}
 _SERVICE_LOCK = threading.Lock()
 _MELT_READY_CACHE: set[tuple[object, ...]] = set()
 _MELT_READY_LOCK = threading.Lock()
 MLT_WARMUP_ATTEMPTS = 3
 MLT_WARMUP_BASE_TIMEOUT_SECONDS = 5
-_ENCODER_CACHE: dict[tuple[object, ...], dict[str, Any]] = {}
+_ENCODER_CACHE: dict[tuple[object, ...], dict[str, object]] = {}
 _ENCODER_LOCK = threading.Lock()
 
 __all__ = [
@@ -166,7 +170,7 @@ def _safe_version(
         return None, str(exc)
 
 
-def status() -> dict[str, Any]:
+def status() -> dict[str, object]:
     executables = discover_executables()
     shotcut_version, shotcut_version_error = _safe_version(
         executables.shotcut, ["--version"]
@@ -236,7 +240,7 @@ def status() -> dict[str, Any]:
     }
 
 
-def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, Any]:
+def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, object]:
     enforce_project_resource_policy(project_path)
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
@@ -264,8 +268,14 @@ def validate_project_file(project_path: Path, timeout: int = 30) -> dict[str, An
     }
 
 
-def list_services(kind: str) -> dict[str, Any]:
-    if kind not in {"filter", "transition", "producer", "consumer", "link"}:
+def list_services(kind: object) -> ServiceList:
+    if not isinstance(kind, str) or kind not in {
+        "filter",
+        "transition",
+        "producer",
+        "consumer",
+        "link",
+    }:
         raise ToolError("kind must be filter, transition, producer, consumer, or link.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
@@ -287,7 +297,7 @@ def list_services(kind: str) -> dict[str, Any]:
     names = sorted(
         set(re.findall(r"^\s*-\s+([^\s#]+)\s*$", result.stdout, re.MULTILINE))
     )
-    payload = {"kind": kind, "count": len(names), "services": names}
+    payload: ServiceList = {"kind": kind, "count": len(names), "services": names}
     with _SERVICE_LOCK:
         if len(_SERVICE_CACHE) > 64:
             _SERVICE_CACHE.clear()
@@ -295,8 +305,14 @@ def list_services(kind: str) -> dict[str, Any]:
     return payload
 
 
-def describe_service(kind: str, name: str) -> dict[str, Any]:
-    if kind not in {"filter", "transition", "producer", "consumer", "link"}:
+def describe_service(kind: object, name: object) -> dict[str, object]:
+    if not isinstance(kind, str) or kind not in {
+        "filter",
+        "transition",
+        "producer",
+        "consumer",
+        "link",
+    }:
         raise ToolError("kind must be filter, transition, producer, consumer, or link.")
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:+-]+", name):
         raise ToolError("Invalid MLT service name.")
@@ -322,14 +338,14 @@ def _extract_version(value: str | None) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.groups() if part is not None)
 
 
-def _safe_service_description(kind: str, name: str) -> dict[str, Any]:
+def _safe_service_description(kind: str, name: str) -> dict[str, object]:
     try:
         return describe_service(kind, name)
     except ToolError as exc:
         return {"available": False, "error": str(exc)}
 
 
-def compatibility_doctor() -> dict[str, Any]:
+def compatibility_doctor() -> dict[str, object]:
     executables = discover_executables()
     repository_error: str | None = None
     repository_ready = False
@@ -354,7 +370,7 @@ def compatibility_doctor() -> dict[str, Any]:
     }
     rnnoise_available = any(bool(item.get("available")) for item in rnnoise.values())
 
-    checks: dict[str, dict[str, Any]] = {
+    checks: dict[str, dict[str, object]] = {
         "shotcut": {
             "passed": shotcut_number == expected_shotcut,
             "expected": SHOTCUT_VERSION,
@@ -393,7 +409,7 @@ def compatibility_doctor() -> dict[str, Any]:
     }
 
 
-def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
+def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, object]:
     if not path.exists():
         raise ToolError(
             f"File or directory not found: {path}",
@@ -427,7 +443,7 @@ def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, Any]:
 
 def render_preview(
     project_path: Path, output_path: Path | None, frame: int, overwrite: bool
-) -> dict[str, Any]:
+) -> dict[str, object]:
     if not project_path.is_file():
         raise ToolError(
             f"Project not found: {project_path}",
@@ -497,7 +513,7 @@ def render_preview_batch(
     project_path: Path,
     requests: list[tuple[int, Path]],
     overwrite: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Render a bounded deterministic set of project frames."""
 
     if not 1 <= len(requests) <= 64:
@@ -522,7 +538,7 @@ def render_preview_batch(
 
 def _preview_batch_item(
     project_path: Path, output_path: Path, frame: int, overwrite: bool
-) -> dict[str, Any]:
+) -> dict[str, object]:
     try:
         return render_preview(project_path, output_path, frame, overwrite)
     except RequestCancelled:
@@ -544,7 +560,7 @@ def render_contact_sheet(
     columns: int,
     cell_width: int,
     overwrite: bool,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Render exact frames privately and atomically assemble one contact sheet."""
 
     if not 1 <= len(frames) <= 64:
@@ -665,7 +681,7 @@ def render_media_contact_sheet(
     columns: int = 4,
     cell_width: int = 320,
     overwrite: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a visual candidate map without trying to render a broken project."""
 
     if not 1 <= len(candidates) <= 64:
@@ -682,7 +698,7 @@ def render_media_contact_sheet(
         overwrite=overwrite,
         protected_paths=tuple(path for _, path in candidates),
     )
-    cells: list[dict[str, Any]] = []
+    cells: list[dict[str, object]] = []
     skipped: list[dict[str, str]] = []
     try:
         with tempfile.TemporaryDirectory(
@@ -779,7 +795,9 @@ def _hardware_encoder_candidates() -> dict[str, list[str]]:
     return common
 
 
-def detect_hardware_encoders(refresh: bool = False) -> dict[str, Any]:
+def detect_hardware_encoders(refresh: object = False) -> dict[str, object]:
+    if not isinstance(refresh, bool):
+        raise ToolError("refresh must be a boolean.")
     """Smoke-test OS-appropriate FFmpeg encoders without exposing probe files."""
 
     ffmpeg = require_executable(
@@ -809,15 +827,15 @@ def detect_hardware_encoders(refresh: bool = False) -> dict[str, Any]:
     advertised = set(
         re.findall(r"^\s*[A-Z.]{6}\s+([A-Za-z0-9_]+)\s", listed.stdout, re.M)
     )
-    candidates: list[dict[str, Any]] = []
-    suggestions: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, object]] = []
+    suggestions: dict[str, dict[str, object]] = {}
     software = {"h264": "libx264", "hevc": "libx265", "av1": "libsvtav1"}
     with tempfile.TemporaryDirectory(prefix="shotcut-mcp-encoder-") as directory:
         temporary_dir = Path(directory)
         for codec, names in _hardware_encoder_candidates().items():
             successful: list[str] = []
             for name in names:
-                item: dict[str, Any] = {
+                item: dict[str, object] = {
                     "codec": codec,
                     "encoder": name,
                     "state": "not_built",
@@ -865,7 +883,7 @@ def detect_hardware_encoders(refresh: bool = False) -> dict[str, Any]:
                 "recommended": successful[0] if successful else software[codec],
                 "software_fallback": software[codec],
             }
-    result = {
+    result: dict[str, object] = {
         "ffmpeg_path": str(ffmpeg),
         "platform": sys_platform(),
         "candidates": candidates,
