@@ -1,13 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.5.5 (2026-09-11)
 
 ### Fixed
 
+- Recognize tested Shotcut/MLT pairs independently of project serialization. Distinguish
+  untested-version warnings from concrete runtime failures, retain conservative `compatible`
+  results, and generate the Windows integration matrix from the runtime contract.
 - Export chapters when external markers share a frame and one lacks an identifier, instead
   of comparing a null identifier with a string during sorting.
 - Report malformed FFprobe results and persistent render fields as structured errors before
   using them, while preserving existing media and unknown render metadata extensions.
+
+### Changed
+
+- Default new projects to Shotcut 26.8.1 / MLT 7.41.0 while retaining integration coverage
+  for Shotcut 26.6.25 / MLT 7.40.0 and preserving existing project metadata.
+- Strengthen typed media and render contracts, and cover failed or cancelled overwrites,
+  supervisor startup failures, and concurrent output promotion with regression tests.
+- Consolidate installation, architecture, and contributor guidance; verify documented runtime
+  dependencies and reject import cycles in the test suite.
 
 ## 1.5.4 (2026-09-07)
 

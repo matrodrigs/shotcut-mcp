@@ -1,6 +1,6 @@
 """Shotcut MCP package."""
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 
 # Project serialization evolves independently from tested runtime combinations.
 SHOTCUT_VERSION = "26.8.1"
