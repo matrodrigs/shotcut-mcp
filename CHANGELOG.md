@@ -8,6 +8,7 @@
   frame order, duplicate selections, cancellation, and protected output promotion.
 - Cache successful version and service queries briefly, invalidating them on runtime changes
   and retrying failures immediately.
+- Bound materialized edit diffs without changing unified-diff output or total line counts.
 
 ## 1.5.5 (2026-09-11)
 

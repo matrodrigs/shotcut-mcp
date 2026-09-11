@@ -473,6 +473,55 @@ def _build_edit_candidate(arguments: dict[str, object]) -> EditCandidate:
     )
 
 
+def _diff_range(start: int, stop: int) -> str:
+    length = stop - start
+    beginning = start + 1 if length else start
+    return str(beginning) if length == 1 else f"{beginning},{length}"
+
+
+def _bounded_project_diff(
+    original: bytes, candidate: bytes, path: Path, maximum_lines: int
+) -> tuple[str, int]:
+    before = original.decode("utf-8", errors="replace").splitlines()
+    after = candidate.decode("utf-8", errors="replace").splitlines()
+    shown: list[str] = []
+    count = 0
+
+    def header(line: str) -> None:
+        nonlocal count
+        if len(shown) < maximum_lines:
+            shown.append(line)
+        count += 1
+
+    for group in difflib.SequenceMatcher(None, before, after).get_grouped_opcodes(3):
+        if cancellation_requested():
+            raise RequestCancelled("Project diff cancelled by the MCP client.")
+        if count == 0:
+            header(f"--- {path}")
+            header(f"+++ {path} (planned)")
+        first, last = group[0], group[-1]
+        header(
+            f"@@ -{_diff_range(first[1], last[2])} +{_diff_range(first[3], last[4])} @@"
+        )
+        for tag, i1, i2, j1, j2 in group:
+            sections = []
+            if tag == "equal":
+                sections.append((" ", before, i1, i2))
+            else:
+                if tag in {"replace", "delete"}:
+                    sections.append(("-", before, i1, i2))
+                if tag in {"replace", "insert"}:
+                    sections.append(("+", after, j1, j2))
+            for prefix, lines, start, stop in sections:
+                remaining = maximum_lines - len(shown)
+                shown.extend(
+                    prefix + lines[index]
+                    for index in range(start, min(stop, start + remaining))
+                )
+                count += stop - start
+    return "\n".join(shown), count
+
+
 def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
     if arguments.get("force") not in (None, False):
         raise ToolError("force is not supported by plan_project_edit.")
@@ -501,17 +550,9 @@ def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
 
     maximum_lines = _int(arguments.get("max_diff_lines", 2000), "max_diff_lines", 0)
     maximum_lines = min(maximum_lines, 5000)
-    diff_lines = list(
-        difflib.unified_diff(
-            candidate.original.decode("utf-8", errors="replace").splitlines(),
-            data.decode("utf-8", errors="replace").splitlines(),
-            fromfile=str(candidate.path),
-            tofile=f"{candidate.path} (planned)",
-            lineterm="",
-        )
+    unified_diff, diff_lines = _bounded_project_diff(
+        candidate.original, data, candidate.path, maximum_lines
     )
-    diff_truncated = len(diff_lines) > maximum_lines
-    shown_lines = diff_lines[:maximum_lines]
     candidate.document.source = data
     candidate.document.revision = prospective_revision
     report_progress(
@@ -529,9 +570,9 @@ def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
         "item_bindings": candidate.document.item_bindings(),
         "validation": validation,
         "project": candidate.document.snapshot(),
-        "unified_diff": "\n".join(shown_lines),
-        "diff_lines": len(diff_lines),
-        "diff_truncated": diff_truncated,
+        "unified_diff": unified_diff,
+        "diff_lines": diff_lines,
+        "diff_truncated": diff_lines > maximum_lines,
     }
 
 

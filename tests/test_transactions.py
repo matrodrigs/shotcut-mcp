@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import os
 import tempfile
 import unittest
@@ -22,6 +23,63 @@ from shotcut_mcp.storage import publish_new_file
 
 
 class ProjectTransactionTests(unittest.TestCase):
+    def test_planned_diff_preserves_unified_format_counts_and_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "project.mlt"
+            with patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ):
+                created = create_project(
+                    {"project_path": str(path), "notes": "old\nnotes\n"}
+                )
+                before = path.read_bytes()
+                for operations in (
+                    [{"op": "set_notes", "notes": "new\nnotes\n"}],
+                    [{"op": "set_notes", "notes": ""}],
+                    [{"op": "set_notes", "notes": "old\nnotes\n"}],
+                    [{"op": "add_track", "kind": "audio", "name": "Voice"}],
+                ):
+                    candidates = []
+
+                    def validate(candidate_path, candidates=candidates, **_kwargs):
+                        candidates.append(Path(candidate_path).read_bytes())
+                        return {"valid": True}
+
+                    for limit in (0, 1, 3, 7, 5000):
+                        with (
+                            self.subTest(operations=operations, limit=limit),
+                            patch(
+                                "shotcut_mcp.project.validate_project_file",
+                                side_effect=validate,
+                            ),
+                        ):
+                            result = plan_project_edit(
+                                {
+                                    "project_path": str(path),
+                                    "expected_revision": created["revision"],
+                                    "operations": operations,
+                                    "max_diff_lines": limit,
+                                }
+                            )
+                        expected = list(
+                            difflib.unified_diff(
+                                before.decode().splitlines(),
+                                candidates[-1].decode().splitlines(),
+                                fromfile=str(path.resolve()),
+                                tofile=f"{path.resolve()} (planned)",
+                                lineterm="",
+                            )
+                        )
+                        self.assertEqual(
+                            result["unified_diff"], "\n".join(expected[:limit])
+                        )
+                        self.assertEqual(result["diff_lines"], len(expected))
+                        self.assertEqual(
+                            result["diff_truncated"], len(expected) > limit
+                        )
+                        self.assertEqual(path.read_bytes(), before)
+
     def test_atomic_creation_refuses_an_existing_destination(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / "candidate.mlt"

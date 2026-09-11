@@ -74,7 +74,8 @@ preview and render saved Shotcut projects without requiring a network service.
   Reject an oversized serialized project candidate before backup or replacement, using the same
   limit enforced while loading a project. Default to 128 MiB and allow administrators to configure
   a value clamped between 1 MiB and 512 MiB.
-- Provide a read-only plan/diff operation before transactional edits.
+- Provide a read-only plan/diff operation before transactional edits. Materialize only the
+  requested diff lines while retaining the exact total line count and unified-diff format.
 - Render bounded preview batches and atomically promoted contact sheets at exact frames,
   preserving requested order and duplicate frames through a single Melt process. Keep output
   conflict checks, cancellation, and private intermediate-file cleanup in both workflows.
