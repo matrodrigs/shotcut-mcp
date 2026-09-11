@@ -322,7 +322,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
 
     @staticmethod
     def _start_with_python_renderer(
-        renderer_path: Path, output_path: Path
+        renderer_path: Path, output_path: Path, **arguments: object
     ) -> dict[str, object]:
         source = renderer_path.read_bytes()
         render_input = SimpleNamespace(
@@ -351,8 +351,15 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 {
                     "project_path": str(renderer_path),
                     "output_path": str(output_path),
+                    **arguments,
                 }
             )
+
+    def _wait_for_file(self, path: Path) -> None:
+        deadline = time.monotonic() + 15
+        while not path.is_file() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(path.is_file(), f"Renderer did not produce {path.name}")
 
     def test_completed_render_is_promoted_without_status_polling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -368,15 +375,10 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
             )
 
             job = self._start_with_python_renderer(renderer_path, output_path)
-            worker = render_module.RUNNING_JOBS[str(job["job_id"])]
-
             try:
-                worker.wait(timeout=15)
-                self.assertTrue(
-                    output_path.is_file(),
-                    "the worker must promote output without a render_status request",
-                )
-                status = render_status(str(job["job_id"]))
+                self._wait_for_file(output_path)
+                status = self._wait_for_status(str(job["job_id"]), "completed")
+                self.assertEqual(status["status"], "completed")
                 self.assertEqual(
                     status["rendered_project_revision"], job["project_revision"]
                 )
@@ -393,9 +395,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 self.assertFalse(changed["delivery_complete"])
                 self.assertEqual(changed["artifacts"], [])
             finally:
-                if worker.poll() is None:
-                    worker.wait(timeout=15)
-                render_status(str(job["job_id"]))
+                cancel_render(str(job["job_id"]))
 
     def test_render_remains_managed_after_session_state_is_lost(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -453,35 +453,117 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
             output_path = Path(directory) / "output.mp4"
             renderer_path.write_text("raise SystemExit(3)\n", encoding="utf-8")
             job = self._start_with_python_renderer(renderer_path, output_path)
-            worker = render_module.RUNNING_JOBS[str(job["job_id"])]
             try:
-                worker.wait(timeout=15)
                 status = self._wait_for_status(str(job["job_id"]), "failed")
                 self.assertEqual(status["status"], "failed")
                 self.assertFalse(Path(str(job["editable_project_path"])).exists())
                 self.assertFalse(status["delivery_complete"])
                 self.assertEqual(status["artifacts"], [])
             finally:
-                if worker.poll() is None:
-                    worker.wait(timeout=15)
+                cancel_render(str(job["job_id"]))
+
+    def test_failed_overwrite_preserves_existing_output_and_removes_partial_files(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer = Path(directory) / "failed_renderer.py"
+            output = Path(directory) / "output.mp4"
+            output.write_bytes(b"existing export")
+            renderer.write_text(
+                "from pathlib import Path\nimport sys\n"
+                "target = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\n"
+                "Path(target).write_bytes(b'partial export')\n"
+                "raise SystemExit(3)\n",
+                encoding="utf-8",
+            )
+            original = renderer.read_bytes()
+            job = self._start_with_python_renderer(renderer, output, overwrite=True)
+            try:
+                status = self._wait_for_status(job["job_id"], "failed")
+                self.assertEqual(status["status"], "failed")
+                self.assertEqual(status["return_code"], 3)
+                self.assertEqual(output.read_bytes(), b"existing export")
+                self.assertEqual(renderer.read_bytes(), original)
+                self.assertFalse(Path(job["temporary_output_path"]).exists())
+                self.assertFalse(Path(job["editable_project_path"]).exists())
+                self.assertEqual(status["artifacts"], [])
+            finally:
+                cancel_render(job["job_id"])
+
+    def test_cancelled_overwrite_preserves_existing_output_and_removes_partial_files(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer = Path(directory) / "slow_renderer.py"
+            output = Path(directory) / "output.mp4"
+            output.write_bytes(b"existing export")
+            renderer.write_text(
+                "from pathlib import Path\nimport sys, time\n"
+                "target = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\n"
+                "Path(target).write_bytes(b'partial export')\n"
+                "time.sleep(20)\n",
+                encoding="utf-8",
+            )
+            job = self._start_with_python_renderer(renderer, output, overwrite=True)
+            try:
+                self._wait_for_file(Path(job["temporary_output_path"]))
+                cancel_render(job["job_id"])
+                status = self._wait_for_status(job["job_id"], "cancelled")
+                self.assertEqual(status["status"], "cancelled")
+                self.assertEqual(output.read_bytes(), b"existing export")
+                self.assertFalse(Path(job["temporary_output_path"]).exists())
+                self.assertFalse(Path(job["editable_project_path"]).exists())
+                self.assertEqual(status["artifacts"], [])
+            finally:
+                cancel_render(job["job_id"])
+
+    def test_supervisor_start_failure_preserves_output_and_cleans_snapshot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            renderer = Path(directory) / "renderer.py"
+            output = Path(directory) / "output.mp4"
+            renderer.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            output.write_bytes(b"existing export")
+            with (
+                patch(
+                    "shotcut_mcp.render.start_render_supervisor",
+                    side_effect=OSError("startup failure sentinel"),
+                ),
+                self.assertRaises(ToolError) as caught,
+            ):
+                self._start_with_python_renderer(renderer, output, overwrite=True)
+            self.assertEqual(caught.exception.code, "render_start_failed")
+            self.assertEqual(output.read_bytes(), b"existing export")
+            status = render_status(caught.exception.details["job_id"])
+            self.assertEqual(status["status"], "failed")
+            self.assertIn("startup failure sentinel", status["status_note"])
+            self.assertFalse(Path(status["temporary_output_path"]).exists())
+            self.assertFalse(Path(status["editable_project_path"]).exists())
 
     def test_promotion_conflict_keeps_snapshot_and_existing_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             renderer_path = Path(directory) / "slow_success.py"
             output_path = Path(directory) / "output.mp4"
+            ready = Path(directory) / "renderer-ready"
+            proceed = Path(directory) / "allow-promotion"
             renderer_path.write_text(
                 "from pathlib import Path\n"
                 "import sys, time\n"
-                "time.sleep(0.5)\n"
+                f"Path({str(ready)!r}).touch()\n"
+                "deadline = time.monotonic() + 15\n"
+                f"while not Path({str(proceed)!r}).exists():\n"
+                "    if time.monotonic() > deadline: raise RuntimeError('promotion gate timed out')\n"
+                "    time.sleep(0.02)\n"
                 "target = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\n"
                 "Path(target).write_bytes(b'rendered')\n",
                 encoding="utf-8",
             )
             job = self._start_with_python_renderer(renderer_path, output_path)
-            worker = render_module.RUNNING_JOBS[str(job["job_id"])]
-            output_path.write_bytes(b"concurrent-output")
             try:
-                worker.wait(timeout=15)
+                self._wait_for_file(ready)
+                output_path.write_bytes(b"concurrent-output")
+                proceed.touch()
                 status = self._wait_for_status(str(job["job_id"]), "promotion_failed")
                 self.assertEqual(status["status"], "promotion_failed")
                 self.assertEqual(output_path.read_bytes(), b"concurrent-output")
@@ -489,8 +571,8 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 self.assertFalse(status["delivery_complete"])
                 self.assertEqual(status["artifacts"], [])
             finally:
-                if worker.poll() is None:
-                    worker.wait(timeout=15)
+                proceed.touch()
+                cancel_render(str(job["job_id"]))
 
 
 if __name__ == "__main__":
