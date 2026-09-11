@@ -68,7 +68,9 @@ SERVER_INSTRUCTIONS = (
     "requires local resources and required MLT services. Surface failed or unavailable "
     "checks. For missing media, use diagnose_missing_media; apply mappings the user "
     "already specified, otherwise ask them to choose the source before relinking. "
-    "For runtime gaps, use shotcut_doctor or list_mlt_services.\n"
+    "For runtime gaps, use shotcut_doctor or list_mlt_services. Doctor status=untested "
+    "is a version warning: continue normal validation and previews; status=failed "
+    "reports concrete runtime issues. compatible is true only for status=tested.\n"
     "Planning and review: Use plan_project_edit for uncertain edits or user review. To "
     "show the current edit, call render_contact_sheet and surface its image when "
     "supported; use render_preview for one exact moment. After inspection or a committed "
@@ -159,6 +161,16 @@ def _tool_result(
 
 
 def _success_result_text(tool_name: str | None, payload: Mapping[str, object]) -> str:
+    if tool_name == "shotcut_doctor":
+        status = payload.get("status")
+        if status == "untested":
+            return (
+                "Runtime checks passed, but this Shotcut/MLT pair is untested. "
+                "Report the version warning and continue normal project validation and previews."
+            )
+        if status == "failed":
+            return "Runtime checks failed. Explain the issues and recovery guidance in structuredContent."
+        return "Tested Shotcut/MLT pair; runtime checks passed. Project-specific validation still applies."
     if tool_name == "edit_project":
         operations = payload.get("operation_results")
         count = len(operations) if is_array(operations) else 0

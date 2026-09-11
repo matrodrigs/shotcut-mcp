@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from scripts.build_release import build_release
 from shotcut_mcp import __version__
 from shotcut_mcp.platform import (
     analyze_media_quality,
+    compatibility_doctor,
     discover_executables,
     render_contact_sheet,
     render_preview,
@@ -29,6 +31,19 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_installed_runtime_matches_compatibility_contract(self) -> None:
+        report = compatibility_doctor()
+        self.assertTrue(report["runtime_ready"], report)
+        self.assertEqual(report["status"], "tested", report)
+        self.assertTrue(report["compatible"], report)
+        for name in ("shotcut", "mlt"):
+            expected = os.environ.get(f"SHOTCUT_MCP_EXPECTED_{name.upper()}")
+            if expected:
+                self.assertRegex(
+                    report["checks"][name]["detected"],
+                    rf"\b{re.escape(expected)}(?![\w.+-])",
+                )
+
     def test_speed_ramps_render_distinguishable_source_frames(self) -> None:
         executables = discover_executables()
         assert executables.ffmpeg is not None

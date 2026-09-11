@@ -9,7 +9,13 @@ import unittest
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
-from shotcut_mcp import MLT_VERSION_FAMILY, SHOTCUT_VERSION, platform, processes
+from shotcut_mcp import (
+    MLT_VERSION_FAMILY,
+    SHOTCUT_VERSION,
+    TESTED_RUNTIME_STACKS,
+    platform,
+    processes,
+)
 from shotcut_mcp.errors import RequestCancelled, ToolError
 from shotcut_mcp.protocol import request_cancellation
 
@@ -73,8 +79,14 @@ class MeltCacheTests(unittest.TestCase):
         self.assertTrue(result["checks"]["repository"]["passed"])
         self.assertFalse(result["checks"]["rnnoise"]["passed"])
         self.assertFalse(result["compatible"])
-        self.assertEqual(result["checks"]["shotcut"]["expected"], SHOTCUT_VERSION)
-        self.assertEqual(result["checks"]["mlt"]["expected"], MLT_VERSION_FAMILY)
+        self.assertEqual(
+            result["checks"]["shotcut"]["expected"],
+            ", ".join(shotcut for shotcut, _ in TESTED_RUNTIME_STACKS),
+        )
+        self.assertEqual(
+            result["checks"]["mlt"]["expected"],
+            ", ".join(mlt for _, mlt in TESTED_RUNTIME_STACKS),
+        )
         self.assertEqual(
             result["validated_stack"],
             {"shotcut": SHOTCUT_VERSION, "mlt": MLT_VERSION_FAMILY},

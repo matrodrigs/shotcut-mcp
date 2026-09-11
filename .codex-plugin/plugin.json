@@ -35,7 +35,7 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Check whether this Shotcut project is ready, explain missing media or services, and analyze its sources for quality issues.",
+      "Check readiness and source quality; distinguish untested-version warnings from runtime failures and missing media.",
       "Create a well-paced edit from my media. Choose cuts and transitions that fit my brief, then show a visual review.",
       "Export this project as H.264, monitor the render, and deliver the video and exact editable project."
     ]

@@ -16,8 +16,9 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 
 ## Quick start
 
-You need **Python 3.10+**, **Shotcut 26.6.25** with MLT 7.40.0 serialization in the compatible
-7.40.x family, and an MCP client that supports local `stdio` servers. Shotcut provides Melt,
+You need **Python 3.10+**, **Shotcut** (recommended **26.8.1**, bundled MLT **7.41.0**),
+and an MCP client that supports local `stdio` servers. New projects use MLT 7.41.0
+serialization (7.41.x family). Shotcut provides Melt,
 FFmpeg, FFprobe, codecs, and filters; the server uses only Python's standard library.
 The bundled launchers load the server and background renderer from the extension itself;
 you do not need to install the Python package or configure `PYTHONPATH`.
@@ -38,11 +39,9 @@ No `pip install` is required to run the server.
 
 Ask your assistant:
 
-> Run the full Shotcut MCP readiness check with shotcut_doctor and report the detected Shotcut,
-> Melt, FFmpeg, and FFprobe versions and any failed checks.
+> Run shotcut_status and shotcut_doctor. Report tool paths, versions, and failed runtime checks.
 
-A healthy setup reports discovered paths, versions, repository state, RNNoise availability,
-and the active path policy. Resolve anything it flags before editing.
+Resolve failed runtime checks before editing. See [troubleshooting](docs/installation.md#troubleshooting-and-recovery) for recovery steps.
 
 ### 3. Make your first edit
 

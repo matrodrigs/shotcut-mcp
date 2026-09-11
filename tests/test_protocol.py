@@ -15,6 +15,7 @@ from shotcut_mcp import (
     MLT_VERSION,
     MLT_VERSION_FAMILY,
     SHOTCUT_VERSION,
+    TESTED_RUNTIME_STACKS,
 )
 from shotcut_mcp import (
     render_jobs as render_jobs_module,
@@ -980,12 +981,26 @@ class ProtocolNegotiationTests(unittest.TestCase):
             request("tools/call", {"name": "shotcut_capabilities", "arguments": {}})
         )["result"]["structuredContent"]
         self.assertEqual(
-            full["compatibility"],
+            {
+                key: full["compatibility"][key]
+                for key in ("shotcut", "mlt", "project_format")
+            },
             {
                 "shotcut": SHOTCUT_VERSION,
                 "mlt": MLT_VERSION_FAMILY,
                 "project_format": "MLT XML",
             },
+        )
+        self.assertEqual(
+            full["compatibility"]["tested_stacks"],
+            [
+                {"shotcut": shotcut, "mlt": mlt}
+                for shotcut, mlt in TESTED_RUNTIME_STACKS
+            ],
+        )
+        self.assertEqual(
+            full["compatibility"]["serialization"],
+            {"shotcut": SHOTCUT_VERSION, "mlt": MLT_VERSION},
         )
         with tempfile.TemporaryDirectory() as directory:
             document = ProjectDocument.new(

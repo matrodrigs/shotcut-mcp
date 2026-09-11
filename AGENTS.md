@@ -11,10 +11,12 @@ validates it with the installed MLT runtime, renders previews and final media, a
 preserves user projects through transactional writes. Correctness and preservation of
 user data take priority over convenience or clever abstractions.
 
-The validated compatibility target is Shotcut 26.6.25 with MLT 7.40.0 serialization in the
-MLT 7.40.x family. The runtime source of truth is `shotcut_mcp/__init__.py`. Do not infer
-that a successful MLT repository preflight proves an optional service loaded; RNNoise
-must continue to be checked independently as both a link and a filter.
+New projects target Shotcut 26.8.1 with MLT 7.41.0 serialization (7.41.x family).
+`shotcut_mcp/__init__.py` separately defines exact tested runtime pairs; the Windows CI
+matrix is generated from that list. To recognize a new pair, pin its archive checksum in
+`scripts/compatibility_matrix.py` and pass real integration in the same change. Unknown
+versions receive a warning rather than a version-based block. Keep concrete runtime
+failures distinct, and check RNNoise independently as both a link and a filter.
 
 ## Architecture and dependency direction
 

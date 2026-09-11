@@ -8,18 +8,27 @@ permissions:
   contents: read
 
 jobs:
+  runtime-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.runtimes.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.10'
+      - id: runtimes
+        run: |
+          matrix=$(python -B scripts/compatibility_matrix.py)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
   windows-render:
+    needs: runtime-matrix
     name: Windows Shotcut ${{ matrix.shotcut }} / Python 3.10
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - shotcut: '26.6.25'
-            sha256: e44a28442c5686895e59eb5d4f4f86d9a71e9f5c008e0a4c35be78717ea15690
-          - shotcut: '26.8.1'
-            sha256: b0148856de01b39add4bf4d6a813bfbc554b4663b65e3ca25cb2589f47555a6a
+      matrix: ${{ fromJSON(needs.runtime-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -49,4 +58,6 @@ jobs:
       - name: Run real MLT integration, including extracted MCPB over stdio
         env:
           SHOTCUT_MCP_INTEGRATION: '1'
+          SHOTCUT_MCP_EXPECTED_SHOTCUT: ${{ matrix.shotcut }}
+          SHOTCUT_MCP_EXPECTED_MLT: ${{ matrix.mlt }}
         run: python -B -m unittest tests.test_integration -v

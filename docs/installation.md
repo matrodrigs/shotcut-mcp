@@ -10,21 +10,24 @@ Install a local Shotcut MCP server and connect it to your preferred MCP client.
 ## Requirements
 
 - Python 3.10 or newer
-- Shotcut 26.6.25, with MLT 7.40.0 serialization in the compatible 7.40.x family
+- Shotcut, preferably 26.8.1 with bundled MLT 7.41.0
 - Codex CLI, Claude Code, or another MCP client that supports local stdio servers
 
-The declared compatibility target and the automated test matrix serve different purposes:
+The project serialization baseline and tested runtime pairs evolve independently:
 
 | Coverage | Versions and scope |
 | --- | --- |
-| Declared compatibility target | Shotcut 26.6.25 / MLT 7.40.x; individual optional services still require discovery |
+| New project baseline | Shotcut 26.8.1 / MLT 7.41.0 (7.41.x family); existing projects retain their metadata |
 | Ordinary tests | Windows, macOS, and Linux with Python 3.10 and 3.14 |
-| Real rendering integration | Windows with Python 3.10 and portable Shotcut 26.6.25 / 26.8.1, including the extracted MCPB over stdio |
+| Real rendering integration | Windows / Python 3.10: Shotcut 26.6.25 with MLT 7.40.0, and Shotcut 26.8.1 with MLT 7.41.0, including the extracted MCPB over stdio |
 | Client GUI installation | Not exercised by the automated rendering suite |
 
-The [CI workflows](../.github/workflows/ci.yml) define the current matrix. Additional integration
-coverage does not certify every filter, encoder, GPU, or client installation. For runtime behavior
-and optional-service checks, see the [behavioral specification](spec.md).
+The [CI workflow](../.github/workflows/shotcut-integration.yml) exercises these versions;
+it does not certify every filter, encoder, GPU, or client installation.
+
+After an upgrade, run `shotcut_doctor`: an `untested` result is a version warning, so
+continue normal project validation and previews. For `failed`, follow the recovery guidance
+in `issues`. See the [diagnostic contract](spec.md#compatibility-boundary) for field details.
 
 ## Choose your client
 

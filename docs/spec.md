@@ -3,7 +3,7 @@
 ## Goal
 
 Provide a fast, local and reliable MCP server that can create, inspect, edit, validate,
-preview and render saved Shotcut 26.6 projects without requiring a network service.
+preview and render saved Shotcut projects without requiring a network service.
 
 ## Required behavior
 
@@ -121,7 +121,20 @@ preview and render saved Shotcut 26.6 projects without requiring a network servi
 
 ## Compatibility boundary
 
-- Target Shotcut 26.6.25 with MLT 7.40.0 serialization in the compatible MLT 7.40.x family.
+- Create new projects with the Shotcut 26.8.1 / MLT 7.41.0 serialization baseline
+  (7.41.x family), preserving existing project metadata during edits.
+- Generate the Windows integration matrix from `TESTED_RUNTIME_STACKS`, independently
+  of serialization. Require pinned archives and verify detected versions. New pairs and
+  baseline changes must pass the full matrix; see [current coverage](installation.md#requirements).
+- `shotcut_doctor.status` is `tested` for a tested pair with passing runtime checks,
+  `untested` for another pair with passing checks, or `failed` for executable version-query,
+  MLT repository, or RNNoise failures. Optional FFmpeg analyzers do not affect the verdict.
+- Keep `compatible` boolean and true only for `tested`; use `runtime_ready` for operational
+  checks and `issues` for recovery guidance. Unknown versions receive a warning without
+  blocking operations or relaxing project validation and safety checks.
+- Preserve the legacy `validated_stack` and capability `shotcut`/`mlt` fields as the project
+  baseline. Expose exact `serialization` and `tested_stacks` separately in doctor and
+  capabilities, with schemas and guidance explaining their distinct meanings.
 - Warm and retry cold MLT repository initialization with progressively longer 5, 10, and 20 second
   attempts before status, validation, preview and rendering. Keep every installed service
   available and cache readiness by executable and MLT environment identity.

@@ -13,11 +13,12 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
-from . import MLT_VERSION_FAMILY, SHOTCUT_VERSION
+from . import MLT_VERSION, MLT_VERSION_FAMILY, SHOTCUT_VERSION, TESTED_RUNTIME_STACKS
 from .errors import RequestCancelled, ToolError
 from .media import (
+    QualityAnalyzerCapability,
     analyze_media_quality,
     media_duration,
     probe_media_raw,
@@ -26,6 +27,7 @@ from .media import (
     summarize_media,
 )
 from .path_policy import (
+    PathPolicy,
     enforce_project_resource_policy,
     expand_path,
     is_network_resource,
@@ -49,6 +51,85 @@ from .storage import OutputTransaction, managed_preview_path
 
 ServiceList = TypedDict(
     "ServiceList", {"kind": str, "count": int, "services": list[str]}
+)
+
+ExecutableStatus = TypedDict(
+    "ExecutableStatus",
+    {
+        "found": bool,
+        "path": str | None,
+        "version": str | None,
+        "version_error": str | None,
+    },
+)
+_RepositoryStatus = TypedDict(
+    "_RepositoryStatus", {"repository_ready": bool, "repository_error": str | None}
+)
+
+
+class MeltStatus(ExecutableStatus, _RepositoryStatus):
+    pass
+
+
+RuntimeStatus = TypedDict(
+    "RuntimeStatus",
+    {
+        "ready": bool,
+        "shotcut": ExecutableStatus,
+        "melt": MeltStatus,
+        "ffprobe": ExecutableStatus,
+        "ffmpeg": ExecutableStatus,
+        "environment_overrides": dict[str, str | None],
+        "path_policy": PathPolicy,
+    },
+)
+ServiceDescription = TypedDict(
+    "ServiceDescription",
+    {"kind": str, "name": str, "available": bool, "metadata": str | None},
+)
+ServiceDescriptionError = TypedDict(
+    "ServiceDescriptionError", {"available": bool, "error": str}
+)
+RepositoryCheck = TypedDict("RepositoryCheck", {"passed": bool, "error": str | None})
+_VersionFields = TypedDict("_VersionFields", {"expected": str, "detected": str | None})
+
+
+class VersionCheck(RepositoryCheck, _VersionFields):
+    pass
+
+
+RnnoiseCheck = TypedDict(
+    "RnnoiseCheck",
+    {
+        "passed": bool,
+        "preferred_service": str,
+        "services": dict[str, ServiceDescription | ServiceDescriptionError],
+        "note": str,
+    },
+)
+CompatibilityIssue = TypedDict(
+    "CompatibilityIssue",
+    {
+        "code": str,
+        "severity": Literal["warning", "error"],
+        "message": str,
+        "recommended_action": str,
+    },
+)
+CompatibilityReport = TypedDict(
+    "CompatibilityReport",
+    {
+        "compatible": bool,
+        "status": Literal["tested", "untested", "failed"],
+        "runtime_ready": bool,
+        "validated_stack": dict[str, str],
+        "tested_stacks": list[dict[str, str]],
+        "serialization": dict[str, str],
+        "issues": list[CompatibilityIssue],
+        "checks": dict[str, VersionCheck | RepositoryCheck | RnnoiseCheck],
+        "quality_analyzers": dict[str, QualityAnalyzerCapability],
+        "path_policy": PathPolicy,
+    },
 )
 
 _SERVICE_CACHE: dict[tuple[object, ...], ServiceList] = {}
@@ -170,7 +251,7 @@ def _safe_version(
         return None, str(exc)
 
 
-def status() -> dict[str, object]:
+def status() -> RuntimeStatus:
     executables = discover_executables()
     shotcut_version, shotcut_version_error = _safe_version(
         executables.shotcut, ["--version"]
@@ -305,7 +386,7 @@ def list_services(kind: object) -> ServiceList:
     return payload
 
 
-def describe_service(kind: object, name: object) -> dict[str, object]:
+def describe_service(kind: object, name: object) -> ServiceDescription:
     if not isinstance(kind, str) or kind not in {
         "filter",
         "transition",
@@ -329,23 +410,23 @@ def describe_service(kind: object, name: object) -> dict[str, object]:
     }
 
 
-def _extract_version(value: str | None) -> tuple[int, ...] | None:
+def _extract_version(value: str | None) -> str | None:
     if not value:
         return None
-    match = re.search(r"\b(\d+)\.(\d+)(?:\.(\d+))?\b", value)
-    if not match:
-        return None
-    return tuple(int(part) for part in match.groups() if part is not None)
+    match = re.search(r"\b\d+\.\d+(?:\.\d+)*(?:[-+][\w.-]+)?\b", value)
+    return match.group(0) if match else None
 
 
-def _safe_service_description(kind: str, name: str) -> dict[str, object]:
+def _safe_service_description(
+    kind: str, name: str
+) -> ServiceDescription | ServiceDescriptionError:
     try:
         return describe_service(kind, name)
     except ToolError as exc:
         return {"available": False, "error": str(exc)}
 
 
-def compatibility_doctor() -> dict[str, object]:
+def compatibility_doctor() -> CompatibilityReport:
     executables = discover_executables()
     repository_error: str | None = None
     repository_ready = False
@@ -358,31 +439,81 @@ def compatibility_doctor() -> dict[str, object]:
 
     shotcut_version, shotcut_error = _safe_version(executables.shotcut, ["--version"])
     mlt_version, mlt_error = _safe_version(executables.melt, ["--version"])
-    shotcut_number = _extract_version(shotcut_version)
-    mlt_number = _extract_version(mlt_version)
-    expected_shotcut = tuple(int(part) for part in SHOTCUT_VERSION.split("."))
-    expected_mlt = tuple(
-        int(part) for part in MLT_VERSION_FAMILY.removesuffix(".x").split(".")
-    )
+    detected_shotcut = _extract_version(shotcut_version)
+    detected_mlt = _extract_version(mlt_version)
+    tested = (detected_shotcut, detected_mlt) in TESTED_RUNTIME_STACKS
+    issues: list[CompatibilityIssue] = []
+    for name, executable, version, error in (
+        ("shotcut", executables.shotcut, shotcut_version, shotcut_error),
+        ("mlt", executables.melt, mlt_version, mlt_error),
+    ):
+        if executable is None or not version or error:
+            issues.append(
+                {
+                    "code": f"{name}_unavailable",
+                    "severity": "error",
+                    "message": error
+                    or f"Could not read the {name} executable version.",
+                    "recommended_action": (
+                        "Check the executable path and installation, then rerun shotcut_doctor."
+                    ),
+                }
+            )
 
     rnnoise = {
         kind: _safe_service_description(kind, "rnnoise") for kind in ("link", "filter")
     }
     rnnoise_available = any(bool(item.get("available")) for item in rnnoise.values())
+    if not repository_ready:
+        issues.append(
+            {
+                "code": "repository_unavailable",
+                "severity": "error",
+                "message": repository_error or "The MLT repository is unavailable.",
+                "recommended_action": "Check the Melt installation and MLT environment overrides.",
+            }
+        )
+    if not rnnoise_available:
+        issues.append(
+            {
+                "code": "rnnoise_unavailable",
+                "severity": "error",
+                "message": "RNNoise is unavailable as both a link and a filter.",
+                "recommended_action": "Check the Shotcut RNNoise module; inspect checks.rnnoise.services for details.",
+            }
+        )
+    runtime_ready = not issues
+    if not tested and runtime_ready:
+        issues.append(
+            {
+                "code": "untested_runtime",
+                "severity": "warning",
+                "message": "This Shotcut/MLT combination has not been validated by integration tests.",
+                "recommended_action": (
+                    "Continue with normal project validation and preview checks. "
+                    "Do not block solely on the version or claim confirmed compatibility."
+                ),
+            }
+        )
 
-    checks: dict[str, dict[str, object]] = {
-        "shotcut": {
-            "passed": shotcut_number == expected_shotcut,
-            "expected": SHOTCUT_VERSION,
-            "detected": shotcut_version,
-            "error": shotcut_error,
-        },
-        "mlt": {
-            "passed": mlt_number is not None and mlt_number[:2] == expected_mlt,
-            "expected": MLT_VERSION_FAMILY,
-            "detected": mlt_version,
-            "error": mlt_error,
-        },
+    checks: dict[str, VersionCheck | RepositoryCheck | RnnoiseCheck] = {
+        "shotcut": VersionCheck(
+            {
+                "passed": detected_shotcut
+                in {shotcut for shotcut, _ in TESTED_RUNTIME_STACKS},
+                "expected": ", ".join(shotcut for shotcut, _ in TESTED_RUNTIME_STACKS),
+                "detected": shotcut_version,
+                "error": shotcut_error,
+            }
+        ),
+        "mlt": VersionCheck(
+            {
+                "passed": detected_mlt in {mlt for _, mlt in TESTED_RUNTIME_STACKS},
+                "expected": ", ".join(mlt for _, mlt in TESTED_RUNTIME_STACKS),
+                "detected": mlt_version,
+                "error": mlt_error,
+            }
+        ),
         "repository": {
             "passed": repository_ready,
             "error": repository_error,
@@ -398,11 +529,18 @@ def compatibility_doctor() -> dict[str, object]:
         },
     }
     return {
-        "compatible": all(check["passed"] for check in checks.values()),
+        "compatible": tested and runtime_ready,
+        "status": "failed" if not runtime_ready else "tested" if tested else "untested",
+        "runtime_ready": runtime_ready,
         "validated_stack": {
             "shotcut": SHOTCUT_VERSION,
             "mlt": MLT_VERSION_FAMILY,
         },
+        "tested_stacks": [
+            {"shotcut": shotcut, "mlt": mlt} for shotcut, mlt in TESTED_RUNTIME_STACKS
+        ],
+        "serialization": {"shotcut": SHOTCUT_VERSION, "mlt": MLT_VERSION},
+        "issues": issues,
         "checks": checks,
         "quality_analyzers": quality_analyzer_capabilities(executables.ffmpeg),
         "path_policy": path_policy(),

@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypedDict
 
-from . import MLT_VERSION_FAMILY, SHOTCUT_VERSION
+from . import MLT_VERSION, MLT_VERSION_FAMILY, SHOTCUT_VERSION, TESTED_RUNTIME_STACKS
 from .errors import ToolError
 from .platform import (
     analyze_media_quality,
@@ -65,18 +65,27 @@ OperationDetails = TypedDict(
     },
     total=False,
 )
-ToolDefinition = TypedDict(
-    "ToolDefinition",
+_ToolRequired = TypedDict(
+    "_ToolRequired",
     {
         "name": str,
-        "title": str,
         "description": str,
         "inputSchema": JsonSchema,
+    },
+)
+_ToolOptional = TypedDict(
+    "_ToolOptional",
+    {
+        "title": str,
         "outputSchema": JsonSchema,
         "annotations": dict[str, bool | str],
     },
     total=False,
 )
+
+
+class ToolDefinition(_ToolRequired, _ToolOptional):
+    """Core fields survive negotiation; newer protocol fields may be omitted."""
 
 
 _OPERATION_CATALOG_BASE: dict[str, OperationSummary] = {
@@ -1040,6 +1049,12 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
             "shotcut": SHOTCUT_VERSION,
             "mlt": MLT_VERSION_FAMILY,
             "project_format": "MLT XML",
+            "serialization": {"shotcut": SHOTCUT_VERSION, "mlt": MLT_VERSION},
+            "tested_stacks": [
+                {"shotcut": shotcut, "mlt": mlt}
+                for shotcut, mlt in TESTED_RUNTIME_STACKS
+            ],
+            "test_coverage": "Windows / Python 3.10 real MLT integration, including packaged stdio rendering.",
         },
         "transaction_guarantees": TRANSACTION_GUARANTEES,
         "operations": OPERATION_CATALOG,
@@ -1048,6 +1063,14 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
         ),
         "render_presets": RENDER_PRESETS,
         "feature_guidance": {
+            "compatibility": (
+                "Read shotcut_doctor.status: tested confirms a tested version pair with "
+                "passing runtime checks; untested is a warning, not a version-based block; "
+                "failed requires addressing the reported issues. compatible is true only "
+                "for tested. validated_stack and compatibility.shotcut/mlt retain the "
+                "legacy project baseline; serialization is independent of tested_stacks. "
+                "Continue normal project validation and previews on untested versions."
+            ),
             "readiness": (
                 "validate_project reports valid when local Melt processes the first "
                 "project frame and ready when resources and required services also pass. "
@@ -1326,9 +1349,10 @@ TOOLS: list[ToolDefinition] = [
         "name": "shotcut_doctor",
         "title": "Check Shotcut compatibility",
         "description": (
-            "Use after installation, upgrade, or a setup failure. Verifies validated "
-            "Shotcut/MLT versions, repository startup, RNNoise, FFmpeg quality-analyzer "
-            "availability, and path policy."
+            "Use after installation, upgrade, or a setup failure. Distinguishes tested "
+            "Shotcut/MLT combinations, untested-version warnings, and runtime failures. "
+            "Checks repository startup, RNNoise, FFmpeg quality-analyzer availability, "
+            "and path policy. An untested version alone does not block project operations."
         ),
         "inputSchema": _object_schema({}),
         "annotations": {
@@ -1510,7 +1534,7 @@ TOOLS: list[ToolDefinition] = [
         "name": "create_project",
         "title": "Create multitrack Shotcut project",
         "description": (
-            "Use to create a new editable Shotcut 26.6 project. If dimensions or frame "
+            f"Use to create a new editable Shotcut {SHOTCUT_VERSION} project. If dimensions or frame "
             "rate were not requested, probe representative source media before choosing "
             "the profile; do not treat defaults as user intent. Tracks and clips use the "
             "same shapes as add_track and add_clip."
@@ -2861,6 +2885,15 @@ HARDWARE_SUGGESTION_OUTPUT_SCHEMA = _output_object(
     ["verified_hardware", "recommended", "software_fallback"],
     description="Recommendation for one codec family.",
 )
+RUNTIME_STACK_OUTPUT_SCHEMA = _output_object(
+    {"shotcut": STRING, "mlt": STRING},
+    ["shotcut", "mlt"],
+    description="An exact Shotcut and MLT version pair.",
+)
+TESTED_STACKS_OUTPUT_SCHEMA = _output_array(
+    RUNTIME_STACK_OUTPUT_SCHEMA,
+    "Exact runtime pairs covered by Windows / Python 3.10 integration tests; other pairs are untested.",
+)
 MLT_SERVICE_CHECK_OUTPUT_SCHEMA = _output_object(
     {
         "passed": BOOLEAN,
@@ -2886,7 +2919,10 @@ MLT_SERVICE_CHECK_OUTPUT_SCHEMA = _output_object(
         "note": STRING,
     },
     ["passed"],
-    description="One compatibility check; fields vary by check kind.",
+    description=(
+        "One compatibility check. Version passed means the individual version is listed; "
+        "the overall status also requires a tested pair and passing runtime checks."
+    ),
 )
 QUALITY_ANALYZER_CAPABILITY_OUTPUT_SCHEMA = _output_object(
     {
@@ -3078,11 +3114,38 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
     ),
     "shotcut_doctor": _result_schema(
         {
-            "compatible": BOOLEAN,
+            "compatible": {
+                "type": "boolean",
+                "description": "True only for status=tested. False alone does not indicate a runtime failure; read status and issues.",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["tested", "untested", "failed"],
+                "description": "Tested pair with passing checks, untested pair with passing checks, or concrete runtime check failure.",
+            },
+            "runtime_ready": {
+                "type": "boolean",
+                "description": "Executable version queries, MLT repository and RNNoise checks passed, independently of version coverage; does not guarantee project readiness.",
+            },
             "validated_stack": _output_object(
                 {"shotcut": STRING, "mlt": STRING},
                 ["shotcut", "mlt"],
-                description="Validated Shotcut and MLT compatibility target.",
+                description="Legacy project baseline retained for clients; use tested_stacks for runtime coverage.",
+            ),
+            "tested_stacks": TESTED_STACKS_OUTPUT_SCHEMA,
+            "serialization": RUNTIME_STACK_OUTPUT_SCHEMA,
+            "issues": _output_array(
+                _output_object(
+                    {
+                        "code": STRING,
+                        "severity": {"type": "string", "enum": ["warning", "error"]},
+                        "message": STRING,
+                        "recommended_action": STRING,
+                    },
+                    ["code", "severity", "message", "recommended_action"],
+                    description="An actionable runtime failure or untested-version warning.",
+                ),
+                "Runtime errors take precedence over version warnings; empty when tested checks pass.",
             ),
             "checks": {
                 "type": "object",
@@ -3098,9 +3161,23 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
     "shotcut_capabilities": _result_schema(
         {
             "compatibility": _output_object(
-                {"shotcut": STRING, "mlt": STRING, "project_format": STRING},
-                ["shotcut", "mlt", "project_format"],
-                description="Validated editing stack and project format.",
+                {
+                    "shotcut": STRING,
+                    "mlt": STRING,
+                    "project_format": STRING,
+                    "serialization": RUNTIME_STACK_OUTPUT_SCHEMA,
+                    "tested_stacks": TESTED_STACKS_OUTPUT_SCHEMA,
+                    "test_coverage": STRING,
+                },
+                [
+                    "shotcut",
+                    "mlt",
+                    "project_format",
+                    "serialization",
+                    "tested_stacks",
+                    "test_coverage",
+                ],
+                description="Legacy shotcut/mlt project baseline, serialization, and independently tested runtime combinations.",
             ),
             "transaction_guarantees": _output_array(
                 STRING,
