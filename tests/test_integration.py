@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from shotcut_mcp.platform import (
     discover_executables,
     render_contact_sheet,
     render_preview,
+    render_preview_batch,
     summarize_media,
 )
 from shotcut_mcp.project import create_project, edit_project, validate_project
@@ -31,6 +33,67 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_batch_previews_preserve_fractional_fps_relative_media_and_frame_order(
+        self,
+    ) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "moving pattern.mp4"
+            subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x64:rate=30000/1001:duration=2",
+                    "-c:v",
+                    "libx264",
+                    str(media),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            project = root / "fractional project.mlt"
+            create_project(
+                {
+                    "project_path": str(project),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 30000,
+                    "fps_den": 1001,
+                    "clips": [{"path": str(media)}],
+                }
+            )
+            tree = ET.parse(project)
+            resources = [
+                node
+                for node in tree.iter("property")
+                if node.get("name") == "resource"
+                and node.text in {str(media), media.as_posix()}
+            ]
+            self.assertTrue(resources)
+            for node in resources:
+                node.text = media.name
+            tree.write(project, encoding="utf-8", xml_declaration=True)
+            original = project.read_bytes()
+            frames = [29, 0, 58, 2, 29]
+            requests = [
+                (frame, root / f"batch-{index}.png")
+                for index, frame in enumerate(frames)
+            ]
+            result = render_preview_batch(project, requests)
+            self.assertEqual(result["created"], len(frames))
+            for index, (frame, preview) in enumerate(requests):
+                reference = root / f"reference-{index}.png"
+                render_preview(project, reference, frame, False)
+                self.assertEqual(preview.read_bytes(), reference.read_bytes())
+            self.assertEqual(project.read_bytes(), original)
+
     def test_installed_runtime_matches_compatibility_contract(self) -> None:
         report = compatibility_doctor()
         self.assertTrue(report["runtime_ready"], report)
@@ -134,6 +197,17 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                             }
                         )
                         self.assertEqual(state["project"]["duration_frames"], duration)
+                    batch_frames = [frame for frame, _ in reversed(expected_frames)]
+                    batch_frames.append(batch_frames[0])
+                    batch = render_preview_batch(
+                        path,
+                        [
+                            (frame, root / f"batch-{index}.png")
+                            for index, frame in enumerate(batch_frames)
+                        ],
+                        overwrite=True,
+                    )
+                    self.assertEqual(batch["created"], len(batch_frames))
                     for frame, source_frame in expected_frames:
                         with self.subTest(frame=frame, source_frame=source_frame):
                             preview = (
@@ -141,6 +215,16 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                             )
                             render_preview(path, preview, frame, False)
                             actual = self._preview_pixel(executables.ffmpeg, preview)
+                            batch_preview = (
+                                root / f"batch-{batch_frames.index(frame)}.png"
+                            )
+                            self.assertEqual(
+                                self._preview_pixel(executables.ffmpeg, batch_preview),
+                                actual,
+                            )
+                            self.assertEqual(
+                                batch_preview.read_bytes(), preview.read_bytes()
+                            )
                             expected = reference_pixels[source_frame]
                             for channel, value in enumerate(actual):
                                 self.assertAlmostEqual(

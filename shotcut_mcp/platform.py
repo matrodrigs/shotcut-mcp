@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -32,6 +34,7 @@ from .path_policy import (
     enforce_project_resource_policy,
     expand_path,
     is_network_resource,
+    parsed_project_resources,
     path_policy,
     project_network_resources,
 )
@@ -47,7 +50,7 @@ from .processes import (
     sys_platform,
     terminate_process,
 )
-from .protocol import report_progress
+from .protocol import cancellation_requested, report_progress
 from .storage import OutputTransaction, managed_preview_path
 
 ServiceList = TypedDict(
@@ -681,6 +684,65 @@ def render_preview(
     }
 
 
+def _render_preview_frames(
+    project_path: Path, frames: list[int], directory: Path
+) -> list[Path]:
+    """Select exact source frames through one XML producer and one Melt process."""
+    enforce_project_resource_policy(project_path)
+    root, _ = parsed_project_resources(project_path)
+    wrapper = ET.Element("mlt", {"producer": "frames"})
+    profile = root.find("profile")
+    if profile is not None:
+        wrapper.append(profile)
+    producer = ET.SubElement(wrapper, "producer", {"id": "source"})
+    ET.SubElement(producer, "property", {"name": "mlt_service"}).text = "xml"
+    ET.SubElement(producer, "property", {"name": "resource"}).text = str(
+        project_path.resolve()
+    )
+    playlist = ET.SubElement(wrapper, "playlist", {"id": "frames"})
+    for frame in frames:
+        ET.SubElement(
+            playlist,
+            "entry",
+            {"producer": "source", "in": str(frame), "out": str(frame)},
+        )
+    selection = directory / "frames.mlt"
+    ET.ElementTree(wrapper).write(selection, encoding="utf-8", xml_declaration=True)
+    melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
+    result = run_capture(
+        [
+            str(melt),
+            str(selection),
+            "-consumer",
+            f"avformat:{directory / 'frame-%06d.png'}",
+            "f=image2",
+            "vcodec=png",
+            "mlt_image_format=rgba",
+            "pix_fmt=rgba",
+            "start_number=0",
+            "an=1",
+            "real_time=-1",
+            "terminate_on_pause=1",
+            "-silent",
+        ],
+        timeout=120,
+    )
+    outputs = [directory / f"frame-{index:06d}.png" for index in range(len(frames))]
+    if result.returncode or not all(path.is_file() for path in outputs):
+        detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
+        raise ToolError(
+            f"Failed to generate previews: {detail or 'missing frames'}",
+            code="preview_failed",
+            recommended_action="validate_project_and_retry",
+            recommended_tool="validate_project",
+            details={"project_path": str(project_path), "frames": frames},
+        )
+    if cancellation_requested():
+        raise RequestCancelled("Preview rendering cancelled by the MCP client.")
+    return outputs
+
+
 def render_preview_batch(
     project_path: Path,
     requests: list[tuple[int, Path]],
@@ -694,34 +756,66 @@ def render_preview_batch(
     if len(set(normalized)) != len(normalized):
         raise ToolError("Every preview batch output path must be unique.")
     report_progress(0, len(requests), "Starting preview batch.")
-    results = []
-    for index, (frame, output_path) in enumerate(requests, start=1):
-        results.append(_preview_batch_item(project_path, output_path, frame, overwrite))
-        report_progress(
-            index, len(requests), f"Rendered preview {index} of {len(requests)}."
-        )
+    results: list[dict[str, object]] = [{} for _ in requests]
+    pending: list[tuple[int, int, OutputTransaction]] = []
+    for index, (frame, output_path) in enumerate(requests):
+        results[index] = {"created": False, "path": str(output_path), "frame": frame}
+        try:
+            if isinstance(frame, bool) or frame < 0:
+                raise ToolError("frame must be zero or positive.")
+            output = OutputTransaction.prepare(
+                output_path, overwrite=overwrite, protected_paths=(project_path,)
+            )
+            pending.append((index, frame, output))
+        except (ToolError, OSError) as exc:
+            results[index]["error"] = str(exc)
+    try:
+        if pending:
+            with tempfile.TemporaryDirectory(prefix="shotcut-mcp-frames-") as directory:
+                try:
+                    rendered = _render_preview_frames(
+                        project_path,
+                        [frame for _, frame, _ in pending],
+                        Path(directory),
+                    )
+                except RequestCancelled:
+                    raise
+                except (ToolError, OSError) as exc:
+                    for index, _, _ in pending:
+                        results[index]["error"] = str(exc)
+                else:
+                    for source, (index, _frame, output) in zip(
+                        rendered, pending, strict=True
+                    ):
+                        if cancellation_requested():
+                            raise RequestCancelled(
+                                "Preview publication cancelled by the MCP client."
+                            )
+                        try:
+                            shutil.copyfile(source, output.temporary)
+                            output.commit()
+                            results[index].update(
+                                created=True,
+                                size_bytes=output.target.stat().st_size,
+                                managed_output=False,
+                            )
+                        except (ToolError, OSError) as exc:
+                            results[index]["error"] = str(exc)
+                        report_progress(
+                            index + 1,
+                            len(requests),
+                            f"Processed preview {index + 1} of {len(requests)}.",
+                        )
+        report_progress(len(requests), len(requests), "Preview batch finished.")
+    finally:
+        for _, _, output in pending:
+            output.cleanup()
     return {
         "requested": len(requests),
         "created": sum(bool(item.get("created")) for item in results),
         "partial_completion_possible": True,
         "results": results,
     }
-
-
-def _preview_batch_item(
-    project_path: Path, output_path: Path, frame: int, overwrite: bool
-) -> dict[str, object]:
-    try:
-        return render_preview(project_path, output_path, frame, overwrite)
-    except RequestCancelled:
-        raise
-    except (ToolError, OSError) as exc:
-        return {
-            "created": False,
-            "path": str(output_path),
-            "frame": frame,
-            "error": str(exc),
-        }
 
 
 def render_contact_sheet(
@@ -763,18 +857,10 @@ def render_contact_sheet(
     try:
         with tempfile.TemporaryDirectory(prefix="shotcut-mcp-sheet-") as directory:
             temporary_dir = Path(directory)
-            for index, frame in enumerate(frames):
-                render_preview(
-                    project_path,
-                    temporary_dir / f"frame-{index:06d}.png",
-                    frame,
-                    False,
-                )
-                report_progress(
-                    index + 1,
-                    progress_total,
-                    f"Rendered contact-sheet frame {index + 1} of {len(frames)}.",
-                )
+            _render_preview_frames(project_path, frames, temporary_dir)
+            report_progress(
+                len(frames), progress_total, "Contact-sheet frames rendered."
+            )
             _assemble_stills(
                 ffmpeg,
                 temporary_dir / "frame-%06d.png",

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Render preview batches and contact-sheet frames through one Melt process while preserving
+  frame order, duplicate selections, cancellation, and protected output promotion.
 - Cache successful version and service queries briefly, invalidating them on runtime changes
   and retrying failures immediately.
 
