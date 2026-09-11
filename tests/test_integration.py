@@ -39,7 +39,7 @@ class RealShotcutIntegrationTests(unittest.TestCase):
         executables = discover_executables()
         assert executables.ffmpeg is not None
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             media = root / "moving pattern.mp4"
             subprocess.run(
                 [
