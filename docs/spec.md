@@ -132,6 +132,9 @@ preview and render saved Shotcut projects without requiring a network service.
   available and cache readiness by executable and MLT environment identity.
 - Check RNNoise link/filter availability separately from the repository preflight. Prefer the
   latency-safe MLT 7.40 `link` service when callers construct RNNoise processing.
+- Reuse successful executable-version and service-description queries for up to 60 seconds,
+  invalidating them when executable identity or the MLT environment changes. Bound both caches
+  to 64 entries and retry failed or unavailable queries without caching them.
 - Preserve unsupported structures, but reject an edit when a target is ambiguous or when
   modifying it would require guessing about an unknown transition layout.
 - Preserve Shotcut's exclusive marker end convention and translate it to MLT's inclusive render

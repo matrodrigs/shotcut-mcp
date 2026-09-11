@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Cache successful version and service queries briefly, invalidating them on runtime changes
+  and retrying failures immediately.
+
 ## 1.5.5 (2026-09-11)
 
 ### Fixed

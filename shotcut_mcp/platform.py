@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -140,6 +141,11 @@ MLT_WARMUP_ATTEMPTS = 3
 MLT_WARMUP_BASE_TIMEOUT_SECONDS = 5
 _ENCODER_CACHE: dict[tuple[object, ...], dict[str, object]] = {}
 _ENCODER_LOCK = threading.Lock()
+_VERSION_CACHE: dict[tuple[object, ...], tuple[float, str]] = {}
+_DESCRIPTION_CACHE: dict[tuple[object, ...], tuple[float, ServiceDescription]] = {}
+_DIAGNOSTIC_LOCK = threading.Lock()
+DIAGNOSTIC_CACHE_SECONDS = 60
+DIAGNOSTIC_CACHE_ENTRIES = 64
 
 __all__ = [
     "MLT_ENVIRONMENT_KEYS",
@@ -237,9 +243,23 @@ def ensure_melt_ready(
 def version_line(executable: Path | None, args: list[str]) -> str | None:
     if executable is None:
         return None
+    key = (*runtime_identity(executable), tuple(args))
+    with _DIAGNOSTIC_LOCK:
+        cached = _VERSION_CACHE.get(key)
+        if (
+            cached is not None
+            and time.monotonic() - cached[0] < DIAGNOSTIC_CACHE_SECONDS
+        ):
+            return cached[1]
     result = run_capture([str(executable), *args], timeout=10)
     output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
-    return output.splitlines()[0] if output else None
+    version = output.splitlines()[0] if output else None
+    if result.returncode == 0 and version:
+        with _DIAGNOSTIC_LOCK:
+            if len(_VERSION_CACHE) >= DIAGNOSTIC_CACHE_ENTRIES:
+                _VERSION_CACHE.clear()
+            _VERSION_CACHE[key] = (time.monotonic(), version)
+    return version
 
 
 def _safe_version(
@@ -399,15 +419,29 @@ def describe_service(kind: object, name: object) -> ServiceDescription:
         raise ToolError("Invalid MLT service name.")
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
+    key = (*runtime_identity(melt), kind, name)
+    with _DIAGNOSTIC_LOCK:
+        cached = _DESCRIPTION_CACHE.get(key)
+        if (
+            cached is not None
+            and time.monotonic() - cached[0] < DIAGNOSTIC_CACHE_SECONDS
+        ):
+            return cached[1].copy()
     result = run_capture([str(melt), "-query", f"{kind}={name}"], timeout=30)
     text = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
     missing = bool(re.search(r"\bNo metadata for\b", text, re.I))
-    return {
+    description: ServiceDescription = {
         "kind": kind,
         "name": name,
         "available": result.returncode == 0 and bool(text) and not missing,
         "metadata": text[-20000:] or None,
     }
+    if description["available"]:
+        with _DIAGNOSTIC_LOCK:
+            if len(_DESCRIPTION_CACHE) >= DIAGNOSTIC_CACHE_ENTRIES:
+                _DESCRIPTION_CACHE.clear()
+            _DESCRIPTION_CACHE[key] = (time.monotonic(), description.copy())
+    return description
 
 
 def _extract_version(value: str | None) -> str | None:

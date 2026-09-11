@@ -21,6 +21,103 @@ from shotcut_mcp.protocol import request_cancellation
 
 
 class MeltCacheTests(unittest.TestCase):
+    def test_successful_runtime_queries_are_reused_and_invalidated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "melt"
+            executable.write_bytes(b"runtime")
+            with (
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, executable, None, None),
+                ),
+                patch("shotcut_mcp.platform.ensure_melt_ready"),
+                patch(
+                    "shotcut_mcp.platform.run_capture",
+                    return_value=subprocess.CompletedProcess([], 0, "melt 7.41.0", ""),
+                ) as run,
+            ):
+
+                def query():
+                    self.assertEqual(
+                        platform.version_line(executable, ["--version"]), "melt 7.41.0"
+                    )
+                    self.assertTrue(
+                        platform.describe_service("link", "rnnoise")["available"]
+                    )
+
+                query()
+                query()
+                self.assertEqual(run.call_count, 2)
+                executable.write_bytes(b"updated runtime")
+                query()
+                self.assertEqual(run.call_count, 4)
+                with patch.dict(os.environ, {"MLT_REPOSITORY_DENY": "changed"}):
+                    query()
+                self.assertEqual(run.call_count, 6)
+
+    def test_runtime_query_cache_expires_and_does_not_share_mutable_results(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "melt"
+            executable.touch()
+            with (
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, executable, None, None),
+                ),
+                patch("shotcut_mcp.platform.ensure_melt_ready"),
+                patch("shotcut_mcp.platform.time.monotonic", return_value=10) as clock,
+                patch(
+                    "shotcut_mcp.platform.run_capture",
+                    return_value=subprocess.CompletedProcess(
+                        [], 0, "service metadata", ""
+                    ),
+                ) as run,
+            ):
+                first = platform.describe_service("link", "rnnoise")
+                first["available"] = False
+                self.assertTrue(
+                    platform.describe_service("link", "rnnoise")["available"]
+                )
+                self.assertEqual(run.call_count, 1)
+                clock.return_value = 71
+                platform.describe_service("link", "rnnoise")
+                self.assertEqual(run.call_count, 2)
+
+    def test_missing_services_and_failed_versions_are_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "melt"
+            executable.touch()
+            with (
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, executable, None, None),
+                ),
+                patch("shotcut_mcp.platform.ensure_melt_ready"),
+                patch(
+                    "shotcut_mcp.platform.run_capture",
+                    side_effect=[
+                        subprocess.CompletedProcess(
+                            [], 0, "No metadata for rnnoise", ""
+                        ),
+                        subprocess.CompletedProcess([], 0, "rnnoise metadata", ""),
+                        subprocess.CompletedProcess([], 1, "", "failed"),
+                        subprocess.CompletedProcess([], 0, "melt 7.41.0", ""),
+                    ],
+                ),
+            ):
+                self.assertFalse(
+                    platform.describe_service("link", "rnnoise")["available"]
+                )
+                self.assertTrue(
+                    platform.describe_service("link", "rnnoise")["available"]
+                )
+                platform.version_line(executable, ["--version"])
+                self.assertEqual(
+                    platform.version_line(executable, ["--version"]), "melt 7.41.0"
+                )
+
     def setUp(self) -> None:
         platform._MELT_READY_CACHE.clear()
         platform._SERVICE_CACHE.clear()
