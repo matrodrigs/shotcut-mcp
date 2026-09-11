@@ -33,16 +33,10 @@ the MCP lock.
 | Resource exhaustion | Bounded messages, projects, operation batches, workers, pending work, process output, logs, caches, searches, diffs, and inline images |
 | Corrupt or forged backup/job metadata | Canonical project identity, owned backup filenames, validated job shapes, and bounded logs/history |
 
-MCP responses and requests share the configured newline-delimited message budget. Structured
-results are not duplicated into the text fallback on modern protocol versions. A project candidate
-that exceeds the project-size limit is rejected before backup or replacement, so the server never
-writes a project it would refuse to reopen. The default is 128 MiB;
-`SHOTCUT_MCP_MAX_PROJECT_BYTES` can select a limit between 1 MiB and 512 MiB.
-
-Render logs are bounded on disk and during progress parsing. An incomplete progress line is
-limited to 16,384 characters; oversized lines are discarded through the next delimiter so
-untrusted process output cannot accumulate indefinitely in memory. Malformed cancellation
-notifications are ignored, and legacy batches share the normal request limits and cancellation.
+Limits cover both complete payloads and incomplete process-output lines. Project candidates
+are checked before backup or replacement so the server cannot write a project it would refuse
+to reopen. See [configuration](docs/reference.md#configuration) for administrator-controlled limits
+and the [specification](docs/spec.md) for protocol and parsing contracts.
 
 ## Administrator hardening
 

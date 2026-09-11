@@ -23,9 +23,6 @@ integrators, and users who need more control.
 
 ## MCP tools
 
-Most users can work entirely through natural-language prompts. This reference is for client authors,
-integrators, and anyone who wants to understand the available tool surface.
-
 | Tool | Purpose |
 | --- | --- |
 | `shotcut_status` | Discover Shotcut, Melt, FFmpeg, and FFprobe and report versions |
@@ -34,7 +31,7 @@ integrators, and anyone who wants to understand the available tool surface.
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
 | `inspect_project` | Return revision, profile, tracks, revision-scoped item references, filters, markers, subtitles, and resources |
-| `diagnose_color_workflow` | Report normalized media color facts and Shotcut 26.6 HDR constraints |
+| `diagnose_color_workflow` | Report normalized media color facts and supported HDR workflow constraints |
 | `diagnose_missing_media` | Search bounded roots by Shotcut hash/basename and optionally render a visual candidate sheet |
 | `plan_project_edit` | Validate stable-reference operations and preview their snapshot/XML diff without changing the project |
 | `create_project` | Create a Shotcut-compatible multitrack MLT project |
@@ -69,12 +66,9 @@ for request parameters.
 | Intermediate | `prores`, `dnxhd` |
 | Audio | `audio-flac`, `audio-mp3` |
 
-Ask the client to render the complete project, a precise frame range, or a named range marker. If
-export was not already explicit, the client should first show the project, output, preset,
-range/duration, and overwrite behavior and wait for approval; it should not ask twice after an
-explicit export request. Renders run under a durable supervisor, so progress can still be checked
-or cancellation requested after the MCP client restarts. Clients should report material status,
-progress, or ETA changes rather than unchanged polls or raw logs.
+Request a complete project, a precise frame range, or a named range marker. See the
+[workflow](workflows.md#recommended-workflow) for export authorization and progress updates.
+The durable supervisor lets you check progress or cancel after the MCP client restarts.
 
 `start_render` accepts the inspected `expected_revision` and captures the saved project once into a
 sibling `<project>.render-<job_id>.mlt` file before the worker starts. Melt reads only this immutable
@@ -124,24 +118,13 @@ flowchart LR
     G --> H["Atomic replace"]
 ```
 
-Every project edit uses the following safeguards:
+Revisions use SHA-256 and edits acquire a per-project `.shotcut-mcp.lock`. The 20 most
+recent backups are retained in an isolated project namespace. Use `list_project_backups`
+and `restore_project_backup` for recovery.
 
-- SHA-256 revision checks and a per-project `.shotcut-mcp.lock`
-- Temporary-file MLT validation, an on-disk revision recheck, an isolated backup, and atomic replace
-- Retention of the 20 most recent backups in a project-specific namespace
-- Preservation of unknown XML and rejection of ambiguous transitions or basename relinks
-- One canonical allowed-root/network policy for tool paths and embedded project resources
-- Bounded MCP input/output, project candidates (128 MiB by default), process output, render logs,
-  history, searches, and previews
-
-Existing preview and render outputs are also protected: output is written to a temporary sibling,
-the target is checked again for concurrent changes, and promotion is atomic. A dedicated render
-supervisor owns completion and cancellation independently of the MCP stdio process. Every render
-uses an immutable byte-for-byte sibling project snapshot, so later edits to the live project cannot
-change the running job; the successful snapshot is retained as the exact editable delivery artifact.
-The supervisor loads the bundled package independently of the client's working directory and
-preserves that directory for relative paths. If worker initialization fails before rendering,
-`render_status.log_tail` includes the bounded startup diagnostic when available.
+Existing preview and render destinations are rechecked for concurrent changes before atomic
+promotion. Render snapshot ownership is described under [rendering](#rendering); startup
+failures are covered in [troubleshooting](installation.md#troubleshooting-and-recovery).
 
 ## Limitations
 

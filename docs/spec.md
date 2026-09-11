@@ -1,18 +1,19 @@
-# Shotcut MCP robust editor specification
+# Shotcut MCP specification
 
 ## Goal
 
-Provide a fast, local and reliable MCP server that can create, inspect, edit, validate,
+Provide a local MCP server that can create, inspect, edit, validate,
 preview and render saved Shotcut projects without requiring a network service.
 
 ## Required behavior
 
 - Preserve unknown MLT XML elements, attributes and properties when editing.
 - Apply many edits in one parse/write transaction.
-- Guard writes with a revision hash and an MCP lock file.
-- Recheck the on-disk revision after validating the temporary project and before replacement.
+- Guard writes with a revision hash and an MCP lock file; recheck the on-disk revision after
+  validating the temporary project and before replacement.
 - Create a timestamped backup in an isolated per-project namespace before every replacement.
-- Never overwrite a project, media file or render output without an explicit flag.
+- Require explicit overwrite authorization when creating a project or generated output at an
+  existing destination.
 - Render previews and exports to protected sibling files and promote them atomically only if the
   original target has not changed.
 - Supervise renders outside the MCP stdio process so completion and cancellation survive restart.
@@ -27,23 +28,16 @@ preview and render saved Shotcut projects without requiring a network service.
   created or split items without writing private identity metadata into MLT XML.
 - Preserve surviving clip identities when adding or removing a recognized transition; subsequent
   operations in the batch must continue to resolve those clips by reference or alias.
-- Support video and audio tracks, gaps, clips, same-track or all-unlocked ripple/non-ripple trim,
-  roll, slip, slide, constant timewarp, same-direction forward or reverse timeremap speed maps,
-  split, move, ripple/overwrite edits,
-  crossfades, generic MLT filters, structured clip opacity, semantic pan/zoom/rotation/volume
-  animation, native keyframed properties,
-  text/color/tone generators,
-  markers, project notes, subtitle feeds, media relinking, clip duplication, safe source
-  replacement, filter ordering, and marker updates.
+- Support the edit operations exposed by `shotcut_capabilities`; the
+  [feature reference](reference.md#features) summarizes their scope.
 - Expose MLT service discovery so callers can use filters, transitions and links installed with
   the user's Shotcut build instead of relying on a hard-coded catalog.
-- Provide project inspection and durable render-job management.
 - Return stable, structured JSON from every tool and use English for public tool descriptions,
   server instructions and error messages.
 - Guide the model to make ordinary creative choices within the user's brief, use examples as
   starting points, and discover installed services for unfamiliar effects. Cover new-project
   creation as well as existing-project editing. Ask for missing inputs or choices that materially
-  change intent; preserve explicit overwrite/export/recovery authorization without asking twice.
+  change intent; reuse existing authorization for the same action.
 - Return tool execution failures with `isError`, a stable machine-readable error code,
   recoverability, recommended action/tool, and bounded structured details while preserving the
   legacy human-readable error fields. Publish the error alternative in every current output schema;
@@ -75,7 +69,7 @@ preview and render saved Shotcut projects without requiring a network service.
 - Propagate MCP cancellation notifications to subprocess-backed operations.
 - Schedule legacy batch tool calls through the same bounded, cancellable execution path as
   individual calls, then aggregate their responses. Ignore malformed cancellation notifications
-  without replying or terminating the session.
+  without replying or terminating the session. Boolean identifiers must not alias integer request IDs.
 - Apply the configured message budget to both incoming and outgoing newline-delimited JSON-RPC.
   Reject an oversized serialized project candidate before backup or replacement, using the same
   limit enforced while loading a project. Default to 128 MiB and allow administrators to configure
@@ -97,8 +91,6 @@ preview and render saved Shotcut projects without requiring a network service.
 - Analyze media quality with independently bounded FFmpeg silence, black, freeze, interlace,
   and EBU R128 loudness checks, returning partial structured results when a filter or stream is
   unavailable.
-- Report installed FFmpeg analyzer availability in the compatibility doctor without making an
-  optional analyzer part of the core Shotcut/MLT compatibility verdict.
 - Validate project readiness through one public operation that combines local-resource and
   required-service checks with first-frame MLT processing. Report `valid` for successful
   first-frame Melt processing and `ready` only when those dependency checks also pass; do not
@@ -140,7 +132,6 @@ preview and render saved Shotcut projects without requiring a network service.
   available and cache readiness by executable and MLT environment identity.
 - Check RNNoise link/filter availability separately from the repository preflight. Prefer the
   latency-safe MLT 7.40 `link` service when callers construct RNNoise processing.
-- Work on saved `.mlt`/MLT XML projects. Unsaved GUI state is out of scope.
 - Preserve unsupported structures, but reject an edit when a target is ambiguous or when
   modifying it would require guessing about an unknown transition layout.
 - Preserve Shotcut's exclusive marker end convention and translate it to MLT's inclusive render
@@ -150,7 +141,7 @@ preview and render saved Shotcut projects without requiring a network service.
 - Generic filters accept native MLT properties; the MCP does not promise that every third-party
   filter is available or renderable on every machine. Structured clip opacity owns and reuses one
   brightness filter, keeps its RGB level neutral, and animates only alpha.
-- `animate_clip` compiles normalized creative keyframes to MCP-owned Shotcut 26.6 filters: affine
+- `animate_clip` compiles normalized creative keyframes to MCP-owned MLT filters: affine
   rectangle/rotation for transform, neutral-brightness alpha for opacity, and volume level in dB.
   Reapplying it reuses only those owned filters and leaves user-created filters untouched.
 - Deny network resources and sidecar/path-bearing consumer properties by default. Administrators
@@ -184,10 +175,11 @@ preview and render saved Shotcut projects without requiring a network service.
   fields; keep JSON Schema validation authoritative for MCP requests. Use standard-library
   `TypedDict` contracts for stable snapshots, media analyses, render metadata and tool schemas,
   including nullable and optional fields. Do not replace validation with unchecked casts.
+  Mark guaranteed fields as required, while retaining optional fields for negotiated protocol
+  versions and legacy render metadata. Give computed status and diagnostic results explicit
+  contracts without dropping unknown persisted metadata extensions from render responses.
 - Validate known persistent render fields and FFprobe result shapes before using them;
   preserve unknown render metadata extensions and keep path/revision/output checks in place.
-- Ignore malformed cancellation identifiers without sending a notification response or
-  interrupting the stdio server. Boolean identifiers must not alias integer request IDs.
 - MCP negotiation, schema-validation, batching and cancellation tests.
 - Protocol-version tests for token-scoped, monotonic progress notifications.
 - Unit tests through public project, preview and render APIs.

@@ -9,9 +9,8 @@ at runtime, so you do not need to know individual tool names or request schemas.
 
 Give the assistant your goal, available media, destination folder or saved project, and any
 constraints that matter: audience, approximate length, aspect ratio, tone, or moments to retain.
-These are useful creative inputs, not a required questionnaire. Within your brief, the assistant
-can choose pacing, cuts, framing, titles, and transitions, then show a preview for iteration.
-It can discover installed effects and combine operations beyond the examples below.
+Within your brief, the assistant can choose pacing, cuts, framing, titles, and transitions,
+discover installed effects, and show a preview for iteration.
 
 For a new project, the assistant can choose a descriptive `.mlt` filename in your destination
 folder. Routine editing choices do not require separate approval. Replacing an existing file,
@@ -19,7 +18,7 @@ restoring a backup, and exporting still follow their explicit authorization rule
 you already requested does not need another confirmation.
 
 1. Begin with a readiness check for Shotcut MCP and the local media tools.
-2. Provide the saved `.mlt` project and source media, then describe the result you want.
+2. Provide the saved `.mlt` project or a destination for a new one, plus source media.
 3. For cleanup work, review measurements such as silence, black frames, freezes, interlacing, or
    loudness before choosing which changes to apply.
 4. For a large or sensitive edit, review the proposed changes before applying them.

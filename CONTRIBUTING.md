@@ -4,43 +4,33 @@ Start with the [architecture overview](docs/architecture.md) for the repository 
 responsibilities, and consult the [behavioral specification](docs/spec.md) for compatibility
 boundaries and verified behavior.
 
-- Support Python 3.10 or newer and use only the standard library at runtime.
-- Keep MCP stdout strictly newline-delimited UTF-8 JSON-RPC; diagnostics belong on stderr.
-- Treat an MLT project as user data: write atomically, keep backups, and preserve unknown XML.
-- Validate all external paths and subprocess arguments; never invoke a shell from the server.
-- Keep tool handlers thin. Timeline rules belong in the project model, and platform/process
-  behavior belongs in dedicated modules.
-- Follow the dependency direction in `docs/architecture.md`; preserve `project.py` and
-  `platform.py` as the stable public seams instead of importing private mechanics into handlers.
-- Keep operation selector/alias semantics in `project_document.py` and derive their public schema
-  projection in `tools.py`. Do not maintain a second operation-name list for the same behavior.
-- Keep validated Shotcut/MLT versions in `shotcut_mcp/__init__.py`; release checks verify that
-  `AGENTS.md`, `README.md`, `docs/spec.md`, and the project website contain those values.
-- Return recoverable user/input problems as tool errors without terminating the MCP server.
-- Tests must use public interfaces, include literal expected outcomes, and be named for their
-  domain seam (`project`, `protocol`, `platform`, `media`, or `render`) rather than release age.
-- Add a failing regression test before each bug fix. Real Shotcut integration is opt-in locally
-  and required by the GitHub Actions CI gate; it must use temporary projects and outputs.
-- After changing the runtime tool catalog, keep the concise human summaries in the
-  [tool reference](docs/reference.md#mcp-tools) current,
-  then run `python scripts/check_release.py --sync-tool-contracts` to refresh the mechanical
-  `manifest.json` descriptions and website tool counts.
-- Install the pinned development tools from `requirements-dev.txt`, then run
-  `python -B scripts/check_ci.py all` before publishing changes. On Windows, this command runs
-  the full unit suite through a temporary drive alias so canonical-path behavior matches CI.
-  Enable the versioned pre-push gate once per clone with
-  `git config core.hooksPath .githooks`.
-- Keep runtime, `manifest.json`, `.claude-plugin/plugin.json`, and the base version before `+` in
-  `.codex-plugin/plugin.json` aligned. Keep both client adapters pointed at
-  `scripts/shotcut_mcp_server.py`, and keep `.claude-plugin/marketplace.json` aligned with the
-  Claude manifest; the Codex plugin suffix is only a local-install cachebuster.
-  `server.json` records the latest published artifact; the release workflow derives the next URL
-  and checksum from the attached MCPB.
+Follow [AGENTS.md](AGENTS.md) for engineering practices, safety invariants, and criteria for
+running real integration. Runtime code supports Python 3.10+ and uses only the standard library.
+
+## Development checks
+
+```bash
+python -m pip install -r requirements-dev.txt
+git config core.hooksPath .githooks
+python -B scripts/check_ci.py all
+```
+
+The shared runner checks types, formatting, dead code, tests, and release contracts. On Windows
+it uses a temporary drive alias to exercise canonical paths. Real Shotcut integration is opt-in
+locally and required by CI; use temporary media and outputs.
+
+Tests should exercise public interfaces and literal expected outcomes. Name them for the domain
+seam they cover, and add a failing regression test before each bug fix.
+
+After changing the tool catalog, update the [tool reference](docs/reference.md#mcp-tools) and run
+`python -B scripts/check_release.py --sync-tool-contracts` to refresh manifest descriptions and
+website tool counts. For runtime-version changes, follow the compatibility procedure in AGENTS.md.
 
 ## Releasing
 
 1. Update `shotcut_mcp.__version__`, `manifest.json`, `.claude-plugin/plugin.json`, and the base
-   version before `+` in `.codex-plugin/plugin.json` to the same `X.Y.Z` version.
+   version before `+` in `.codex-plugin/plugin.json` to the same `X.Y.Z` version; keep the Claude
+   marketplace entry aligned. `server.json` continues to describe the latest published artifact.
 2. Close the matching `CHANGELOG.md` section with its release date and commit the changes to
    `main`.
 3. Wait for the complete `CI` workflow on that exact `main` commit to succeed.

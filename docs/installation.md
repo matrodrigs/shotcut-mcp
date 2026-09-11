@@ -59,14 +59,7 @@ readiness check. Updating a source checkout does not update an installed MCPB.
 
 ## Codex
 
-Clone the repository. No `pip install` is required.
-
-```bash
-git clone https://github.com/matrodrigs/shotcut-mcp.git
-cd shotcut-mcp
-```
-
-Register the server using an absolute path to the checked-out script.
+Use a [source checkout](#source-checkout), then register the server by its absolute path.
 
 **Windows PowerShell**
 
@@ -94,14 +87,7 @@ Run `/reload-plugins` to activate the plugin without restarting Claude Code.
 <details>
 <summary>Manual stdio registration</summary>
 
-Clone the repository. No `pip install` is required.
-
-```bash
-git clone https://github.com/matrodrigs/shotcut-mcp.git
-cd shotcut-mcp
-```
-
-Then register the server directly using an absolute path to the checked-out script.
+Use a [source checkout](#source-checkout), then register the server by its absolute path.
 
 **Windows PowerShell**
 
@@ -123,14 +109,7 @@ prompted.
 
 ## Other MCP clients
 
-Clone the repository. No `pip install` is required.
-
-```bash
-git clone https://github.com/matrodrigs/shotcut-mcp.git
-cd shotcut-mcp
-```
-
-Configure a local `stdio` server with these values:
+Use a [source checkout](#source-checkout) and configure a local `stdio` server:
 
 | Setting | Value |
 | --- | --- |
@@ -138,23 +117,29 @@ Configure a local `stdio` server with these values:
 | Command | `python` on Windows; `python3` on macOS or Linux |
 | Argument | Absolute path to `scripts/shotcut_mcp_server.py` |
 
-The `.codex-plugin` and `.claude-plugin` manifests are thin client adapters. The Claude marketplace
-entry only adds discovery and installation. Every route starts the same dependency-free Python
-server; the tools, schemas, and project-safety behavior do not fork by client.
-
 Restart the MCP client or open a new task after registration.
+
+## Source checkout
+
+For direct stdio registration, clone the repository; no `pip install` is required:
+
+```bash
+git clone https://github.com/matrodrigs/shotcut-mcp.git
+cd shotcut-mcp
+```
+
+Update it with `git pull --ff-only`, then reconnect the MCP client. This updates only
+clients registered against that checkout; installed MCPB packages have their own update route.
 
 ## Verify the installation
 
 Ask your MCP client:
 
-> Run shotcut_doctor for the full readiness check. Report detected versions, failed checks,
-> RNNoise availability, and active path policy.
+> Run shotcut_status and shotcut_doctor. Report tool paths, versions, failed runtime checks,
+> and active path policy.
 
-A healthy setup reports the discovered paths, versions, repository state, RNNoise availability,
-and active path policy. If anything is missing, the response should explain what needs attention.
-`shotcut_status` provides quick executable/version discovery; `shotcut_doctor` runs the fuller
-compatibility and optional-service checks.
+`shotcut_status` reports executable paths and versions. `shotcut_doctor` diagnoses the
+Shotcut/MLT pair, repository startup, RNNoise, and optional FFmpeg analyzers.
 
 ## Troubleshooting and recovery
 

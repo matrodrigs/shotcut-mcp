@@ -24,48 +24,8 @@ Keep modules deep: expose a small interface that hides substantial behavior. Add
 only when behavior genuinely varies or when it isolates an external dependency. Avoid
 pass-through wrappers, speculative ports, and circular imports.
 
-The intended dependency direction is:
-
-```text
-server -> protocol, tools
-tools -> platform, project, protocol, render
-project -> missing_media, platform, project_document, project_snapshot, protocol, storage
-missing_media -> platform, protocol
-project_document -> media, mlt_xml
-project_snapshot -> project_document, mlt_xml, path_policy
-render -> platform, project_snapshot, protocol, render_jobs, storage
-render_worker -> platform, render_jobs, storage
-render_jobs -> storage
-platform -> media, path_policy, processes, protocol, storage
-media -> processes, protocol
-path_policy -> mlt_xml
-processes -> path_policy, protocol
-storage -> processes
-```
-
-Runtime modules may also import the shared `errors` module. This graph describes
-package dependencies; standard-library imports are omitted.
-
-Module ownership:
-
-- `server.py`: JSON-RPC/MCP lifecycle, concurrency, cancellation, progress transport,
-  and wire compatibility.
-- `tools.py`: MCP tool catalog, schemas, annotations, and thin handler routing.
-- `project.py`: public project-level orchestration and transaction workflow.
-- `missing_media.py`: bounded missing-resource discovery, scoring, and visualization.
-- `project_document.py`: MLT XML model, timeline invariants, and edit semantics.
-- `project_snapshot.py`: read-only MCP projection and stable timing facts from an MLT document.
-- `platform.py`: stable public orchestration interface for Shotcut and MLT operations.
-- `path_policy.py`: canonical path resolution and embedded network-resource policy.
-- `processes.py`: executable discovery and cancellable child-process supervision.
-- `media.py`: FFprobe execution, caching, normalized media summaries, and bounded parsing
-  of FFmpeg quality analyzers.
-- `mlt_xml.py`: shared decoding of MLT properties and clock values.
-- `render.py`: public durable render-job lifecycle.
-- `render_worker.py`: out-of-process render ownership and final output promotion.
-- `render_jobs.py`: private persistent job metadata and bounded logs.
-- `storage.py`: locks, backups, revisions, and atomic output transactions.
-- `protocol.py`: schema validation plus request-scoped cancellation and progress context.
+Before changing module boundaries or imports, read the dependency graph and ownership table
+in [docs/architecture.md](docs/architecture.md). Keep that document as the architecture reference.
 
 Preserve the public imports from `project.py` and `platform.py`. Internal modules may be
 reorganized without changing MCP clients, tool names, schemas, result shapes, or the
@@ -213,8 +173,10 @@ cross-platform suite and static checks.
 
 ## Documentation and commits
 
-- Update `README.md`, `docs/spec.md`, security guidance, and changelog when behavior or
-  administrator policy changes.
+- Update the documentation that owns the changed behavior: onboarding in `README.md` and
+  `docs/installation.md`, contracts in `docs/spec.md`, and trust boundaries or administrator
+  policy in `SECURITY.md`. Link detailed guidance instead of duplicating it across guides.
+  Record user-visible behavior changes in the changelog.
 - Document why an invariant exists, especially when it protects against a reproduced bug.
 - Keep commits atomic and use focused messages such as `fix(render): ...`,
   `refactor(project): ...`, or `docs: ...`.
