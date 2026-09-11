@@ -6,6 +6,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import TypedDict
 from urllib.parse import unquote, urlparse
 
 from .errors import ToolError
@@ -27,6 +28,17 @@ NETWORK_SCHEMES = frozenset(
         "tcp",
         "udp",
     }
+)
+
+
+PathPolicy = TypedDict(
+    "PathPolicy",
+    {
+        "allowed_roots": list[str] | None,
+        "require_absolute_paths": bool,
+        "unsafe_consumer_properties": bool,
+        "allow_network_resources": bool,
+    },
 )
 
 
@@ -86,7 +98,7 @@ def expand_path(value: object, *, enforce_policy: bool = True) -> Path:
     return resolved
 
 
-def path_policy() -> dict[str, object]:
+def path_policy() -> PathPolicy:
     """Describe the effective path and resource policy without mutating it."""
 
     configured = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()

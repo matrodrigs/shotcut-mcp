@@ -17,6 +17,8 @@ ignore = ["E501"]
 "shotcut_mcp/tools.py" = ["UP013"]
 "shotcut_mcp/render_jobs.py" = ["UP013"]
 "shotcut_mcp/platform.py" = ["UP013"]
+"shotcut_mcp/path_policy.py" = ["UP013"]
+"shotcut_mcp/render.py" = ["UP013"]
 "scripts/build_release.py" = ["UP013"]
 "scripts/require_green_ci.py" = ["UP013"]
 

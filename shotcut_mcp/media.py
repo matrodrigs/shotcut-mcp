@@ -7,7 +7,7 @@ import json
 import math
 import re
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import (
     Literal,
@@ -154,47 +154,70 @@ QualityInterval = TypedDict(
 )
 
 
-QualityMetrics = TypedDict(
-    "QualityMetrics",
+IntervalMetrics = TypedDict(
+    "IntervalMetrics",
+    {"intervals": list[QualityInterval], "intervals_truncated": bool},
+)
+InterlaceMetrics = TypedDict(
+    "InterlaceMetrics",
     {
-        "intervals": list[QualityInterval],
-        "intervals_truncated": bool,
         "repeated_fields": dict[str, int],
         "single_frame_detection": dict[str, int],
         "multi_frame_detection": dict[str, int],
+    },
+    total=False,
+)
+LoudnessMetrics = TypedDict(
+    "LoudnessMetrics",
+    {
         "integrated_lufs": float | None,
         "loudness_range_lu": float | None,
         "lra_low_lufs": float | None,
         "lra_high_lufs": float | None,
         "true_peak_dbfs": float | None,
     },
-    total=False,
 )
-_StreamAnalysisFields = TypedDict(
-    "_StreamAnalysisFields",
-    {
-        "stream_index": int | None,
-        "status": Literal["ok", "failed"],
-        "error": str,
-    },
-    total=False,
+_StreamSuccess = TypedDict(
+    "_StreamSuccess", {"stream_index": int | None, "status": Literal["ok"]}
 )
 
 
-class StreamAnalysis(QualityMetrics, _StreamAnalysisFields):
+class IntervalAnalysis(_StreamSuccess, IntervalMetrics):
     pass
 
 
-AnalyzerResult = TypedDict(
-    "AnalyzerResult",
+class InterlaceAnalysis(_StreamSuccess, InterlaceMetrics):
+    """FFmpeg may succeed without emitting any interlace counters."""
+
+
+class LoudnessAnalysis(_StreamSuccess, LoudnessMetrics):
+    pass
+
+
+StreamFailure = TypedDict(
+    "StreamFailure",
+    {"stream_index": int | None, "status": Literal["failed"], "error": str},
+)
+StreamSuccess = IntervalAnalysis | InterlaceAnalysis | LoudnessAnalysis
+StreamAnalysis = StreamSuccess | StreamFailure
+CompletedAnalysis = TypedDict(
+    "CompletedAnalysis",
     {
-        "status": Literal["ok", "partial", "failed", "unavailable", "not_applicable"],
+        "status": Literal["ok", "partial", "failed"],
+        "filter": str,
+        "streams": list[StreamAnalysis],
+    },
+)
+SkippedAnalysis = TypedDict(
+    "SkippedAnalysis",
+    {
+        "status": Literal["unavailable", "not_applicable"],
         "filter": str,
         "streams": list[StreamAnalysis],
         "reason": str,
     },
-    total=False,
 )
+AnalyzerResult = CompletedAnalysis | SkippedAnalysis
 QualityReport = TypedDict(
     "QualityReport",
     {
@@ -505,7 +528,7 @@ def _bounded_intervals(
     return intervals[:maximum], len(intervals) > maximum
 
 
-def _parse_silence(text: str, offset: float, maximum: int) -> StreamAnalysis:
+def _parse_silence(text: str, offset: float, maximum: int) -> IntervalMetrics:
     intervals: list[QualityInterval] = []
     pending: list[float] = []
     for line in text.splitlines():
@@ -544,7 +567,7 @@ def _parse_silence(text: str, offset: float, maximum: int) -> StreamAnalysis:
     return {"intervals": shown, "intervals_truncated": truncated}
 
 
-def _parse_black(text: str, offset: float, maximum: int) -> StreamAnalysis:
+def _parse_black(text: str, offset: float, maximum: int) -> IntervalMetrics:
     intervals: list[QualityInterval] = []
     for match in re.finditer(
         r"black_start:([-+0-9.eE]+)\s+black_end:([-+0-9.eE]+)\s+"
@@ -564,7 +587,7 @@ def _parse_black(text: str, offset: float, maximum: int) -> StreamAnalysis:
     return {"intervals": shown, "intervals_truncated": truncated}
 
 
-def _parse_freeze(text: str, offset: float, maximum: int) -> StreamAnalysis:
+def _parse_freeze(text: str, offset: float, maximum: int) -> IntervalMetrics:
     intervals: list[QualityInterval] = []
     start: float | None = None
     duration: float | None = None
@@ -600,7 +623,7 @@ def _parse_freeze(text: str, offset: float, maximum: int) -> StreamAnalysis:
     return {"intervals": shown, "intervals_truncated": truncated}
 
 
-def _parse_interlace(text: str) -> StreamAnalysis:
+def _parse_interlace(text: str) -> InterlaceMetrics:
     result: dict[str, dict[str, int]] = {}
     patterns = {
         "repeated_fields": (
@@ -625,7 +648,7 @@ def _parse_interlace(text: str) -> StreamAnalysis:
                 label: int(value)
                 for label, value in zip(labels, matches[-1], strict=True)
             }
-    metrics: StreamAnalysis = {}
+    metrics: InterlaceMetrics = {}
     if "repeated_fields" in result:
         metrics["repeated_fields"] = result["repeated_fields"]
     if "single_frame_detection" in result:
@@ -640,7 +663,7 @@ def _last_metric(text: str, pattern: str) -> float | None:
     return _decimal(matches[-1]) if matches else None
 
 
-def _parse_loudness(text: str) -> StreamAnalysis:
+def _parse_loudness(text: str) -> LoudnessMetrics:
     summary = text.rsplit("Summary:", 1)[-1]
     return {
         "integrated_lufs": _last_metric(summary, r"\bI:\s*([-+0-9.eE]+)\s+LUFS"),
@@ -648,6 +671,25 @@ def _parse_loudness(text: str) -> StreamAnalysis:
         "lra_low_lufs": _last_metric(summary, r"LRA low:\s*([-+0-9.eE]+)\s+LUFS"),
         "lra_high_lufs": _last_metric(summary, r"LRA high:\s*([-+0-9.eE]+)\s+LUFS"),
         "true_peak_dbfs": _last_metric(summary, r"\bPeak:\s*([-+0-9.eE]+)\s+dBFS"),
+    }
+
+
+def _successful_analysis(
+    name: str, text: str, stream_index: int | None, offset: float, maximum: int
+) -> StreamSuccess:
+    if name == "interlace":
+        return {**_parse_interlace(text), "stream_index": stream_index, "status": "ok"}
+    if name == "loudness":
+        return {**_parse_loudness(text), "stream_index": stream_index, "status": "ok"}
+    parser = {
+        "silence": _parse_silence,
+        "black": _parse_black,
+        "freeze": _parse_freeze,
+    }[name]
+    return {
+        **parser(text, offset, maximum),
+        "stream_index": stream_index,
+        "status": "ok",
     }
 
 
@@ -815,13 +857,6 @@ def analyze_media_quality(
     completed = 0
     report_progress(0, total, "Starting media quality analysis.")
     results: dict[str, AnalyzerResult] = {}
-    parsers: dict[str, Callable[[str], StreamAnalysis]] = {
-        "silence": lambda text: _parse_silence(text, start, maximum_intervals),
-        "black": lambda text: _parse_black(text, start, maximum_intervals),
-        "freeze": lambda text: _parse_freeze(text, start, maximum_intervals),
-        "interlace": _parse_interlace,
-        "loudness": _parse_loudness,
-    }
     for name in analyzers:
         filter_name, kind = QUALITY_ANALYZERS[name]
         streams = streams_by_type[kind]
@@ -874,9 +909,9 @@ def analyze_media_quality(
                     "error": (text.strip() or "FFmpeg failed")[-1200:],
                 }
             else:
-                item = parsers[name](text)
-                item["stream_index"] = stream_index
-                item["status"] = "ok"
+                item = _successful_analysis(
+                    name, text, stream_index, start, maximum_intervals
+                )
             stream_results.append(item)
             completed += 1
             report_progress(

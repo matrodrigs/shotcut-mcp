@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Literal, TypedDict
 
 from .errors import ConflictError, RequestCancelled, ToolError
 from .platform import (
@@ -37,6 +38,43 @@ from .render_jobs import (
     write_job,
 )
 from .storage import OutputTransaction, RenderInputSnapshot, process_is_alive
+
+RenderArtifact = TypedDict(
+    "RenderArtifact",
+    {
+        "kind": Literal["rendered_media", "editable_project"],
+        "path": str,
+        "uri": str,
+        "mime_type": str,
+        "size_bytes": int,
+        "revision": str,
+    },
+)
+_RenderStatusFields = TypedDict(
+    "_RenderStatusFields",
+    {
+        "output_exists": bool,
+        "log_tail": str | None,
+        "eta_seconds": float | None,
+        "eta_confidence": str | None,
+        "eta_basis": str | None,
+        "editable_project_exists": bool,
+        "artifacts": list[RenderArtifact],
+        "delivery_complete": bool,
+    },
+)
+_CancellationStatus = TypedDict(
+    "_CancellationStatus", {"cancellation_requested": Literal[True]}
+)
+
+
+class RenderStatus(RenderJob, _RenderStatusFields):
+    """Live observations added to persisted metadata, including unknown extensions."""
+
+
+class CancellationStatus(RenderStatus, _CancellationStatus):
+    """Cancellation was requested but the worker has not yet finalized the job."""
+
 
 RUNNING_JOBS: dict[str, subprocess.Popen[bytes]] = {}
 _RUNNING_JOBS_LOCK = threading.Lock()
@@ -467,7 +505,7 @@ def _artifact_mime_type(path: Path, *, editable: bool = False) -> str:
     return guessed or "application/octet-stream"
 
 
-def _completed_artifacts(metadata: RenderJob) -> list[dict[str, object]]:
+def _completed_artifacts(metadata: RenderJob) -> list[RenderArtifact]:
     if metadata.get("status") != "completed":
         return []
     revision = metadata.get("rendered_project_revision") or metadata.get(
@@ -512,7 +550,7 @@ def _completed_artifacts(metadata: RenderJob) -> list[dict[str, object]]:
         return []
 
 
-def render_status(job_id: object) -> dict[str, object]:
+def render_status(job_id: object) -> RenderStatus:
     job_id = validate_job_id(job_id)
     metadata = read_job(job_id)
     with _RUNNING_JOBS_LOCK:
@@ -566,7 +604,8 @@ def render_status(job_id: object) -> dict[str, object]:
             OutputTransaction.deserialize(metadata.get("output_transaction")).cleanup()
             _cleanup_render_input(metadata)
             write_job(metadata)
-    result: dict[str, object] = dict(metadata)
+    # A typed copy keeps unknown persisted extensions in the public response.
+    result = metadata.copy()
     output_path = Path(metadata["output_path"])
     progress, log_tail = read_progress(Path(metadata["log_path"]))
     result["progress_percent"] = (
@@ -576,11 +615,11 @@ def render_status(job_id: object) -> dict[str, object]:
         if progress is not None
         else metadata.get("progress_percent")
     )
-    result["output_exists"] = output_path.is_file()
+    output_exists = output_path.is_file()
     result["output_size_bytes"] = (
         output_path.stat().st_size if output_path.is_file() else None
     )
-    result["log_tail"] = log_tail or read_progress(startup_log_path(job_id))[1]
+    log_tail = log_tail or read_progress(startup_log_path(job_id))[1]
     now = float(metadata.get("finished_at") or time.time())
     result["elapsed_seconds"] = max(0.0, now - float(metadata.get("started_at") or now))
     eta_seconds, eta_confidence, eta_basis = (
@@ -588,20 +627,25 @@ def render_status(job_id: object) -> dict[str, object]:
         if metadata.get("status") in TERMINAL_STATUSES
         else _eta(metadata)
     )
-    result["eta_seconds"] = eta_seconds
-    result["eta_confidence"] = eta_confidence
-    result["eta_basis"] = eta_basis
     editable_value = metadata.get("editable_project_path")
-    result["editable_project_exists"] = (
+    editable_project_exists = (
         isinstance(editable_value, str) and Path(editable_value).is_file()
     )
     result["rendered_project_revision"] = metadata.get(
         "rendered_project_revision"
     ) or metadata.get("project_revision")
     artifacts = _completed_artifacts(metadata)
-    result["artifacts"] = artifacts
-    result["delivery_complete"] = len(artifacts) == 2
-    return result
+    return {
+        **result,
+        "output_exists": output_exists,
+        "log_tail": log_tail,
+        "eta_seconds": eta_seconds,
+        "eta_confidence": eta_confidence,
+        "eta_basis": eta_basis,
+        "editable_project_exists": editable_project_exists,
+        "artifacts": artifacts,
+        "delivery_complete": len(artifacts) == 2,
+    }
 
 
 def list_render_jobs(arguments: dict[str, object]) -> dict[str, object]:
@@ -617,7 +661,7 @@ def list_render_jobs(arguments: dict[str, object]) -> dict[str, object]:
     return list_jobs(status=status, cursor=cursor, limit=limit)
 
 
-def cancel_render(job_id: object) -> dict[str, object]:
+def cancel_render(job_id: object) -> RenderStatus | CancellationStatus:
     job_id = validate_job_id(job_id)
     metadata = read_job(job_id)
     if metadata.get("status") in TERMINAL_STATUSES:
@@ -632,5 +676,5 @@ def cancel_render(job_id: object) -> dict[str, object]:
             return render_status(job_id)
         time.sleep(0.05)
     result = render_status(job_id)
-    result["cancellation_requested"] = True
-    return result
+    pending: CancellationStatus = {**result, "cancellation_requested": True}
+    return pending

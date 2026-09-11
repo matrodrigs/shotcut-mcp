@@ -17,6 +17,53 @@ from shotcut_mcp.storage import OutputTransaction, RenderInputSnapshot
 
 
 class RenderMonitoringTests(unittest.TestCase):
+    def test_status_projects_live_fields_without_changing_persisted_extensions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "render.mp4"
+            output.write_bytes(b"rendered")
+            job_id = "c" * 32
+            metadata = {
+                "job_id": job_id,
+                "status": "completed",
+                "output_path": str(output),
+                "log_path": str(root / "render.log"),
+                "started_at": 1.0,
+                "finished_at": 4.0,
+                "project_revision": "original-revision",
+                "extension": {"nested": [1, "two", None]},
+                "output_exists": False,
+                "delivery_complete": True,
+            }
+            with patch.object(render_jobs, "JOB_DIR", root / "jobs"):
+                render_jobs.write_job(metadata)
+                original = render_jobs.metadata_path(job_id).read_bytes()
+                result = render_module.render_status(job_id)
+                self.assertEqual(
+                    result,
+                    {
+                        **metadata,
+                        "progress_percent": 100,
+                        "output_exists": True,
+                        "output_size_bytes": 8,
+                        "log_tail": None,
+                        "elapsed_seconds": 3.0,
+                        "eta_seconds": None,
+                        "eta_confidence": None,
+                        "eta_basis": None,
+                        "editable_project_exists": False,
+                        "rendered_project_revision": "original-revision",
+                        "artifacts": [],
+                        "delivery_complete": False,
+                    },
+                )
+                self.assertEqual(
+                    render_jobs.metadata_path(job_id).read_bytes(), original
+                )
+                self.assertEqual(output.read_bytes(), b"rendered")
+
     def test_worker_bounds_memory_and_recovers_progress_after_an_oversized_line(
         self,
     ) -> None:

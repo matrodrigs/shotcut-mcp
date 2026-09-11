@@ -12,6 +12,136 @@ from shotcut_mcp.media import analyze_media_quality, summarize_media
 
 
 class MediaQualityTests(unittest.TestCase):
+    def test_failed_and_skipped_analyzers_preserve_successful_results(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.mp4"
+            source.write_bytes(b"media")
+            ffmpeg = Path(directory) / "ffmpeg"
+            ffmpeg.write_bytes(b"binary")
+
+            def analyze(command: list[str], **_kwargs: object) -> SimpleNamespace:
+                if "-filters" in command:
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout=" .. silencedetect A->A\n .. ebur128 A->N\n .. blackdetect V->V\n",
+                        stderr="",
+                    )
+                if "ebur128" in command[command.index("-af") + 1]:
+                    return SimpleNamespace(
+                        returncode=1, stdout="", stderr="analysis failed"
+                    )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with (
+                patch(
+                    "shotcut_mcp.media.probe_media_raw",
+                    return_value={"streams": [{"index": 1, "codec_type": "audio"}]},
+                ),
+                patch(
+                    "shotcut_mcp.media.discover_executables",
+                    return_value=SimpleNamespace(ffmpeg=ffmpeg),
+                ),
+                patch("shotcut_mcp.media.run_capture", side_effect=analyze),
+            ):
+                result = analyze_media_quality(
+                    source, {"analyzers": ["silence", "loudness", "black", "freeze"]}
+                )
+            self.assertEqual(
+                result["analyzers"],
+                {
+                    "silence": {
+                        "status": "ok",
+                        "filter": "silencedetect",
+                        "streams": [
+                            {
+                                "status": "ok",
+                                "stream_index": 1,
+                                "intervals": [],
+                                "intervals_truncated": False,
+                            }
+                        ],
+                    },
+                    "loudness": {
+                        "status": "failed",
+                        "filter": "ebur128",
+                        "streams": [
+                            {
+                                "status": "failed",
+                                "stream_index": 1,
+                                "error": "analysis failed",
+                            }
+                        ],
+                    },
+                    "black": {
+                        "status": "not_applicable",
+                        "filter": "blackdetect",
+                        "streams": [],
+                        "reason": "The media has no video stream.",
+                    },
+                    "freeze": {
+                        "status": "unavailable",
+                        "filter": "freezedetect",
+                        "streams": [],
+                        "reason": "FFmpeg filter freezedetect is not installed.",
+                    },
+                },
+            )
+            self.assertEqual(source.read_bytes(), b"media")
+
+    def test_success_without_ffmpeg_metrics_keeps_existing_result_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.mp4"
+            source.write_bytes(b"media")
+            ffmpeg = Path(directory) / "ffmpeg"
+            ffmpeg.write_bytes(b"binary")
+
+            def analyze(command: list[str], **_kwargs: object) -> SimpleNamespace:
+                return SimpleNamespace(
+                    returncode=0,
+                    stderr="",
+                    stdout=" .. idet V->V\n .. ebur128 A->N\n"
+                    if "-filters" in command
+                    else "",
+                )
+
+            with (
+                patch(
+                    "shotcut_mcp.media.probe_media_raw",
+                    return_value={
+                        "streams": [
+                            {"index": 0, "codec_type": "video"},
+                            {"index": 1, "codec_type": "audio"},
+                        ]
+                    },
+                ),
+                patch(
+                    "shotcut_mcp.media.discover_executables",
+                    return_value=SimpleNamespace(ffmpeg=ffmpeg),
+                ),
+                patch("shotcut_mcp.media.run_capture", side_effect=analyze),
+            ):
+                result = analyze_media_quality(
+                    source, {"analyzers": ["interlace", "loudness"]}
+                )
+            self.assertEqual(
+                result["analyzers"]["interlace"]["streams"],
+                [{"stream_index": 0, "status": "ok"}],
+            )
+            self.assertEqual(
+                result["analyzers"]["loudness"]["streams"],
+                [
+                    {
+                        "stream_index": 1,
+                        "status": "ok",
+                        "integrated_lufs": None,
+                        "loudness_range_lu": None,
+                        "lra_low_lufs": None,
+                        "lra_high_lufs": None,
+                        "true_peak_dbfs": None,
+                    }
+                ],
+            )
+
     def test_malformed_probe_data_reports_a_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

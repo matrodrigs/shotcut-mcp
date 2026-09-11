@@ -27,10 +27,10 @@ ProgressSample = TypedDict(
         "frame": int | None,
     },
 )
-RenderJob = TypedDict(
-    "RenderJob",
+_RenderJobIdentity = TypedDict("_RenderJobIdentity", {"job_id": str})
+_RenderJobFields = TypedDict(
+    "_RenderJobFields",
     {
-        "job_id": str,
         "status": str,
         "project_path": str,
         "source_project_path": str,
@@ -73,6 +73,10 @@ RenderJob = TypedDict(
     },
     total=False,
 )
+
+
+class RenderJob(_RenderJobIdentity, _RenderJobFields):
+    """Validated persisted data; legacy jobs may omit non-identity fields."""
 
 
 def _is_progress_sample(value: object) -> TypeGuard[ProgressSample]:
