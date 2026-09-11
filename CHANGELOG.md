@@ -9,6 +9,7 @@
 - Cache successful version and service queries briefly, invalidating them on runtime changes
   and retrying failures immediately.
 - Bound materialized edit diffs without changing unified-diff output or total line counts.
+- Add reproducible performance measurements for long 1080p/4K timelines and large edit diffs.
 
 ## 1.5.5 (2026-09-11)
 

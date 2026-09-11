@@ -26,6 +26,19 @@ After changing the tool catalog, update the [tool reference](docs/reference.md#m
 `python -B scripts/check_release.py --sync-tool-contracts` to refresh manifest descriptions and
 website tool counts. For runtime-version changes, follow the compatibility procedure in AGENTS.md.
 
+## Performance measurements
+
+Run `python -B scripts/benchmark_performance.py --clips 1000 --samples 3 --4k` with
+Shotcut installed. It creates temporary media and projects, measures public MCP dispatch,
+and prints JSON to stdout and progress to stderr. Use `--clips 100`, `1000`, or `10000`
+to compare timeline sizes; omit `--4k` for 1080p. `--diff-lines` controls a separate
+large-diff measurement, including peak Python allocations (not MLT process memory).
+
+Compare first-call and repeated-call timings on the same machine and runtime. These synthetic
+workloads repeat a one-second H.264 source without effects; they exclude client transport and
+AI latency. Keep timing thresholds out of the ordinary suite: regression tests instead check
+renderer launches, cache invalidation, exact frames, diff output, and file preservation.
+
 ## Releasing
 
 1. Update `shotcut_mcp.__version__`, `manifest.json`, `.claude-plugin/plugin.json`, and the base
