@@ -167,6 +167,16 @@ class ReleaseBundleTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "README.md.*stale"):
                 validate_compatibility_contracts(root, contract)
+            shutil.copy2(ROOT / "README.md", readme)
+            spec = root / "docs/spec.md"
+            spec.write_text(
+                spec.read_text(encoding="utf-8").replace(
+                    contract["MLT family"], "0.0.x"
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "docs/spec.md.*MLT family"):
+                validate_compatibility_contracts(root, contract)
 
     def test_tool_contract_sync_updates_only_mechanical_projections(self) -> None:
         entries = [

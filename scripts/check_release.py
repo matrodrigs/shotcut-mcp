@@ -25,12 +25,12 @@ COMMON_PLUGIN_FIELDS = (
     "license",
     "keywords",
 )
-COMPATIBILITY_DOCUMENTS = (
-    Path("AGENTS.md"),
-    Path("README.md"),
-    Path("docs/spec.md"),
-    Path("docs/index.html"),
-)
+COMPATIBILITY_DOCUMENTS = {
+    Path("AGENTS.md"): ("Shotcut", "MLT serialization", "MLT family"),
+    Path("README.md"): ("Shotcut", "MLT serialization"),
+    Path("docs/spec.md"): ("Shotcut", "MLT serialization", "MLT family"),
+    Path("docs/index.html"): ("Shotcut", "MLT serialization", "MLT family"),
+}
 
 
 def runtime_compatibility_contract() -> dict[str, str]:
@@ -51,9 +51,9 @@ def runtime_compatibility_contract() -> dict[str, str]:
 def validate_compatibility_contracts(root: Path, contract: dict[str, str]) -> None:
     """Reject drift between runtime compatibility facts and maintained docs."""
 
-    for relative in COMPATIBILITY_DOCUMENTS:
+    for relative, labels in COMPATIBILITY_DOCUMENTS.items():
         source = (root / relative).read_text(encoding="utf-8")
-        missing = [label for label, value in contract.items() if value not in source]
+        missing = [label for label in labels if contract[label] not in source]
         if missing:
             raise RuntimeError(
                 f"{relative.as_posix()} compatibility contract is stale; "
