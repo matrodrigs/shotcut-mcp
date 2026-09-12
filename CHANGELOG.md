@@ -29,8 +29,6 @@
   for Shotcut 26.6.25 / MLT 7.40.0 and preserving existing project metadata.
 - Strengthen typed media and render contracts, and cover failed or cancelled overwrites,
   supervisor startup failures, and concurrent output promotion with regression tests.
-- Consolidate installation, architecture, and contributor guidance; verify documented runtime
-  dependencies and reject import cycles in the test suite.
 
 ## 1.5.4 (2026-09-07)
 
