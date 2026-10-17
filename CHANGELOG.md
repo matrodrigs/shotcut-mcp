@@ -24,237 +24,171 @@
 
 ### Changed
 
-- Render preview batches and contact-sheet frames through one Melt process while preserving
-  frame order, duplicate selections, cancellation, and protected output promotion.
-- Cache successful version and service queries briefly, invalidating them on runtime changes
-  and retrying failures immediately.
+- Render preview batches and contact-sheet frames through one Melt process while preserving frame order, duplicate selections, cancellation, and protected output promotion.
+- Cache successful version and service queries briefly, invalidating them on runtime changes and retrying failures immediately.
 - Bound materialized edit diffs without changing unified-diff output or total line counts.
 
 ## 1.5.5 (2026-09-11)
 
 ### Fixed
 
-- Recognize tested Shotcut/MLT pairs independently of project serialization. Distinguish
-  untested-version warnings from concrete runtime failures, retain conservative `compatible`
-  results, and generate the Windows integration matrix from the runtime contract.
-- Export chapters when external markers share a frame and one lacks an identifier, instead
-  of comparing a null identifier with a string during sorting.
-- Report malformed FFprobe results and persistent render fields as structured errors before
-  using them, while preserving existing media and unknown render metadata extensions.
+- Recognize tested Shotcut/MLT pairs independently of project serialization. Distinguish untested-version warnings from concrete runtime failures, retain conservative `compatible` results, and generate the Windows integration matrix from the runtime contract.
+- Export chapters when external markers share a frame and one lacks an identifier, instead of comparing a null identifier with a string during sorting.
+- Report malformed FFprobe results and persistent render fields as structured errors before using them, while preserving existing media and unknown render metadata extensions.
 
 ### Changed
 
-- Default new projects to Shotcut 26.8.1 / MLT 7.41.0 while retaining integration coverage
-  for Shotcut 26.6.25 / MLT 7.40.0 and preserving existing project metadata.
-- Strengthen typed media and render contracts, and cover failed or cancelled overwrites,
-  supervisor startup failures, and concurrent output promotion with regression tests.
+- Default new projects to Shotcut 26.8.1 / MLT 7.41.0 while retaining integration coverage for Shotcut 26.6.25 / MLT 7.40.0 and preserving existing project metadata.
+- Strengthen typed media and render contracts, and cover failed or cancelled overwrites, supervisor startup failures, and concurrent output promotion with regression tests.
 
 ## 1.5.4 (2026-09-07)
 
 ### Fixed
 
-- Normalize timeline service order in linear time when preparing edits, preserving
-  service order and unknown XML content without repeated root-list searches.
+- Normalize timeline service order in linear time when preparing edits, preserving service order and unknown XML content without repeated root-list searches.
 
 ### Changed
 
-- Route validation and contact-sheet handlers directly to project workflows and remove
-  brittle CSS string assertions that did not verify rendered layout.
-- Refresh the project website with a redesigned landing page, refined navigation,
-  and an updated timeline project icon.
+- Route validation and contact-sheet handlers directly to project workflows and remove brittle CSS string assertions that did not verify rendered layout.
+- Refresh the project website with a redesigned landing page, refined navigation, and an updated timeline project icon.
 
 ## 1.5.3 (2026-09-05)
 
 ### Fixed
 
-- Preserve destinations created concurrently with `create_project(overwrite=False)`, including
-  at atomic publication; decide backup creation under lock for authorized replacements.
-- Preserve surviving clip references across transition creation/removal, and allow updating
-  a track while retaining its current name without accepting real name collisions.
-- Preserve original source bounds when replacing speed maps, including after trim/split,
-  retain requested speed precision, and match MLT's per-frame integration and mapping origin.
-- Ignore malformed cancellation notifications without ending the MCP session. Schedule legacy
-  batch calls through the same bounded cancellation path as individual calls.
+- Preserve destinations created concurrently with `create_project(overwrite=False)`, including at atomic publication; decide backup creation under lock for authorized replacements.
+- Preserve surviving clip references across transition creation/removal, and allow updating a track while retaining its current name without accepting real name collisions.
+- Preserve original source bounds when replacing speed maps, including after trim/split, retain requested speed precision, and match MLT's per-frame integration and mapping origin.
+- Ignore malformed cancellation notifications without ending the MCP session. Schedule legacy batch calls through the same bounded cancellation path as individual calls.
 - Bound incomplete render-progress lines in memory and resume parsing after oversized lines.
 - Apply network policy to decoded remote `file:` URIs and UNC paths with mixed separators.
-- Request explicit RGBA pixels for PNG previews so Windows codec defaults do not shift colors
-  in timeremap output; compare real rendered frames with unmapped native references.
+- Request explicit RGBA pixels for PNG previews so Windows codec defaults do not shift colors in timeremap output; compare real rendered frames with unmapped native references.
 
 ### Changed
 
-- Reject speed-map replacement when legacy or externally modified maps lack trustworthy source
-  bounds. Reject reverse maps landing on source frame zero, where tested MLT integration can
-  return an invalid image; retain constant timewarp as the constant-reversal alternative.
-- Document MCPB installation and updates, diagnostic/recovery routes, compatibility coverage,
-  and the required Windows integration CI gate separately from opt-in local integration.
-- Guide editing models to make creative choices within the user's brief, discover effects,
-  create projects from a destination folder, and reuse existing authorization for the same action.
+- Reject speed-map replacement when legacy or externally modified maps lack trustworthy source bounds. Reject reverse maps landing on source frame zero, where tested MLT integration can return an invalid image; retain constant timewarp as the constant-reversal alternative.
+- Document MCPB installation and updates, diagnostic/recovery routes, compatibility coverage, and the required Windows integration CI gate separately from opt-in local integration.
+- Guide editing models to make creative choices within the user's brief, discover effects, create projects from a destination folder, and reuse existing authorization for the same action.
 
 ## 1.5.2 (2026-09-05)
 
 ### Fixed
 
-- Bootstrap the durable render supervisor through an absolute bundled entry point,
-  preserving client-relative paths and working without an installed Python package or
-  `PYTHONPATH`; retain bounded startup diagnostics when worker imports fail (#3).
-- Check Windows process liveness through a read-only native handle instead of `os.kill`,
-  so render status polling and stale-lock checks cannot signal or terminate a live owner (#3).
-- Use a semver-compatible Python requirement in the MCPB manifest so supported Python
-  installations pass Claude Desktop's installation check; reject invalid requirements
-  during source and packaged-artifact release validation (#2).
+- Bootstrap the durable render supervisor through an absolute bundled entry point, preserving client-relative paths and working without an installed Python package or `PYTHONPATH`; retain bounded startup diagnostics when worker imports fail (#3).
+- Check Windows process liveness through a read-only native handle instead of `os.kill`, so render status polling and stale-lock checks cannot signal or terminate a live owner (#3).
+- Use a semver-compatible Python requirement in the MCPB manifest so supported Python installations pass Claude Desktop's installation check; reject invalid requirements during source and packaged-artifact release validation (#2).
 
 ## 1.5.1 (2026-08-02)
 
 ### Changed
 
 - Make the MCPB Python command select the correct executable name on Windows, macOS, and Linux.
-- Require explicit export intent or a user-approved render summary in agent guidance, surface
-  concise edit/preview outcomes, and monitor only meaningful durable progress changes.
+- Require explicit export intent or a user-approved render summary in agent guidance, surface concise edit/preview outcomes, and monitor only meaningful durable progress changes.
 
 ### Added
 
-- Return completed rendered media and the exact revision-bound editable Shotcut project as
-  structured artifacts, with MCP resource links on supported protocol revisions.
+- Return completed rendered media and the exact revision-bound editable Shotcut project as structured artifacts, with MCP resource links on supported protocol revisions.
 
 ### Fixed
 
-- Render every full, range, and marker job from an immutable byte-for-byte sibling project
-  snapshot so concurrent live-project edits cannot change the render or its editable delivery.
+- Render every full, range, and marker job from an immutable byte-for-byte sibling project snapshot so concurrent live-project edits cannot change the render or its editable delivery.
 
 ## 1.5.0 (2026-07-27)
 
 ### Added
 
-- Return opaque revision-scoped `item_ref` selectors from project snapshots and support
-  transaction-local `as`/`@alias` bindings so earlier timeline edits cannot silently retarget
-  later operations in the same batch.
-- Add semantic `animate_clip` keyframes for pan, zoom, rotation, opacity, and volume while keeping
-  native MLT services, property names, and keyframe strings inside MCP-owned filters.
-- Return every tool execution failure with a published structured recovery contract, including a
-  stable error code, recoverability, recommended action/tool, and bounded contextual details.
-- Route unsupported project structures, stale render cursors, missing streams/search roots,
-  FFmpeg capability failures, unavailable visual frames, and corrupt durable render state to
-  specific safe recovery actions.
+- Return opaque revision-scoped `item_ref` selectors from project snapshots and support transaction-local `as`/`@alias` bindings so earlier timeline edits cannot silently retarget later operations in the same batch.
+- Add semantic `animate_clip` keyframes for pan, zoom, rotation, opacity, and volume while keeping native MLT services, property names, and keyframe strings inside MCP-owned filters.
+- Return every tool execution failure with a published structured recovery contract, including a stable error code, recoverability, recommended action/tool, and bounded contextual details.
+- Route unsupported project structures, stale render cursors, missing streams/search roots, FFmpeg capability failures, unavailable visual frames, and corrupt durable render state to specific safe recovery actions.
 
 ### Changed
 
-- Give cold MLT repository startup progressively longer 5, 10, and 20 second attempts through one
-  shared policy used by status, validation, preview, and rendering.
-- Double the default MLT project limit to 128 MiB and allow administrators to configure a bounded
-  1–512 MiB limit with `SHOTCUT_MCP_MAX_PROJECT_BYTES`.
-- Avoid duplicating complete structured results in text content for modern MCP clients, reducing
-  response size while retaining the full result in `structuredContent`.
+- Give cold MLT repository startup progressively longer 5, 10, and 20 second attempts through one shared policy used by status, validation, preview, and rendering.
+- Double the default MLT project limit to 128 MiB and allow administrators to configure a bounded 1–512 MiB limit with `SHOTCUT_MCP_MAX_PROJECT_BYTES`.
+- Avoid duplicating complete structured results in text content for modern MCP clients, reducing response size while retaining the full result in `structuredContent`.
 
 ### Fixed
 
-- Enforce the configured MCP message limit on outbound responses and compact oversized progress
-  notifications before they reach the client.
-- Reject an oversized serialized project candidate before validation, backup, or replacement so
-  every saved project remains readable under the configured input policy.
+- Enforce the configured MCP message limit on outbound responses and compact oversized progress notifications before they reach the client.
+- Reject an oversized serialized project candidate before validation, backup, or replacement so every saved project remains readable under the configured input policy.
 
 ## 1.4.5 (2026-07-26)
 
 ### Added
 
-- Report per-analyzer FFmpeg availability in `shotcut_doctor` and combine local-resource,
-  required-service, and first-frame Melt checks in `validate_project`.
-- Support wholly reverse timeremap speed maps and all-unlocked cross-track ripple trims that
-  preserve locked tracks and marker timing.
+- Report per-analyzer FFmpeg availability in `shotcut_doctor` and combine local-resource, required-service, and first-frame Melt checks in `validate_project`.
+- Support wholly reverse timeremap speed maps and all-unlocked cross-track ripple trims that preserve locked tracks and marker timing.
 
 ### Changed
 
-- Clarify the MCP's saved-state, edit, readiness, visual-review and recovery guidance; distinguish
-  `valid` from `ready` and avoid redundant post-edit readiness checks.
+- Clarify the MCP's saved-state, edit, readiness, visual-review and recovery guidance; distinguish `valid` from `ready` and avoid redundant post-edit readiness checks.
 
 ## 1.4.2 (2026-07-26)
 
 ### Added
 
-- Add parallel Codex and Claude Code plugin adapters plus a self-hosted Claude marketplace catalog
-  over the same client-neutral MCP stdio server.
-- Add a structured `set_clip_opacity` edit operation that accepts clip-relative keyframes,
-  preserves RGB levels, and reuses one MCP-owned filter.
+- Add parallel Codex and Claude Code plugin adapters plus a self-hosted Claude marketplace catalog over the same client-neutral MCP stdio server.
+- Add a structured `set_clip_opacity` edit operation that accepts clip-relative keyframes, preserves RGB levels, and reuses one MCP-owned filter.
 
 ### Changed
 
-- Document client-specific registration commands while preserving MCPB as the portable release
-  artifact and validate both adapters against one version and server entry point.
+- Document client-specific registration commands while preserving MCPB as the portable release artifact and validate both adapters against one version and server entry point.
 
 ### Fixed
 
-- Use MLT's still-image producer when adding or replacing durationless image media so PNG and JPEG
-  clips continue rendering after trims, splits, and source replacement.
-- Animate only filter alpha for structured opacity edits, avoiding the color darkening caused by
-  attenuating both brightness and alpha during composition.
+- Use MLT's still-image producer when adding or replacing durationless image media so PNG and JPEG clips continue rendering after trims, splits, and source replacement.
+- Animate only filter alpha for structured opacity edits, avoiding the color darkening caused by attenuating both brightness and alpha during composition.
 
 ## 1.4.1 (2026-07-25)
 
 ### Changed
 
-- Clarify that Shotcut MCP reads only the project saved on disk, prompting callers to save recent
-  GUI edits first and avoid concurrent saves.
-- Guide callers to probe representative source media before choosing a new project's dimensions
-  or frame rate when the user did not request them.
+- Clarify that Shotcut MCP reads only the project saved on disk, prompting callers to save recent GUI edits first and avoid concurrent saves.
+- Guide callers to probe representative source media before choosing a new project's dimensions or frame rate when the user did not request them.
 
 ### Fixed
 
-- Retry transient Windows sharing violations while reading durable render-job metadata so
-  `render_status` and `cancel_render` remain reliable during atomic worker updates.
+- Retry transient Windows sharing violations while reading durable render-job metadata so `render_status` and `cancel_render` remain reliable during atomic worker updates.
 
 ## 1.4.0 (2026-07-23)
 
 ### Changed
 
-- Focus operation-specific `shotcut_capabilities` responses on the requested schema, example, and
-  transaction guarantees; enforce those same schemas before planning or applying edits.
-- Publish required stable fields and typed nested collections for every tool output, including
-  identifiers, indexes, units, validation results, media streams, render jobs, and project state.
+- Focus operation-specific `shotcut_capabilities` responses on the requested schema, example, and transaction guarantees; enforce those same schemas before planning or applying edits.
+- Publish required stable fields and typed nested collections for every tool output, including identifiers, indexes, units, validation results, media streams, render jobs, and project state.
 
 ### Fixed
 
-- Require either `expected_revision` or explicitly authorized `force: true` for edits and backup
-  restores, while documenting the distinct plan and chapter-export revision contracts.
-- Reject incomplete or conflicting render ranges and structurally invalid advanced consumer
-  properties at the MCP schema seam.
-- Align operation schemas with non-zero trim deltas, non-zero bounded clip speeds, marker-update
-  requirements, and Shotcut's exclusive marker end convention.
-- Correct `validate_project` output to expose `return_code` and nullable `diagnostic` fields instead
-  of the nonexistent `validator` field.
+- Require either `expected_revision` or explicitly authorized `force: true` for edits and backup restores, while documenting the distinct plan and chapter-export revision contracts.
+- Reject incomplete or conflicting render ranges and structurally invalid advanced consumer properties at the MCP schema seam.
+- Align operation schemas with non-zero trim deltas, non-zero bounded clip speeds, marker-update requirements, and Shotcut's exclusive marker end convention.
+- Correct `validate_project` output to expose `return_code` and nullable `diagnostic` fields instead of the nonexistent `validator` field.
 
 ## 1.3.1 (2026-07-22)
 
 ### Added
 
-- Agent-facing MCP workflow instructions, described input parameters, operation-specific schemas
-  and examples, structured output contracts, recoverable conflict context, and bounded inline
-  preview images.
-- Structured FFmpeg analysis for silence, black frames, frozen video, interlacing, and EBU R128
-  loudness with bounded partial results.
-- Full-project, inclusive-frame-range, and Shotcut range-marker renders plus atomic marker chapter
-  exports.
-- Transactional clip duplication, safe source replacement, filter reordering, marker updates, and
-  token-scoped MCP progress notifications.
+- Agent-facing MCP workflow instructions, described input parameters, operation-specific schemas and examples, structured output contracts, recoverable conflict context, and bounded inline preview images.
+- Structured FFmpeg analysis for silence, black frames, frozen video, interlacing, and EBU R128 loudness with bounded partial results.
+- Full-project, inclusive-frame-range, and Shotcut range-marker renders plus atomic marker chapter exports.
+- Transactional clip duplication, safe source replacement, filter reordering, marker updates, and token-scoped MCP progress notifications.
 
 ### Changed
 
-- Single-frame previews and contact sheets can use bounded server-managed output when callers omit
-  a destination path, and local-only tools now advertise closed-world behavior.
+- Single-frame previews and contact sheets can use bounded server-managed output when callers omit a destination path, and local-only tools now advertise closed-world behavior.
 
 ### Fixed
 
-- Retry transient Windows sharing violations when atomically updating render-job state, and record
-  supervisor initialization failures instead of leaving jobs stuck as running.
-- Compare Windows media paths canonically, wait for durable render-job states in lifecycle tests,
-  and block releases unless the exact tagged `main` commit has passed CI.
+- Retry transient Windows sharing violations when atomically updating render-job state, and record supervisor initialization failures instead of leaving jobs stuck as running.
+- Compare Windows media paths canonically, wait for durable render-job states in lifecycle tests, and block releases unless the exact tagged `main` commit has passed CI.
 
 ## 1.2.0 (2026-07-22)
 
 ### Added
 
-- Exact-frame preview batches, atomic contact sheets, hardware-encoder smoke detection, render
-  ETA/history, and bounded visual missing-media candidate sheets.
-- Semantic SDR/HLG/PQ project workflows, constant timewarp, positive timeremap speed maps, and
-  roll/slip/slide plus explicit same-track ripple/non-ripple trim operations.
+- Exact-frame preview batches, atomic contact sheets, hardware-encoder smoke detection, render ETA/history, and bounded visual missing-media candidate sheets.
+- Semantic SDR/HLG/PQ project workflows, constant timewarp, positive timeremap speed maps, and roll/slip/slide plus explicit same-track ripple/non-ripple trim operations.
 - Normalized source color metadata and bounded Shotcut-hash/basename missing-media diagnosis.
 
 ### Fixed
@@ -270,15 +204,13 @@
 - `shotcut_doctor` for Shotcut 26.6.25 / MLT 7.40.x, repository, RNNoise and policy checks.
 - `plan_project_edit` for validated read-only snapshots and bounded XML diffs.
 - Restart-resilient render supervision, durable cancellation and automatic output promotion.
-- MCP input-schema validation, version-shaped tool schemas/results, 2025-03 batching and request
-  cancellation, lifecycle enforcement and bounded request resources.
+- MCP input-schema validation, version-shaped tool schemas/results, 2025-03 batching and request cancellation, lifecycle enforcement and bounded request resources.
 - Canonical allowed-root, absolute-path, network-resource and unsafe-consumer policies.
 - Cross-platform CI with Ruff, Mypy, metadata checks and pinned release tooling.
 
 ### Changed
 
-- Split project transactions, MLT document inspection, path policy, process supervision,
-  and media probing into focused modules while preserving the public MCP interface.
+- Split project transactions, MLT document inspection, path policy, process supervision, and media probing into focused modules while preserving the public MCP interface.
 - Added repository-wide engineering guidance for architecture, safety, testing, and releases.
 
 ### Fixed

@@ -1,9 +1,6 @@
 # Shotcut MCP architecture
 
-Shotcut MCP is a dependency-free Python MCP server organized around deep public seams: MCP
-transport, tool contracts, project transactions, runtime orchestration, and durable rendering.
-The lower-level modules own XML, path, process, media, and storage mechanics so callers do not
-need to coordinate those details themselves.
+Shotcut MCP is a dependency-free Python MCP server organized around deep public seams: MCP transport, tool contracts, project transactions, runtime orchestration, and durable rendering. The lower-level modules own XML, path, process, media, and storage mechanics so callers do not need to coordinate those details themselves.
 
 ## Runtime flow
 
@@ -45,12 +42,9 @@ processes -> path_policy, protocol
 storage -> path_policy, processes
 ```
 
-Runtime modules may also import the shared `errors` module. Standard-library imports and
-imports guarded by `TYPE_CHECKING` are omitted. Tests verify this graph and reject runtime cycles.
+Runtime modules may also import the shared `errors` module. Standard-library imports and imports guarded by `TYPE_CHECKING` are omitted. Tests verify this graph and reject runtime cycles.
 
-Imports should continue downward through this graph. `project.py` and `platform.py` are stable
-public seams; internal modules may be reorganized without making MCP handlers depend on private
-mechanics.
+Imports should continue downward through this graph. `project.py` and `platform.py` are stable public seams; internal modules may be reorganized without making MCP handlers depend on private mechanics.
 
 ## Ownership and sources of truth
 
@@ -61,23 +55,23 @@ mechanics.
 | Transaction ordering, locks, revision checks | `project.py` | Project workflow functions |
 | Timeline invariants and edit semantics | `project_document.py` | `ProjectDocument` through `project.py` |
 | Item selectors and transaction-local alias semantics | `project_document.py` | Derived operation schemas in `tools.py` |
-| Read-only project shape and timing | `project_snapshot.py` | `inspect_project`, render timing |
+| Read-only project shape, scoped inspection, and timing | `project_snapshot.py` | `inspect_project`, render timing |
 | Missing-resource search, scoring, and visualization | `missing_media.py` | `diagnose_missing_media` through `project.py` |
-| Executable and MLT orchestration | `platform.py` | Stable platform functions |
+| Executable and MLT orchestration, bounded source discovery | `platform.py` | Stable platform functions |
 | Executable discovery and child-process lifetime | `processes.py` | Re-exported through `platform.py` |
 | FFprobe caching, media summaries, FFmpeg analyzer commands and parsers | `media.py` | Media tools through `platform.py` |
 | Canonical path and network-resource policy | `path_policy.py` | All user-controlled data paths |
 | Shared MLT properties and clock decoding | `mlt_xml.py` | Document and path-policy internals |
-| Durable render-job lifecycle | `render.py` | Render tools |
+| Durable render-job lifecycle and audiovisual review | `render.py` | Render tools |
 | Out-of-process render ownership and final promotion | `render_worker.py` | Launched by the render workflow |
-| Persistent job metadata and bounded logs | `render_jobs.py` | Render and worker internals |
+| Persistent job metadata, admission limits, and bounded logs | `render_jobs.py` | Render and worker internals |
 | Locks, backups, revisions, atomic output | `storage.py` | Transaction owners only |
 | Schema validation and request-scoped cancellation/progress | `protocol.py` | Server and domain request context |
 | Project baseline and tested runtime pairs | `shotcut_mcp/__init__.py` | Projects, doctor, capabilities, CI |
 
-The operation selector/alias declaration is immutable and shared by edit execution and capability
-generation. Compatibility values are likewise declared once in the package and checked against
-the maintained public documentation during release validation.
+The operation selector/alias declaration is immutable and shared by edit execution and capability generation. Compatibility values are likewise declared once in the package and checked against the maintained public documentation during release validation.
+
+Storage supplies native OS locks for project transactions and durable render admission. Project transactions hold a persistent `<project>.shotcut-mcp.guard` while acquiring, recovering, using, and releasing the existing JSON/PID lock. This serializes stale-lock recovery without changing the legacy lock contract. Render admission uses a persistent `admission.lock` in the job store. Closing the handle or exiting the process releases the native lock. Never delete or replace these persistent guard files while MCP processes are active: contenders could lock different files, allowing overlapping project writes or renders beyond the configured capacity.
 
 ## Repository layout
 
@@ -92,6 +86,4 @@ shotcut-mcp/
 `-- tests/                    # Tests grouped by project, protocol, platform, media, and render seams
 ```
 
-Codex and Claude Code packaging remain adapters over the same MCP entry point. See
-[Contributing](../CONTRIBUTING.md) for tests and releases and the
-[behavioral specification](spec.md) for compatibility and preservation contracts.
+Codex and Claude Code packaging remain adapters over the same MCP entry point. See [Contributing](../CONTRIBUTING.md) for tests and releases and the [behavioral specification](spec.md) for compatibility and preservation contracts.

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Shotcut MCP — Native timeline editing through MCP</title>
   <meta name="description" content="A local, open-source MCP server for analyzing media and creating, editing, validating, previewing, and rendering native Shotcut projects.">
-  <meta name="author" content="Matheus Rodrigues">
+  <meta name="author" content="matrodrigs">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="theme-color" content="#080b10">
   <link rel="canonical" href="https://matrodrigs.github.io/shotcut-mcp/">
@@ -38,7 +38,7 @@
     "keywords": ["Shotcut", "MCP server", "Model Context Protocol", "MLT XML", "video automation"],
     "author": {
       "@type": "Person",
-      "name": "Matheus Rodrigues",
+      "name": "matrodrigs",
       "url": "https://github.com/matrodrigs"
     }
   }
@@ -193,7 +193,7 @@
         <ol class="process-list" data-workflow-sequence>
           <li>
             <span class="step-number">01</span>
-            <div><h3>Inspect the current project</h3><p>Read the profile, tracks, clips, filters, resources, and revision before making a change.</p></div>
+            <div><h3>Inspect the starting point</h3><p>Discover source media or inspect the saved project, using focused pages for large timelines.</p></div>
             <code>inspect_project → revision</code>
           </li>
           <li>
@@ -257,7 +257,7 @@
             <h3>Inspect, review, and recover</h3>
             <ul>
               <li>Inspect structure, resources, timing, and revisions before editing</li>
-              <li>Review analyzers, exact frames, contact sheets, and XML diffs</li>
+              <li>Review source quality, exact frames, contact sheets, and clips with audio</li>
               <li>Relink missing media or restore a validated isolated backup</li>
             </ul>
           </article>
@@ -290,6 +290,7 @@
           <p><strong>Default stack:</strong> Shotcut 26.8.1 · MLT 7.41.0 (7.41.x family) · Python 3.10+</p>
           <p>Windows integration also covers Shotcut 26.6.25 / MLT 7.40.0. Other version pairs receive an untested-version warning.</p>
           <p><strong>Project boundary:</strong> Saved <code>.mlt</code> files; unsaved GUI state stays in Shotcut.</p>
+          <p>Before registration, run the entry point with <code>--check</code>. See the <a href="https://github.com/matrodrigs/shotcut-mcp/blob/main/docs/installation.md#python-discovery-on-windows">installation guide</a> if Windows opens the Microsoft Store instead of Python.</p>
         </div>
 
         <div class="install-browser" data-install-browser>
@@ -340,7 +341,9 @@
                     <button class="copy-button compact" type="button" data-copy-target="#windows-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
                     <pre><code id="windows-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
 cd shotcut-mcp
-codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"</code></pre>
+$pythonExe = py -3 -c "import sys; print(sys.executable)"
+&amp; $pythonExe "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py" --check
+codex mcp add shotcut -- $pythonExe "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_server.py"</code></pre>
                   </div>
                 </details>
                 <details class="platform-details" name="codex-platform">
@@ -349,6 +352,7 @@ codex mcp add shotcut -- python "C:\path\to\shotcut-mcp\scripts\shotcut_mcp_serv
                     <button class="copy-button compact" type="button" data-copy-target="#unix-install-command"><span>Copy</span><span class="sr-only" aria-live="polite" data-copy-status></span></button>
                     <pre><code id="unix-install-command">git clone https://github.com/matrodrigs/shotcut-mcp.git
 cd shotcut-mcp
+python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py --check
 codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py</code></pre>
                   </div>
                 </details>
@@ -369,7 +373,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
               </div>
               <div class="stdio-config" aria-label="Standard stdio configuration">
                 <div><span>Name</span><code>shotcut</code></div>
-                <div><span>Command</span><code>python <em>or</em> python3</code></div>
+                <div><span>Command</span><code>Absolute Python 3.10+ executable path</code></div>
                 <div><span>Argument</span><code>/absolute/path/to/shotcut-mcp/scripts/shotcut_mcp_server.py</code></div>
               </div>
             </section>
@@ -392,7 +396,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
           </details>
           <details>
             <summary>Are my videos uploaded anywhere?</summary>
-            <p>No. The server runs locally over stdio. Media and project files stay on your computer unless your chosen AI client has separate upload behavior. Network resources embedded in projects are denied by default.</p>
+            <p>The server processes media locally and sends tool results, metadata, and preview images to your MCP client. That client may use a cloud model or upload data under its own policies. Network resources embedded in projects are denied by default.</p>
           </details>
           <details>
             <summary>Can I keep editing the result in Shotcut?</summary>
@@ -413,7 +417,7 @@ codex mcp add shotcut -- python3 /absolute/path/to/shotcut-mcp/scripts/shotcut_m
           <h2>Choose your client. Keep the project native.</h2>
         </div>
         <div>
-          <p>Start with a saved Shotcut timeline. The server inspects the project before it applies a validated revision.</p>
+          <p>Start with a saved Shotcut timeline or a folder of source media. Review the result before exporting.</p>
           <div class="final-actions">
             <a class="button button-primary" href="#install">Choose an install path</a>
             <a class="text-link" href="https://github.com/matrodrigs/shotcut-mcp/releases/latest">Download the release <span aria-hidden="true">→</span></a>

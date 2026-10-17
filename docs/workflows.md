@@ -4,33 +4,20 @@
 
 ## Recommended workflow
 
-Describe the result you want in ordinary language. The MCP client receives tool-specific guidance
-at runtime, so you do not need to know individual tool names or request schemas.
+Describe the result you want in ordinary language. The MCP client receives tool-specific guidance at runtime, so you do not need to know individual tool names or request schemas.
 
-Give the assistant your goal, available media, destination folder or saved project, and any
-constraints that matter: audience, approximate length, aspect ratio, tone, or moments to retain.
-Within your brief, the assistant can choose pacing, cuts, framing, titles, and transitions,
-discover installed effects, and show a preview for iteration.
+Give the assistant your goal, available media, destination folder or saved project, and any constraints that matter: audience, approximate length, aspect ratio, tone, or moments to retain. Within your brief, the assistant can choose pacing, cuts, framing, titles, and transitions, discover installed effects, and show a preview for iteration.
 
-For a new project, the assistant can choose a descriptive `.mlt` filename in your destination
-folder. Routine editing choices do not require separate approval. Replacing an existing file,
-restoring a backup, and exporting still follow their explicit authorization rules; an action
-you already requested does not need another confirmation.
+For a new project, the assistant can choose a descriptive `.mlt` filename in your destination folder. Routine editing choices do not require separate approval. Replacing an existing file, restoring a backup, and exporting still follow their explicit authorization rules; an action you already requested does not need another confirmation.
 
 1. Begin with a readiness check for Shotcut MCP and the local media tools.
-2. Provide the saved `.mlt` project or a destination for a new one, plus source media.
-3. For cleanup work, review measurements such as silence, black frames, freezes, interlacing, or
-   loudness before choosing which changes to apply.
+2. Provide the saved `.mlt` project or a destination for a new one, plus source media. For a source folder, the assistant can discover its media and probe representative files before choosing a project profile. Large timelines can be inspected one track or interval at a time.
+3. For cleanup work, review measurements such as silence, black frames, freezes, interlacing, or loudness before choosing which changes to apply.
 4. For a large or sensitive edit, review the proposed changes before applying them.
-5. After each visual edit batch, you receive a concise change summary and representative frames or
-   a contact sheet, making it easy to request another adjustment.
-6. When the edit is ready, request an export. If export was not already explicit, confirm the
-   project, output, preset, range or duration, and overwrite behavior first. During rendering, you
-   receive meaningful progress updates; on completion, you receive both the video and its exact
-   editable project.
+5. After each visual edit batch, you receive a concise change summary and representative frames or a contact sheet. Request a short review clip when you need to assess motion, transitions, pacing, or audio; these temporary previews cover up to 30 seconds.
+6. When the edit is ready, request an export. If export was not already explicit, confirm the project, output, preset, range or duration, and overwrite behavior first. During rendering, you receive meaningful progress updates; on completion, you receive both the video and its exact editable project.
 
-Let an MCP edit finish before saving the same project from the Shotcut GUI. After manual adjustments,
-save in Shotcut and ask the client to inspect the project again before continuing.
+Let an MCP edit finish before saving the same project from the Shotcut GUI. After manual adjustments, save in Shotcut and ask the client to inspect the project again before continuing.
 
 ## Example prompts
 
@@ -59,6 +46,10 @@ then render an H.264 web export. Monitor the job until it completes.
 ```text
 Analyze interview.mov for silence, frozen or black video, interlacing, and EBU R128 loudness.
 Return the measurements before proposing any cleanup edits.
+```
+
+```text
+Show me a 15-second preview around the first transition, with audio, so I can review the pacing.
 ```
 
 ```text

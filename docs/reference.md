@@ -2,8 +2,7 @@
 
 [Shotcut MCP](../README.md) · [Installation](installation.md) · [Workflow and examples](workflows.md)
 
-Detailed capabilities, MCP tools, export presets, and runtime policy for client authors,
-integrators, and users who need more control.
+Detailed capabilities, MCP tools, export presets, and runtime policy for client authors, integrators, and users who need more control.
 
 [Features](#features) · [Tools](#mcp-tools) · [Rendering](#rendering) · [Configuration](#configuration) · [Safety](#transactional-safety) · [Limitations](#limitations)
 
@@ -17,7 +16,7 @@ integrators, and users who need more control.
 | Effects | Animate clip pan, zoom, rotation, opacity, and volume with structured creative values; add, update, reorder, and remove native MLT filters on a clip, track, or project when lower-level control is needed |
 | Generators | Color, dynamic text, tone, and noise |
 | Project data | Profiles, semantic SDR/HLG/PQ workflows, notes, editable markers, subtitles, assisted hash-based relinking, and unknown XML preservation |
-| Review | Compatibility doctor, source-quality and color analysis, inspection, read-only edit plans/diffs, MLT validation, preview batches, and atomic contact sheets |
+| Sources and review | Bounded media discovery, compatibility doctor, source-quality and color analysis, scoped inspection, read-only edit plans/diffs, MLT validation, preview batches, contact sheets, and short audiovisual previews |
 | Export | Atomic chapter files and restart-resilient full/range/marker renders with ETA/history, safe presets, and hardware-encoder smoke detection |
 | Recovery | Per-project isolated backups, revision conflict detection, backup listing, and validated restore |
 
@@ -54,10 +53,7 @@ integrators, and users who need more control.
 | `list_project_backups` | List retained project backups and revisions |
 | `restore_project_backup` | Validate and atomically restore a selected backup |
 
-Clients receive full JSON schemas, operation examples, revision requirements, stable item-reference
-guidance, and animation contracts at runtime. Integrators can consult the
-[behavioral specification](spec.md); the published tool schemas remain the source of truth
-for request parameters.
+Clients receive full JSON schemas, operation examples, revision requirements, stable item-reference guidance, and animation contracts at runtime. Integrators can consult the [behavioral specification](spec.md); the published tool schemas remain the source of truth for request parameters.
 
 ## Project inspection
 
@@ -90,24 +86,15 @@ Use `render_review_clip` to assess movement and sound. Supply zero-based inclusi
 | Intermediate | `prores`, `dnxhd` |
 | Audio | `audio-flac`, `audio-mp3` |
 
-Request a complete project, a precise frame range, or a named range marker. See the
-[workflow](workflows.md#recommended-workflow) for export authorization and progress updates.
-The durable supervisor lets you check progress or cancel after the MCP client restarts.
+Request a complete project, a precise frame range, or a named range marker. See the [workflow](workflows.md#recommended-workflow) for export authorization and progress updates. The durable supervisor lets you check progress or cancel after the MCP client restarts. By default, up to two durable renders can be active in the same user's shared job store. When capacity is reached, inspect `list_render_jobs` and wait or cancel a job before retrying; new requests are rejected rather than queued. This limit is separate from concurrent MCP calls.
 
-`start_render` accepts the inspected `expected_revision` and captures the saved project once into a
-sibling `<project>.render-<job_id>.mlt` file before the worker starts. Melt reads only this immutable
-snapshot. When `render_status` reaches `completed`, modern MCP clients receive resource links for
-both the rendered media and that exact editable project; older clients receive both canonical paths
-and artifact metadata in text.
+`start_render` accepts the inspected `expected_revision` and captures the saved project once into a sibling `<project>.render-<job_id>.mlt` file before the worker starts. Melt reads only this immutable snapshot. When `render_status` reaches `completed`, modern MCP clients receive resource links for both the rendered media and that exact editable project; older clients receive both canonical paths and artifact metadata in text.
 
-HDR presets use verified 10-bit software encoders; codec and hardware availability still depend on
-the local build. Preview and final outputs are written transactionally and replace their destination
-only after the new file completes successfully.
+HDR presets use verified 10-bit software encoders; codec and hardware availability still depend on the local build. Preview and final outputs are written transactionally and replace their destination only after the new file completes successfully.
 
 ## Configuration
 
-Common Shotcut installations are detected automatically, so most users can skip this section.
-Administrators and client integrators can override discovery or tighten runtime policy when needed:
+Common Shotcut installations are detected automatically, so most users can skip this section. Administrators and client integrators can override discovery or tighten runtime policy when needed:
 
 | Environment variable | Purpose |
 | --- | --- |
@@ -121,13 +108,12 @@ Administrators and client integrators can override discovery or tighten runtime 
 | `SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES` | Set to `1` to allow arbitrary consumer properties and sidecar formats |
 | `SHOTCUT_MCP_MAX_WORKERS` | Concurrent MCP tool requests, clamped to 1–8 (default 4) |
 | `SHOTCUT_MCP_MAX_PENDING` | Maximum in-flight tool requests or legacy batch items, clamped to 1–256 (default 32) |
+| `SHOTCUT_MCP_MAX_ACTIVE_RENDERS` | Active durable renders per shared user job store, clamped to 1–8 (default 2); excess starts return a capacity error |
 | `SHOTCUT_MCP_MAX_PROJECT_BYTES` | Maximum saved MLT project size, clamped to 1–512 MiB (default 128 MiB) |
 | `SHOTCUT_MCP_MAX_MESSAGE_BYTES` | Maximum inbound or outbound newline-delimited MCP message size, clamped to 1 KiB–16 MiB (default 4 MiB) |
 | `SHOTCUT_MCP_MAX_INLINE_IMAGE_BYTES` | Maximum preview image embedded in an MCP result, clamped to the message budget (default 1 MiB; `0` disables) |
 
-Network resources and unsafe consumer properties are denied by default. These variables are
-administrator policies: tools cannot override them per request. `shotcut_status` and
-`shotcut_doctor` report the active policy.
+Network resources and unsafe consumer properties are denied by default. These variables are administrator policies: tools cannot override them per request. `shotcut_status` and `shotcut_doctor` report the active path policy; `shotcut_status` also reports discovery and concurrency environment overrides.
 
 ## Transactional safety
 
@@ -142,36 +128,19 @@ flowchart LR
     G --> H["Atomic replace"]
 ```
 
-Revisions use SHA-256 and edits acquire a per-project `.shotcut-mcp.lock`. The 20 most
-recent backups are retained in an isolated project namespace. Use `list_project_backups`
-and `restore_project_backup` for recovery.
+Revisions use SHA-256 and edits acquire a per-project `.shotcut-mcp.lock`. The 20 most recent backups are retained in an isolated project namespace. Use `list_project_backups` and `restore_project_backup` for recovery.
 
-Existing preview and render destinations are rechecked for concurrent changes before atomic
-promotion. Render snapshot ownership is described under [rendering](#rendering); startup
-failures are covered in [troubleshooting](installation.md#troubleshooting-and-recovery).
+Existing preview and render destinations are rechecked for concurrent changes before atomic promotion. Render snapshot ownership is described under [rendering](#rendering); startup failures are covered in [troubleshooting](installation.md#troubleshooting-and-recovery).
 
 ## Limitations
 
 - The MCP edits the latest project state saved to disk; it cannot see unsaved GUI changes.
 - Unknown MLT XML is preserved, but edits are rejected when a target cannot be identified safely.
 - Third-party filters, GPU/OpenGL services, codecs, and fonts vary by Shotcut installation.
-- Quality analysis depends on filters present in the installed FFmpeg build. Checks run
-  independently and report `unavailable` or `not_applicable` instead of failing the whole analysis.
-- Speed maps accept wholly forward or wholly reverse non-zero ramps. Zero-crossing ramps and
-  third-party/ambiguous chain links remain rejected.
-- Replacing a speed map retains its selected source interval, including after trims or splits.
-  Maps created by older versions without original source bounds, or changed outside the owned
-  mapping, must be rebuilt from the original clip before replacement. Use a backup when needed;
-  the server leaves the project unchanged when it cannot establish the source range safely.
-- The tested MLT timeremap can return an invalid image when negative-speed integration lands
-  on source frame zero. Such maps are rejected with `speed_map_reverse_boundary_unsupported`;
-  no source frames are silently removed and no speed values are perturbed. For constant reversal,
-  use `set_clip_speed`; otherwise choose a source range that stays above zero. This boundary needs
-  an upstream MLT fix before it can be included in the verified interface.
-- Ripple trim can affect only the target track or every unlocked track. Locked tracks are left
-  unchanged, and a cross-track removal that intersects a transition is rejected rather than
-  rewired speculatively.
-- Changing project FPS preserves recognized timeline and marker frame numbers; it does not
-  automatically retime the creative edit.
-- If the dedicated render supervisor itself is forcibly killed while Melt survives, the job is
-  reported as `orphaned` and its temporary output is retained rather than guessed at or promoted.
+- Quality analysis depends on filters present in the installed FFmpeg build. Checks run independently and report `unavailable` or `not_applicable` instead of failing the whole analysis.
+- Speed maps accept wholly forward or wholly reverse non-zero ramps. Zero-crossing ramps and third-party/ambiguous chain links remain rejected.
+- Replacing a speed map retains its selected source interval, including after trims or splits. Maps created by older versions without original source bounds, or changed outside the owned mapping, must be rebuilt from the original clip before replacement. Use a backup when needed; the server leaves the project unchanged when it cannot establish the source range safely.
+- The tested MLT timeremap can return an invalid image when negative-speed integration lands on source frame zero. Such maps are rejected with `speed_map_reverse_boundary_unsupported`; no source frames are silently removed and no speed values are perturbed. For constant reversal, use `set_clip_speed`; otherwise choose a source range that stays above zero. This boundary needs an upstream MLT fix before it can be included in the verified interface.
+- Ripple trim can affect only the target track or every unlocked track. Locked tracks are left unchanged, and a cross-track removal that intersects a transition is rejected rather than rewired speculatively.
+- Changing project FPS preserves recognized timeline and marker frame numbers; it does not automatically retime the creative edit.
+- If the dedicated render supervisor itself is forcibly killed while Melt survives, the job is reported as `orphaned` and its temporary output is retained rather than guessed at or promoted.
