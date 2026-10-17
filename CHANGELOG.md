@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Preserve success confirmations and saved revisions for large project creations, edits, and restores, including batches, so callers do not repeat an already saved change.
+- Correct media-replacement guidance to name the supported `replace_item_media` operation.
+
+### Changed
+
+- Bound project inspection with track and interval filters, summary mode, and revision-checked pagination for large timelines.
+
 ## 1.5.6 (2026-09-12)
 
 ### Changed

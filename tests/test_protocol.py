@@ -841,6 +841,7 @@ class ProtocolNegotiationTests(unittest.TestCase):
         self.assertIn("expected_revision", start_render)
         inspect_schema = by_name["inspect_project"]["outputSchema"]
         self.assertIn("tracks", inspect_schema["oneOf"][0]["required"])
+        self.assertIn("pagination", inspect_schema["oneOf"][0]["required"])
         track_schema = inspect_schema["properties"]["tracks"]["items"]
         self.assertEqual(track_schema["properties"]["track_id"]["type"], "string")
         self.assertEqual(
@@ -871,7 +872,20 @@ class ProtocolNegotiationTests(unittest.TestCase):
                 fps_den=1,
                 title="Output schema",
             )
-            self.assertEqual(schema_errors(document.snapshot(), inspect_schema), [])
+            document.path.write_bytes(document.to_bytes())
+            response = handle_request(
+                request(
+                    "tools/call",
+                    {
+                        "name": "inspect_project",
+                        "arguments": {"path": str(document.path)},
+                    },
+                )
+            )
+            self.assertEqual(
+                schema_errors(response["result"]["structuredContent"], inspect_schema),
+                [],
+            )
 
     def test_revision_descriptions_match_each_tool_contract(self) -> None:
         by_name = {tool["name"]: tool for tool in TOOLS}
@@ -1151,7 +1165,13 @@ class ProtocolNegotiationTests(unittest.TestCase):
                 schema = tool["outputSchema"]
                 properties = schema["properties"]
                 self.assertTrue(properties)
-                self.assertEqual(len(schema.get("oneOf", [])), 2)
+                alternatives = (
+                    3
+                    if tool["name"]
+                    in {"create_project", "edit_project", "restore_project_backup"}
+                    else 2
+                )
+                self.assertEqual(len(schema.get("oneOf", [])), alternatives)
                 success_required = schema["oneOf"][0]["required"]
                 error_required = schema["oneOf"][1]["required"]
                 self.assertTrue(success_required)

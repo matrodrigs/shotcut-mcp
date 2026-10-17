@@ -24,7 +24,13 @@ from .protocol import (
     request_progress,
     schema_errors,
 )
-from .tools import HANDLERS, TOOLS, ToolDefinition, validate_tool_arguments
+from .tools import (
+    HANDLERS,
+    PROJECT_COMMIT_FIELDS,
+    TOOLS,
+    ToolDefinition,
+    validate_tool_arguments,
+)
 
 SERVER_NAME = "shotcut-mcp"
 LATEST_PROTOCOL_VERSION = "2025-11-25"
@@ -49,6 +55,10 @@ SERVER_INSTRUCTIONS = (
     "and volume. Batch related edits. Never use force or overwrite without explicit "
     "authorization. On a revision conflict, re-inspect and reconsider; never retry with "
     "force automatically.\n"
+    "Inspection pages: inspect_project defaults to 100 entries per collection page, plus owning track metadata. "
+    "Use track/frame filters or detail=summary to focus, and follow pagination.next_offset "
+    "with expected_revision for more. A result_truncated mutation receipt still means the "
+    "change committed: inspect that revision rather than repeating the edit.\n"
     "Creating: When asked to create a project, use create_project. Choose a descriptive "
     ".mlt filename in the supplied destination folder; ask for a destination only if "
     "none is available.\n"
@@ -134,7 +144,13 @@ def _tool_result(
     protocol_version: str,
     is_error: bool = False,
     tool_name: str | None = None,
+    max_result_bytes: int | None = None,
 ) -> dict[str, object]:
+    budget = (
+        max_result_bytes
+        if max_result_bytes is not None
+        else _message_size_limit() - 256
+    )
     structured = protocol_version in STRUCTURED_CONTENT_PROTOCOLS
     if structured:
         if is_error:
@@ -157,10 +173,64 @@ def _tool_result(
     }
     if structured:
         result["structuredContent"] = payload
+    committed_field = PROJECT_COMMIT_FIELDS.get(tool_name or "")
+    if (
+        not is_error
+        and committed_field is not None
+        and payload.get(committed_field) is True
+        and payload.get("result_truncated") is not True
+        and _encoded_size(result, budget) > budget
+    ):
+        receipt = _commit_receipt(committed_field, payload["revision"])
+        result = _tool_result(
+            receipt, protocol_version, tool_name=tool_name, max_result_bytes=budget
+        )
+        for key in (
+            "path",
+            "previous_revision",
+            "backup_path",
+            "item_bindings",
+            "operation_results",
+            "validation",
+        ):
+            if key not in payload:
+                continue
+            candidate = {**receipt, key: payload[key]}
+            formatted = _tool_result(
+                candidate,
+                protocol_version,
+                tool_name=tool_name,
+                max_result_bytes=budget,
+            )
+            if _encoded_size(formatted, budget) <= budget:
+                receipt = candidate
+                result = formatted
     return result
 
 
+def _commit_receipt(committed_field: str, revision: object) -> dict[str, object]:
+    return {
+        committed_field: True,
+        "revision": revision,
+        "result_truncated": True,
+        "recommended_tool": "inspect_project",
+    }
+
+
+def _encoded_size(value: object, maximum: int | None = None) -> int:
+    size = 0
+    for part in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(
+        value
+    ):
+        size += len(part.encode("utf-8"))
+        if maximum is not None and size > maximum:
+            break
+    return size
+
+
 def _success_result_text(tool_name: str | None, payload: Mapping[str, object]) -> str:
+    if payload.get("result_truncated") is True:
+        return "Project change committed. Do not repeat the edit."
     if tool_name == "shotcut_doctor":
         status = payload.get("status")
         if status == "untested":
@@ -380,6 +450,7 @@ def _handle_tool_call(
     session: ProtocolSession,
     request_id: object,
     progress_callback: Callable[[object, float, float | None, str | None], None] | None,
+    max_response_bytes: int | None,
 ) -> dict[str, object]:
     call_params = message.get("params")
     if not is_object(call_params):
@@ -392,6 +463,27 @@ def _handle_tool_call(
     arguments = call_params.get("arguments", {})
     if not is_object(arguments):
         return _error(request_id, -32602, "Tool arguments must be an object.")
+    envelope_bytes = (
+        _encoded_size({"jsonrpc": "2.0", "id": request_id, "result": {}}) - 2 + 1
+    )
+    maximum = (
+        _message_size_limit() if max_response_bytes is None else max_response_bytes
+    )
+    result_budget = maximum - envelope_bytes
+    committed_field = PROJECT_COMMIT_FIELDS.get(name)
+    if committed_field:
+        minimum_receipt = _tool_result(
+            _commit_receipt(committed_field, "0" * 64),
+            session.protocol_version,
+            tool_name=name,
+            max_result_bytes=result_budget,
+        )
+        if _encoded_size(minimum_receipt) > result_budget:
+            return _error(
+                request_id,
+                -32602,
+                "Use a shorter request id so the commit receipt fits the message limit.",
+            )
     raw_meta = call_params.get("_meta", {})
     if not is_object(raw_meta):
         return _error(request_id, -32602, "Tool _meta must be an object.")
@@ -436,7 +528,12 @@ def _handle_tool_call(
         )
         with request_progress(reporter):
             payload = handler(arguments)
-        result = _tool_result(payload, session.protocol_version, tool_name=name)
+        result = _tool_result(
+            payload,
+            session.protocol_version,
+            tool_name=name,
+            max_result_bytes=result_budget,
+        )
     except RequestCancelled as exc:
         return _error(
             request_id,
@@ -473,6 +570,8 @@ def handle_request(
     session: ProtocolSession | None = None,
     progress_callback: Callable[[object, float, float | None, str | None], None]
     | None = None,
+    *,
+    max_response_bytes: int | None = None,
 ) -> dict[str, object] | None:
     active_session = session or ProtocolSession()
     request_id = message.get("id")
@@ -512,12 +611,30 @@ def handle_request(
             active_session,
             request_id,
             progress_callback,
+            max_response_bytes,
         )
     return {
         "jsonrpc": "2.0",
         "id": request_id,
         "error": {"code": -32601, "message": f"Method not found: {method}"},
     }
+
+
+def _response_size_error(request_id: object, maximum: int) -> dict[str, object]:
+    response = _error(
+        request_id,
+        -32603,
+        "MCP response exceeds the configured message-size limit.",
+        {
+            "maximum_bytes": maximum,
+            "recommended_action": "narrow_request_or_increase_message_limit",
+        },
+    )
+    if _encoded_size(response, maximum) + 1 > maximum:
+        response = _error(request_id, -32603, "MCP response is too large.")
+    if _encoded_size(response, maximum) + 1 > maximum:
+        response = _error(None, -32603, "MCP response is too large.")
+    return response
 
 
 def write_message(
@@ -544,15 +661,7 @@ def write_message(
                 return
         else:
             request_id = message.get("id") if is_object(message) else None
-            fallback = _error(
-                request_id,
-                -32603,
-                "MCP response exceeds the configured message-size limit.",
-                {
-                    "maximum_bytes": maximum,
-                    "recommended_action": "narrow_request_or_increase_message_limit",
-                },
-            )
+            fallback = _response_size_error(request_id, maximum)
             encoded = json.dumps(
                 fallback, ensure_ascii=False, separators=(",", ":")
             ).encode("utf-8")
@@ -665,10 +774,18 @@ class _StdioRuntime:
         respond(response)
 
     def _execute(
-        self, message: dict[str, object], cancellation: threading.Event
+        self,
+        message: dict[str, object],
+        cancellation: threading.Event,
+        max_response_bytes: int | None,
     ) -> dict[str, object] | None:
         with request_cancellation(cancellation):
-            return handle_request(message, self.session, self._send_progress)
+            return handle_request(
+                message,
+                self.session,
+                self._send_progress,
+                max_response_bytes=max_response_bytes,
+            )
 
     def _dispatch_batch(self, messages: list[object]) -> None:
         if not messages or self.session.protocol_version != "2025-03-26":
@@ -679,6 +796,52 @@ class _StdioRuntime:
                 _error(None, -32000, "JSON-RPC batch exceeds the request limit.")
             )
             return
+        requests = [
+            message
+            for message in messages
+            if not (
+                is_object(message)
+                and message.get("jsonrpc") == "2.0"
+                and isinstance(message.get("method"), str)
+                and message.get("method")
+                and "id" not in message
+            )
+        ]
+        response_budget = (_message_size_limit() - 2) // max(1, len(requests))
+        for message in requests:
+            request_id = message.get("id") if is_object(message) else None
+            if isinstance(request_id, bool) or not isinstance(
+                request_id, (str, int, type(None))
+            ):
+                request_id = None
+            minimum = _response_size_error(request_id, response_budget)
+            params = message.get("params") if is_object(message) else None
+            name = params.get("name") if is_object(params) else None
+            committed_field = (
+                PROJECT_COMMIT_FIELDS.get(name) if isinstance(name, str) else None
+            )
+            if committed_field and isinstance(name, str):
+                minimum = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": _tool_result(
+                        _commit_receipt(committed_field, "0" * 64),
+                        self.session.protocol_version,
+                        tool_name=name,
+                    ),
+                }
+            if (
+                minimum.get("id") != request_id
+                or _encoded_size(minimum, response_budget) + 1 > response_budget
+            ):
+                self.write(
+                    _error(
+                        None,
+                        -32600,
+                        "Batch response budget is too small. Send fewer requests or shorter ids.",
+                    )
+                )
+                return
         # Count notifications too so fast workers cannot flush a partial batch.
         remaining = len(messages)
         responses: list[dict[str, object]] = []
@@ -688,6 +851,10 @@ class _StdioRuntime:
             nonlocal remaining
             with lock:
                 if response is not None:
+                    if _encoded_size(response, response_budget) + 1 > response_budget:
+                        response = _response_size_error(
+                            response.get("id"), response_budget
+                        )
                     responses.append(response)
                 remaining -= 1
                 completed = list(responses) if remaining == 0 else None
@@ -695,7 +862,7 @@ class _StdioRuntime:
                 self.write(completed)
 
         for message in messages:
-            self._dispatch_message(message, collect)
+            self._dispatch_message(message, collect, response_budget)
 
     def _cancel_notification(self, message: dict[str, object]) -> bool:
         if message.get("method") != "notifications/cancelled" or "id" in message:
@@ -727,6 +894,7 @@ class _StdioRuntime:
         self,
         message: dict[str, object],
         respond: Callable[[dict[str, object] | None], None],
+        max_response_bytes: int | None,
     ) -> None:
         request_id = message.get("id")
         if isinstance(request_id, bool) or not isinstance(
@@ -759,7 +927,9 @@ class _StdioRuntime:
             return
 
         cancellation = threading.Event()
-        future = self.executor.submit(self._execute, message, cancellation)
+        future = self.executor.submit(
+            self._execute, message, cancellation, max_response_bytes
+        )
         with self.pending_lock:
             self.pending[request_id] = (future, cancellation, progress_token)
             if progress_token is not None:
@@ -777,7 +947,10 @@ class _StdioRuntime:
             self.write(response)
 
     def _dispatch_message(
-        self, message: object, respond: Callable[[dict[str, object] | None], None]
+        self,
+        message: object,
+        respond: Callable[[dict[str, object] | None], None],
+        max_response_bytes: int | None = None,
     ) -> None:
         if not is_object(message):
             respond(_error(None, -32600, "Invalid Request: expected a JSON object."))
@@ -786,7 +959,7 @@ class _StdioRuntime:
             respond(None)
             return
         if message.get("method") == "tools/call" and "id" in message:
-            self._schedule_tool_call(message, respond)
+            self._schedule_tool_call(message, respond, max_response_bytes)
             return
         response = handle_request(message, self.session, self._send_progress)
         respond(response)

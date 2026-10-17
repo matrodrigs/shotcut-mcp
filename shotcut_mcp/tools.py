@@ -24,12 +24,12 @@ from .platform import (
 )
 from .project import (
     EDIT_OPERATION_CONTRACTS,
-    ProjectDocument,
     create_project,
     diagnose_color_workflow,
     diagnose_missing_media,
     edit_project,
     export_marker_chapters,
+    inspect_project,
     list_backups,
     plan_project_edit,
     render_project_contact_sheet,
@@ -86,6 +86,13 @@ _ToolOptional = TypedDict(
 
 class ToolDefinition(_ToolRequired, _ToolOptional):
     """Core fields survive negotiation; newer protocol fields may be omitted."""
+
+
+PROJECT_COMMIT_FIELDS = {
+    "create_project": "created",
+    "edit_project": "edited",
+    "restore_project_backup": "restored",
+}
 
 
 _OPERATION_CATALOG_BASE: dict[str, OperationSummary] = {
@@ -1063,6 +1070,8 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
         ),
         "render_presets": RENDER_PRESETS,
         "feature_guidance": {
+            "inspection": "Use inspect_project with track/frame filters, detail=summary for smaller results, and pagination.next_offset with expected_revision to continue without mixing project revisions. Collection pages are independent; markers/resources remain project-wide.",
+            "committed_receipts": "result_truncated=true on create/edit/restore is a successful commit with omitted details. Do not repeat it; inspect_project can retrieve the saved revision in pages.",
             "compatibility": (
                 "Read shotcut_doctor.status: tested confirms a tested version pair with "
                 "passing runtime checks; untested is a warning, not a version-based block; "
@@ -1091,7 +1100,7 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
             ),
             "edit_primitives": (
                 "Use duplicate_item, split_item, trim_item, move_item, remove_item, "
-                "set_clip_speed, set_clip_speed_map, replace_media, "
+                "set_clip_speed, set_clip_speed_map, replace_item_media, "
                 "set_clip_opacity, animate_clip, and add_filter for timeline edits."
             ),
             "stable_item_selectors": (
@@ -1124,7 +1133,7 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
         "workflow": [
             "run shotcut_doctor after installing or upgrading Shotcut",
             "use probe_media for stream facts and analyze_media_quality for source QC",
-            "inspect_project to obtain revision and revision-scoped item_ref values",
+            "inspect_project to obtain revision and revision-scoped item_ref values; follow pagination.next_offset with expected_revision when needed",
             "optionally list_mlt_services/describe_mlt_service",
             "edit_project with expected_revision and one batch of operations",
             "when readiness is unknown or dependencies changed, use validate_project before preview/render; otherwise proceed from a successful edit_project to visual review",
@@ -1132,10 +1141,6 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
             "after explicit export intent or approval, start_render with expected_revision for a full project, inclusive frame range, or range marker; poll render_status to a terminal state and present both completed artifacts",
         ],
     }
-
-
-def inspect_project(arguments: dict[str, object]) -> dict[str, object]:
-    return dict(ProjectDocument.load(expand_path(arguments.get("path", ""))).snapshot())
 
 
 def render_preview_tool(arguments: dict[str, object]) -> dict[str, object]:
@@ -1485,9 +1490,52 @@ TOOLS: list[ToolDefinition] = [
     },
     {
         "name": "inspect_project",
-        "title": "Inspect complete project",
-        "description": "Use first to understand a timeline or before planning, editing, or restoring. Returns structural state, SHA-256 revision, and revision-scoped item_ref selectors; use render_contact_sheet for visual review.",
-        "inputSchema": _object_schema({"path": PATH}, ["path"]),
+        "title": "Inspect project",
+        "description": "Use first to understand a timeline or before planning, editing, or restoring. Returns SHA-256 revision, stable item_ref selectors, and paginated structural state. Use summary for less detail, track/frame filters to focus, and pagination.next_offset with expected_revision to continue. Use render_contact_sheet for visual review.",
+        "inputSchema": _object_schema(
+            {
+                "path": PATH,
+                "detail": {
+                    "type": "string",
+                    "enum": ["full", "summary"],
+                    "default": "full",
+                    "description": "Full includes properties and text; summary omits notes, captions, property bags and subtitle text, preserving identifiers and timing.",
+                },
+                "track": {
+                    "type": "string",
+                    "description": "Optional track name or track_id from an inspection; scopes timeline items and track metadata.",
+                },
+                "in_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional inclusive first timeline frame; returns items overlapping this range.",
+                },
+                "out_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional inclusive last timeline frame; must be at least in_frame when both are supplied.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Zero-based offset applied independently to timeline items, track metadata, and each top-level collection; use pagination.next_offset.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                    "description": "Maximum entries per collection page. Track metadata also accompanies every returned item. Nested filter details are retained in full.",
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Revision from the first inspection page; pass on later pages to reject a changed project instead of mixing revisions.",
+                },
+            },
+            ["path"],
+        ),
         "annotations": {
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -1702,7 +1750,7 @@ TOOLS: list[ToolDefinition] = [
     {
         "name": "diagnose_color_workflow",
         "title": "Diagnose project color workflow",
-        "description": "Use for washed-out colors, HDR/SDR questions, or export compatibility. Reports normalized source color facts and Shotcut 26.6 issues.",
+        "description": "Use for washed-out colors, HDR/SDR questions, or export compatibility. Reports normalized source color facts and supported color-workflow constraints.",
         "inputSchema": _object_schema(
             {
                 "project_path": PATH,
@@ -2220,7 +2268,9 @@ ERROR_OUTPUT_REQUIRED = [
 ]
 
 
-def _structured_output_schema(success_schema: JsonSchema) -> JsonSchema:
+def _structured_output_schema(
+    success_schema: JsonSchema, tool_name: str = ""
+) -> JsonSchema:
     """Publish one object contract that accepts either success or tool-error data."""
 
     result = _clone_schema(success_schema)
@@ -2237,6 +2287,27 @@ def _structured_output_schema(success_schema: JsonSchema) -> JsonSchema:
         {"required": success_required},
         {"required": list(ERROR_OUTPUT_REQUIRED)},
     ]
+    committed_field = PROJECT_COMMIT_FIELDS.get(tool_name)
+    if committed_field:
+        properties["result_truncated"] = {
+            "type": "boolean",
+            "description": "True means the project change committed but details were omitted to fit the MCP response budget. Do not retry the mutation; inspect the returned revision.",
+        }
+        result["oneOf"][0]["properties"] = {"result_truncated": {"enum": [False]}}
+        result["oneOf"].append(
+            {
+                "required": [
+                    committed_field,
+                    "revision",
+                    "result_truncated",
+                    "recommended_tool",
+                ],
+                "properties": {
+                    committed_field: {"enum": [True]},
+                    "result_truncated": {"enum": [True]},
+                },
+            }
+        )
     return result
 
 
@@ -3281,6 +3352,29 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
                 "Resolved local resource paths that do not exist.",
             ),
             "counts": COUNTS_OUTPUT_SCHEMA,
+            "pagination": _output_object(
+                {
+                    "detail": {"type": "string", "enum": ["full", "summary"]},
+                    "offset": INTEGER,
+                    "limit": INTEGER,
+                    "totals": {"type": "object", "additionalProperties": INTEGER},
+                    "next_offset": NULLABLE_INTEGER,
+                    "track_id": NULLABLE_STRING,
+                    "in_frame": NULLABLE_INTEGER,
+                    "out_frame": NULLABLE_INTEGER,
+                },
+                [
+                    "detail",
+                    "offset",
+                    "limit",
+                    "totals",
+                    "next_offset",
+                    "track_id",
+                    "in_frame",
+                    "out_frame",
+                ],
+                description="Each top-level collection and the flattened timeline item sequence uses the same offset/limit. Track and frame filters scope timeline items; other collections remain project-wide. Continue while next_offset is non-null and pin expected_revision.",
+            ),
         },
         [
             "path",
@@ -3299,6 +3393,7 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
             "network_resources",
             "missing_resources",
             "counts",
+            "pagination",
         ],
         additional_properties=False,
     ),
@@ -3687,7 +3782,7 @@ for tool in TOOLS:
     _describe_input_schema(described_schema)
     tool["inputSchema"] = described_schema
     tool["outputSchema"] = _structured_output_schema(
-        OUTPUT_SCHEMAS.get(tool["name"], _result_schema())
+        OUTPUT_SCHEMAS.get(tool["name"], _result_schema()), tool["name"]
     )
 
 

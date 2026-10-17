@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar
 
 from .mlt_xml import (
     clock_to_frames,
@@ -394,6 +394,96 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
                 "transition",
                 "link",
             )
+        },
+    }
+
+
+PageItem = TypeVar("PageItem")
+
+
+def project_snapshot_page(
+    snapshot: ProjectSnapshot,
+    *,
+    detail: str,
+    track_id: str | None,
+    in_frame: int | None,
+    out_frame: int | None,
+    offset: int,
+    limit: int,
+) -> dict[str, object]:
+    totals: dict[str, int] = {}
+
+    def page(name: str, values: list[PageItem]) -> list[PageItem]:
+        totals[name] = len(values)
+        return values[offset : offset + limit]
+
+    selected_tracks = [
+        track
+        for track in snapshot["tracks"]
+        if track_id is None or track["track_id"] == track_id
+    ]
+    items = [
+        (track["track_id"], item)
+        for track in selected_tracks
+        for item in track["items"]
+        if (in_frame is None or item["end_frame"] >= in_frame)
+        and (out_frame is None or item["start_frame"] <= out_frame)
+    ]
+    selected_items: dict[str, list[ItemSummary]] = {}
+    for item_track, item in page("items", items):
+        selected_items.setdefault(item_track, []).append(item)
+    visible_tracks = {track["track_id"] for track in page("tracks", selected_tracks)}
+    visible_tracks.update(selected_items)
+    result: ProjectSnapshot = {
+        **snapshot,
+        "tracks": [
+            {**track, "items": selected_items.get(track["track_id"], [])}
+            for track in selected_tracks
+            if track["track_id"] in visible_tracks
+        ],
+        "filters": page("filters", snapshot["filters"]),
+        "links": page("links", snapshot["links"]),
+        "markers": page("markers", snapshot["markers"]),
+        "subtitles": page("subtitles", snapshot["subtitles"]),
+        "resources": page("resources", snapshot["resources"]),
+        "network_resources": page("network_resources", snapshot["network_resources"]),
+        "missing_resources": page("missing_resources", snapshot["missing_resources"]),
+    }
+    if detail == "summary":
+        result["notes"] = None
+        result["filters"] = [{**item, "properties": {}} for item in result["filters"]]
+        result["links"] = [{**item, "properties": {}} for item in result["links"]]
+        result["subtitles"] = [{**item, "srt": None} for item in result["subtitles"]]
+        for track in result["tracks"]:
+            track["properties"] = {}
+            track["filters"] = [{**item, "properties": {}} for item in track["filters"]]
+            summaries: list[ItemSummary] = []
+            for item in track["items"]:
+                summary: ItemSummary = {**item}
+                if item["type"] != "gap":
+                    summary["caption"] = None
+                    summary["filters"] = [
+                        {**effect, "properties": {}}
+                        for effect in item.get("filters", [])
+                    ]
+                summaries.append(summary)
+            track["items"] = summaries
+    next_offset = (
+        offset + limit
+        if any(total > offset + limit for total in totals.values())
+        else None
+    )
+    return {
+        **result,
+        "pagination": {
+            "detail": detail,
+            "offset": offset,
+            "limit": limit,
+            "totals": totals,
+            "next_offset": next_offset,
+            "track_id": track_id,
+            "in_frame": in_frame,
+            "out_frame": out_frame,
         },
     }
 

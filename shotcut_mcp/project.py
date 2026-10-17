@@ -45,6 +45,7 @@ from .project_snapshot import (
     ProjectSnapshot,
     build_project_snapshot,
     project_requirements,
+    project_snapshot_page,
 )
 from .protocol import (
     cancellation_requested,
@@ -107,6 +108,7 @@ __all__ = [
     "diagnose_missing_media",
     "edit_project",
     "export_marker_chapters",
+    "inspect_project",
     "list_backups",
     "plan_project_edit",
     "render_project_contact_sheet",
@@ -120,6 +122,46 @@ class ProjectDocument(MltProjectDocument):
 
     def snapshot(self) -> ProjectSnapshot:
         return build_project_snapshot(self)
+
+
+def inspect_project(arguments: dict[str, object]) -> dict[str, object]:
+    document = ProjectDocument.load(expand_path(arguments.get("path", "")))
+    expected = arguments.get("expected_revision")
+    if expected is not None and expected != document.revision:
+        raise ConflictError(
+            "The project changed between inspection pages. Restart inspection.",
+            expected_revision=str(expected),
+            current_revision=document.revision,
+        )
+    detail = arguments.get("detail", "full")
+    if detail not in ("full", "summary"):
+        raise ToolError("detail must be full or summary.")
+    offset = _int(arguments.get("offset", 0), "offset", 0)
+    limit = _int(arguments.get("limit", 100), "limit", 1)
+    if limit > 500:
+        raise ToolError("limit must be at most 500.")
+    frame_in = (
+        _int(arguments["in_frame"], "in_frame", 0) if "in_frame" in arguments else None
+    )
+    frame_out = (
+        _int(arguments["out_frame"], "out_frame", 0)
+        if "out_frame" in arguments
+        else None
+    )
+    if frame_in is not None and frame_out is not None and frame_out < frame_in:
+        raise ToolError("out_frame must be greater than or equal to in_frame.")
+    track_id = (
+        document.find_track(arguments["track"]).id if "track" in arguments else None
+    )
+    return project_snapshot_page(
+        document.snapshot(),
+        detail=str(detail),
+        track_id=track_id,
+        in_frame=frame_in,
+        out_frame=frame_out,
+        offset=offset,
+        limit=limit,
+    )
 
 
 def validate_project(arguments: dict[str, object]) -> dict[str, object]:

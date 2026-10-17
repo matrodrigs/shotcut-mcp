@@ -30,7 +30,7 @@ integrators, and users who need more control.
 | `shotcut_capabilities` | Return the complete edit catalog and context, or one focused operation schema and example |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
-| `inspect_project` | Return revision, profile, tracks, revision-scoped item references, filters, markers, subtitles, and resources |
+| `inspect_project` | Inspect saved project state with revision-scoped item references and bounded track, interval, and page selection |
 | `diagnose_color_workflow` | Report normalized media color facts and supported HDR workflow constraints |
 | `diagnose_missing_media` | Search bounded roots by Shotcut hash/basename and optionally render a visual candidate sheet |
 | `plan_project_edit` | Validate stable-reference operations and preview their snapshot/XML diff without changing the project |
@@ -56,6 +56,16 @@ Clients receive full JSON schemas, operation examples, revision requirements, st
 guidance, and animation contracts at runtime. Integrators can consult the
 [behavioral specification](spec.md); the published tool schemas remain the source of truth
 for request parameters.
+
+## Project inspection
+
+`inspect_project` returns a bounded view of saved state. Use `track` to select a track by name or ID and `in_frame`/`out_frame` to select items overlapping a zero-based inclusive timeline interval. `offset` and `limit` select pages, with a default limit of 100 and a maximum of 500. Pass the inspected `expected_revision` on later pages to reject a changed project instead of combining revisions.
+
+`pagination` reports `detail`, `offset`, `limit`, collection `totals`, `next_offset`, and the active `track_id`, `in_frame`, and `out_frame` filters. Follow `next_offset` until it is null. The shared offset applies independently to the flat list of matching timeline items, track metadata, and each top-level collection. Track metadata also accompanies every returned item, so a response can contain up to twice `limit` tracks. An empty track item list on one page does not mean that the track is empty. Track and frame filters apply to tracks/items; other collections, including markers, filters, and resources, remain project-wide.
+
+The default `detail: "full"` keeps nested filter lists and their properties with each returned track or item. `detail: "summary"` preserves identifiers and timing while clearing notes, captions, property bags, and subtitle text. Use summary mode or a smaller page when a detailed inspection exceeds the message budget.
+
+Successful create and edit calls normally include the updated project; restores return revision, backup, and validation details. If a successful response would exceed the MCP message budget, the server returns a compact receipt with the tool's success flag (`created`, `edited`, or `restored`) set to true, the saved `revision`, `result_truncated: true`, and `recommended_tool: "inspect_project"`. Paths, backup details, and operation results are included only when they fit. Reinspect the relevant scope to obtain item references for the new revision; do not repeat the committed mutation because its snapshot was omitted.
 
 ## Rendering
 
