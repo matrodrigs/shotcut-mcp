@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Iterator
@@ -327,21 +329,68 @@ class RenderInputSnapshot:
 
 
 @contextmanager
+def exclusive_file_lock(path: Path) -> Iterator[None]:
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, "r+b") as handle:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise
+            raise ConflictError(
+                f"Another MCP process holds the lock: {path}",
+                code="project_locked",
+                recommended_action="wait_and_retry",
+                recommended_tool=None,
+                details={"lock_path": str(path)},
+            ) from exc
+        yield
+
+
+@contextmanager
 def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
     """Hold an exclusive per-project lock without stealing it from a live process."""
 
     lock_path = path.with_suffix(path.suffix + ".shotcut-mcp.lock")
-    payload = json.dumps({"pid": os.getpid(), "created_at": time.time()})
-    for attempt in range(2):
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            break
-        except FileExistsError:
-            if attempt:
+    guard_path = path.with_suffix(path.suffix + ".shotcut-mcp.guard")
+    with exclusive_file_lock(guard_path):
+        payload = json.dumps({"pid": os.getpid(), "created_at": time.time()})
+        for attempt in range(2):
+            try:
+                descriptor = os.open(
+                    lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                )
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                break
+            except FileExistsError:
+                if attempt:
+                    raise ConflictError(
+                        f"Another MCP process is editing the project: {lock_path}",
+                        code="project_locked",
+                        recommended_action="wait_and_retry",
+                        recommended_tool=None,
+                        details={"lock_path": str(lock_path)},
+                    ) from None
+                try:
+                    age = time.time() - lock_path.stat().st_mtime
+                    owner = json.loads(lock_path.read_text(encoding="utf-8"))
+                    owner_pid = int(owner.get("pid", 0))
+                except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                    age = 0
+                    owner_pid = 0
+                if age > stale_seconds and not process_is_alive(owner_pid):
+                    lock_path.unlink(missing_ok=True)
+                    continue
                 raise ConflictError(
                     f"Another MCP process is editing the project: {lock_path}",
                     code="project_locked",
@@ -349,27 +398,10 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
                     recommended_tool=None,
                     details={"lock_path": str(lock_path)},
                 ) from None
-            try:
-                age = time.time() - lock_path.stat().st_mtime
-                owner = json.loads(lock_path.read_text(encoding="utf-8"))
-                owner_pid = int(owner.get("pid", 0))
-            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-                age = 0
-                owner_pid = 0
-            if age > stale_seconds and not process_is_alive(owner_pid):
-                lock_path.unlink(missing_ok=True)
-                continue
-            raise ConflictError(
-                f"Another MCP process is editing the project: {lock_path}",
-                code="project_locked",
-                recommended_action="wait_and_retry",
-                recommended_tool=None,
-                details={"lock_path": str(lock_path)},
-            ) from None
-    try:
-        yield
-    finally:
-        lock_path.unlink(missing_ok=True)
+        try:
+            yield
+        finally:
+            lock_path.unlink(missing_ok=True)
 
 
 def backup_directory(project_path: Path) -> Path:

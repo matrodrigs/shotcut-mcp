@@ -6,6 +6,7 @@
 
 - Preserve success confirmations and saved revisions for large project creations, edits, and restores, including batches, so callers do not repeat an already saved change.
 - Correct media-replacement guidance to name the supported `replace_item_media` operation.
+- Prevent simultaneous project edits from taking over each other's recovered lock, preserving revision checks and backups.
 
 ### Changed
 
