@@ -30,6 +30,7 @@ from shotcut_mcp.platform import (
 from shotcut_mcp.project import create_project, edit_project, validate_project
 from shotcut_mcp.render import (
     cancel_render,
+    render_review_clip,
     render_status,
     start_render,
 )
@@ -102,6 +103,293 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                 self.assertEqual(
                     caught.exception.code, "media_discovery_revision_conflict"
                 )
+
+    def test_review_clip_preserves_moving_video_audio_and_exact_range(self) -> None:
+        executables = discover_executables()
+        assert executables.ffmpeg is not None
+        assert executables.ffprobe is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            media = root / "moving-source.mp4"
+            subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=320x240:rate=30000/1001:duration=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=2",
+                    "-shortest",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    str(media),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            project = root / "review.mlt"
+            created = create_project(
+                {
+                    "project_path": str(project),
+                    "width": 1920,
+                    "height": 1080,
+                    "fps_num": 30000,
+                    "fps_den": 1001,
+                    "clips": [{"path": str(media)}],
+                }
+            )
+            original = project.read_bytes()
+            result = render_review_clip(
+                {
+                    "project_path": str(project),
+                    "expected_revision": created["revision"],
+                    "in_frame": 15,
+                    "out_frame": 44,
+                }
+            )
+            output = Path(result["path"])
+            summary = summarize_media(output)
+            video = next(
+                stream for stream in summary["streams"] if stream["type"] == "video"
+            )
+            self.assertEqual((video["width"], video["height"]), (1280, 720))
+            probe = run_capture(
+                [
+                    str(executables.ffprobe),
+                    "-v",
+                    "error",
+                    "-show_streams",
+                    "-of",
+                    "json",
+                    str(output),
+                ]
+            )
+            streams = json.loads(probe.stdout)["streams"]
+            encoded_video = next(
+                stream for stream in streams if stream["codec_type"] == "video"
+            )
+            self.assertEqual(encoded_video["sample_aspect_ratio"], "1:1")
+            self.assertEqual(encoded_video["display_aspect_ratio"], "16:9")
+            self.assertEqual(encoded_video["avg_frame_rate"], "30000/1001")
+            self.assertEqual(encoded_video["nb_frames"], "30")
+            self.assertAlmostEqual(
+                float(encoded_video["duration"]),
+                result["duration_seconds"],
+                delta=0.001,
+            )
+            self.assertTrue(
+                any(stream["type"] == "audio" for stream in summary["streams"])
+            )
+            frames = subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-i",
+                    str(output),
+                    "-map",
+                    "0:v:0",
+                    "-f",
+                    "framemd5",
+                    "-",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            hashes = [
+                line.rsplit(",", 1)[-1].strip()
+                for line in frames.stdout.splitlines()
+                if line and not line.startswith("#")
+            ]
+            self.assertEqual(len(hashes), 30)
+            self.assertNotEqual(hashes[0], hashes[-1])
+            source_frames = subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-i",
+                    str(media),
+                    "-vf",
+                    "scale=32:24:flags=area",
+                    "-fps_mode",
+                    "passthrough",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            ).stdout
+            review_frames = subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-i",
+                    str(output),
+                    "-vf",
+                    "select=eq(n\\,0)+eq(n\\,29),crop=960:720:160:0,scale=32:24:flags=area",
+                    "-fps_mode",
+                    "passthrough",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            ).stdout
+            frame_bytes = 32 * 24 * 3
+            self.assertEqual(len(review_frames), 2 * frame_bytes)
+            source_images = [
+                source_frames[index : index + frame_bytes]
+                for index in range(0, len(source_frames), frame_bytes)
+            ]
+            for index, expected_frame in enumerate((15, 44)):
+                review_image = review_frames[
+                    index * frame_bytes : (index + 1) * frame_bytes
+                ]
+                differences = [
+                    sum(
+                        abs(source - rendered)
+                        for source, rendered in zip(
+                            source_image, review_image, strict=True
+                        )
+                    )
+                    for source_image in source_images
+                ]
+                self.assertEqual(
+                    min(range(len(differences)), key=differences.__getitem__),
+                    expected_frame,
+                )
+            audio = subprocess.run(
+                [
+                    str(executables.ffmpeg),
+                    "-v",
+                    "error",
+                    "-i",
+                    str(output),
+                    "-map",
+                    "0:a:0",
+                    "-f",
+                    "s16le",
+                    "-",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertGreater(len(audio.stdout), 40_000)
+            self.assertTrue(any(audio.stdout))
+            self.assertEqual(result["revision"], created["revision"])
+            self.assertEqual(project.read_bytes(), original)
+            self.assertEqual(list(root.glob("*.render-*.mlt")), [])
+
+    def test_review_clip_uses_square_pixels_for_portrait_and_anamorphic_projects(
+        self,
+    ) -> None:
+        executables = discover_executables()
+        assert executables.ffprobe is not None
+        cases = (
+            (640, 480, 4, 3, 1, 1, 25, 1, (640, 480), "4:3"),
+            (1080, 1920, 9, 16, 1, 1, 60, 1, (404, 720), "101:180"),
+            (720, 576, 16, 9, 64, 45, 30000, 1001, (720, 404), "180:101"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for (
+                width,
+                height,
+                dar_num,
+                dar_den,
+                sar_num,
+                sar_den,
+                fps_num,
+                fps_den,
+                size,
+                dar,
+            ) in cases:
+                with self.subTest(width=width, height=height):
+                    project = root / f"review-{width}.mlt"
+                    created = create_project(
+                        {
+                            "project_path": str(project),
+                            "width": width,
+                            "height": height,
+                            "fps_num": fps_num,
+                            "fps_den": fps_den,
+                        }
+                    )
+                    edited = edit_project(
+                        {
+                            "project_path": str(project),
+                            "expected_revision": created["revision"],
+                            "operations": [
+                                {
+                                    "op": "set_profile",
+                                    "preserve_frame_numbers": True,
+                                    "display_aspect_num": dar_num,
+                                    "display_aspect_den": dar_den,
+                                    "sample_aspect_num": sar_num,
+                                    "sample_aspect_den": sar_den,
+                                },
+                                {
+                                    "op": "add_generator",
+                                    "track": "V1",
+                                    "generator": "color",
+                                    "duration_frames": 60,
+                                },
+                            ],
+                        }
+                    )
+                    result = render_review_clip(
+                        {
+                            "project_path": str(project),
+                            "expected_revision": edited["revision"],
+                            "in_frame": 15,
+                            "out_frame": 44,
+                        }
+                    )
+                    probe = run_capture(
+                        [
+                            str(executables.ffprobe),
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "v:0",
+                            "-show_streams",
+                            "-of",
+                            "json",
+                            result["path"],
+                        ]
+                    )
+                    video = json.loads(probe.stdout)["streams"][0]
+                    self.assertEqual((video["width"], video["height"]), size)
+                    self.assertEqual(video["sample_aspect_ratio"], "1:1")
+                    self.assertEqual(video["display_aspect_ratio"], dar)
+                    self.assertEqual(video["avg_frame_rate"], f"{fps_num}/{fps_den}")
+                    self.assertEqual(video["nb_frames"], "30")
+                    self.assertAlmostEqual(
+                        float(video["duration"]),
+                        result["duration_seconds"],
+                        delta=0.001,
+                    )
 
     def test_batch_previews_preserve_fractional_fps_relative_media_and_frame_order(
         self,

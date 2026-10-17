@@ -86,7 +86,9 @@ SERVER_INSTRUCTIONS = (
     "show the current edit, call render_contact_sheet and surface its image when "
     "supported; use render_preview for one exact moment. After inspection or a committed "
     "edit batch, give the user a concise result summary; after visual edits, show a "
-    "managed contact sheet or exact preview.\n"
+    "managed contact sheet or exact preview. Use render_review_clip for up to 30 seconds "
+    "of movement and sound, and show the returned playable resource or path. This managed "
+    "review does not authorize final export.\n"
     "Media diagnosis: Use diagnose_color_workflow for washed-out color or HDR questions. "
     "Use analyze_media_quality before proposing cleanup for silence, black frames, "
     "freezes, interlacing, or loudness.\n"
@@ -232,6 +234,8 @@ def _encoded_size(value: object, maximum: int | None = None) -> int:
 def _success_result_text(tool_name: str | None, payload: Mapping[str, object]) -> str:
     if payload.get("result_truncated") is True:
         return "Project change committed. Do not repeat the edit."
+    if tool_name == "render_review_clip":
+        return "Audiovisual review ready. Show the playable MP4 resource or path; this temporary review is replaced by the next review for this project."
     if tool_name == "shotcut_doctor":
         status = payload.get("status")
         if status == "untested":
@@ -281,6 +285,31 @@ def _success_result_text(tool_name: str | None, payload: Mapping[str, object]) -
 def _artifact_resource_links(
     tool_name: str | None, payload: Mapping[str, object]
 ) -> list[dict[str, object]]:
+    if tool_name == "render_review_clip" and payload.get("created") is True:
+        path, uri, size = (
+            payload.get("path"),
+            payload.get("uri"),
+            payload.get("size_bytes"),
+        )
+        if (
+            isinstance(path, str)
+            and isinstance(uri, str)
+            and isinstance(size, int)
+            and not isinstance(size, bool)
+        ):
+            return [
+                {
+                    "type": "resource_link",
+                    "uri": uri,
+                    "name": Path(path).name,
+                    "title": "Audiovisual review",
+                    "mimeType": "video/mp4",
+                    "size": size,
+                    "description": "Temporary project review with movement and sound; replaced by the next managed review.",
+                    "annotations": {"audience": ["user"], "priority": 1.0},
+                }
+            ]
+        return []
     if tool_name != "render_status" or payload.get("delivery_complete") is not True:
         return []
     artifacts = payload.get("artifacts")

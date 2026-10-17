@@ -43,6 +43,7 @@ integrators, and users who need more control.
 | `render_preview` | Render a selected frame to PNG, with optional managed output |
 | `render_preview_batch` | Render up to 64 exact frames with bounded per-output outcomes |
 | `render_contact_sheet` | Render exact or evenly sampled frames into one atomic review image |
+| `render_review_clip` | Render a managed preview of up to 30 seconds with motion and audio for reviewing pacing and transitions |
 | `detect_hardware_encoders` | Distinguish built, advertised, and smoke-tested FFmpeg hardware encoders |
 | `open_in_shotcut` | Open a project or media path in the Shotcut GUI |
 | `start_render` | After explicit export intent or approval, snapshot one revision and start a durable full-project, range, or marker render |
@@ -73,6 +74,12 @@ Successful create and edit calls normally include the updated project; restores 
 `discover_media` lists known video, audio, and image extensions in `folder_path`. It searches the immediate folder by default; set `recursive: true` for subfolders. Pages default to 50 files and accept up to 200. Reuse the returned `next_cursor` with the same search arguments; a changed listing requires restarting pagination. Extension-based kinds are a discovery hint, not proof that a file can be decoded.
 
 Set `include_metadata: true` to probe the current page for compact duration, dimensions, frame rate, and audio facts. A failed or timed-out probe remains a per-file `probe_error` so other candidates stay usable. Traversal applies path policy, skips directory symlinks and junctions, and is bounded by 20,000 entries and 16 levels. Traversal and metadata probing share a 30-second budget. Narrow the folder when a scan limit is reached; use `probe_media` when you need complete stream details for a selected file.
+
+## Visual and audio review
+
+Use `render_preview` for one exact frame, `render_preview_batch` for several separate PNGs, and `render_contact_sheet` for one comparison image. Omit the output path on a single preview or contact sheet to use managed storage; small images can be displayed directly by the client.
+
+Use `render_review_clip` to assess movement and sound. Supply zero-based inclusive `in_frame` and `out_frame` values within the timeline and optionally the inspected `expected_revision`. The range must fit within 30 seconds. The result is a managed H.264/AAC MP4 at no more than 1280×720, preserving display aspect ratio without upscaling. This synchronous preview has a 180-second timeout and a 32 MiB output limit, and returns a media path/URI for clients that can display local video. If the output is too large, request a shorter range. It is a temporary review artifact: each successful review for the same project replaces its previous managed clip. Use `start_render` for a persistent delivery.
 
 ## Rendering
 

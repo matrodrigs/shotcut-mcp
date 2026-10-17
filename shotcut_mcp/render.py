@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -17,7 +18,9 @@ from .platform import (
     discover_executables,
     enforce_project_resource_policy,
     ensure_melt_ready,
+    expand_path,
     require_executable,
+    run_capture,
     start_render_supervisor,
 )
 from .project_snapshot import load_project_render_input
@@ -37,7 +40,12 @@ from .render_jobs import (
     validate_job_id,
     write_job,
 )
-from .storage import OutputTransaction, RenderInputSnapshot, process_is_alive
+from .storage import (
+    OutputTransaction,
+    RenderInputSnapshot,
+    managed_preview_path,
+    process_is_alive,
+)
 
 RenderArtifact = TypedDict(
     "RenderArtifact",
@@ -244,9 +252,176 @@ def _consumer_properties(value: object) -> dict[str, str]:
     return result
 
 
-def start_render(arguments: dict[str, object]) -> RenderJob:
-    from .platform import expand_path
+def render_review_clip(arguments: dict[str, object]) -> dict[str, object]:
+    project_path = expand_path(arguments.get("project_path", ""))
+    in_frame, out_frame = arguments.get("in_frame"), arguments.get("out_frame")
+    if (
+        isinstance(in_frame, bool)
+        or not isinstance(in_frame, int)
+        or isinstance(out_frame, bool)
+        or not isinstance(out_frame, int)
+        or in_frame < 0
+        or out_frame < in_frame
+    ):
+        raise ToolError(
+            "Review range must use integers with 0 <= in_frame <= out_frame."
+        )
+    expected_revision = arguments.get("expected_revision")
+    if expected_revision is not None and (
+        not isinstance(expected_revision, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_revision) is None
+    ):
+        raise ToolError("expected_revision must be a lowercase SHA-256 digest.")
+    render_input = load_project_render_input(project_path)
+    if expected_revision is not None and expected_revision != render_input.revision:
+        raise ConflictError(
+            "The project changed before preparing the review clip.",
+            expected_revision=expected_revision,
+            current_revision=render_input.revision,
+        )
+    if out_frame >= render_input.duration_frames:
+        raise ToolError(
+            f"out_frame must be below the project duration ({render_input.duration_frames})."
+        )
+    profile = render_input.profile
+    try:
+        frame_rate_num = int(profile.get("frame_rate_num", "25"))
+        frame_rate_den = int(profile.get("frame_rate_den", "1"))
+        source_width = int(profile.get("width", "1920"))
+        source_height = int(profile.get("height", "1080"))
+        aspect_num = int(profile.get("display_aspect_num", "0"))
+        aspect_den = int(profile.get("display_aspect_den", "0"))
+        sample_num = int(profile.get("sample_aspect_num", "1"))
+        sample_den = int(profile.get("sample_aspect_den", "1"))
+        colorspace = int(profile.get("colorspace", "709"))
+    except ValueError as exc:
+        raise ToolError(
+            "Review clips require a valid numeric project profile."
+        ) from exc
+    if min(frame_rate_num, frame_rate_den, sample_num, sample_den) <= 0:
+        raise ToolError(
+            "Review clips require positive frame rate and pixel aspect values."
+        )
+    if source_width < 2 or source_height < 2:
+        raise ToolError("Review clips require project dimensions of at least 2 pixels.")
+    duration_frames = out_frame - in_frame + 1
+    duration_seconds = duration_frames * frame_rate_den / frame_rate_num
+    if duration_seconds > 30:
+        raise ToolError(
+            "Review clips are limited to 30 seconds. Choose a shorter range.",
+            code="review_clip_duration_exceeded",
+            recommended_action="choose_a_shorter_review_range",
+            details={
+                "maximum_duration_seconds": 30,
+                "duration_seconds": duration_seconds,
+            },
+        )
+    aspect = (
+        aspect_num / aspect_den
+        if aspect_num > 0 and aspect_den > 0
+        else source_width * sample_num / (source_height * sample_den)
+    )
+    height = min(source_height, 720, 1280 / aspect, source_width / aspect)
+    width = max(2, int(height * aspect) // 2 * 2)
+    height = max(2, int(height) // 2 * 2)
+    report_progress(0, 3, "Preparing revision-bound audiovisual review.")
+    melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
+    snapshot = RenderInputSnapshot.create(
+        project_path, uuid.uuid4().hex, render_input.source, render_input.revision
+    )
+    output: OutputTransaction | None = None
+    try:
+        enforce_project_resource_policy(snapshot.path)
+        output_path = expand_path(str(managed_preview_path(project_path, "review.mp4")))
+        output = OutputTransaction.prepare(
+            output_path, overwrite=True, protected_paths=(project_path, snapshot.path)
+        )
+        report_progress(1, 3, "Rendering the selected review range.")
+        with tempfile.TemporaryDirectory(prefix="shotcut-mcp-review-") as directory:
+            profile_path = Path(directory) / "profile"
+            profile_path.write_text(
+                f"frame_rate_num={frame_rate_num}\nframe_rate_den={frame_rate_den}\n"
+                f"width={width}\nheight={height}\nprogressive=1\n"
+                "sample_aspect_num=1\nsample_aspect_den=1\n"
+                f"display_aspect_num={width}\ndisplay_aspect_den={height}\n"
+                f"colorspace={colorspace}\n",
+                encoding="utf-8",
+            )
+            result = run_capture(
+                [
+                    str(melt),
+                    "-profile",
+                    str(profile_path),
+                    str(snapshot.path),
+                    f"in={in_frame}",
+                    f"out={out_frame}",
+                    "-consumer",
+                    f"avformat:{output.temporary}",
+                    "f=mp4",
+                    "vcodec=libx264",
+                    "preset=veryfast",
+                    "vb=2M",
+                    "maxrate=3M",
+                    "bufsize=6M",
+                    "pix_fmt=yuv420p",
+                    "acodec=aac",
+                    "ab=128k",
+                    "movflags=+faststart",
+                    "real_time=-1",
+                    "terminate_on_pause=1",
+                    "-silent",
+                ],
+                timeout=180,
+            )
+        if (
+            result.returncode
+            or not output.temporary.is_file()
+            or output.temporary.stat().st_size == 0
+        ):
+            detail = "\n".join(part for part in (result.stdout, result.stderr) if part)
+            raise ToolError(
+                "Failed to generate review clip: "
+                + (detail[-2000:].strip() or "output was not created"),
+                code="review_clip_failed",
+                recommended_action="validate_project_and_retry",
+                recommended_tool="validate_project",
+                details={"project_path": str(project_path)},
+            )
+        if output.temporary.stat().st_size > 32 * 1024 * 1024:
+            raise ToolError(
+                "The review clip exceeded the 32 MiB managed output limit.",
+                code="review_clip_size_exceeded",
+                recommended_action="choose_a_shorter_review_range",
+            )
+        snapshot.require_exact()
+        report_progress(2, 3, "Publishing the review clip.")
+        if cancellation_requested():
+            raise RequestCancelled()
+        output.commit()
+        report_progress(3, 3, "Review clip is ready.")
+        return {
+            "created": True,
+            "path": str(output_path),
+            "uri": output_path.as_uri(),
+            "mime_type": "video/mp4",
+            "managed_output": True,
+            "size_bytes": output_path.stat().st_size,
+            "revision": render_input.revision,
+            "in_frame": in_frame,
+            "out_frame": out_frame,
+            "duration_frames": duration_frames,
+            "duration_seconds": duration_seconds,
+            "width": width,
+            "height": height,
+        }
+    finally:
+        if output is not None:
+            output.cleanup()
+        snapshot.cleanup_if_owned()
 
+
+def start_render(arguments: dict[str, object]) -> RenderJob:
     project_path = expand_path(arguments.get("project_path", ""))
     output_path = expand_path(arguments.get("output_path", ""))
     if not project_path.is_file():

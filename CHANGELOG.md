@@ -5,11 +5,13 @@
 ### Added
 
 - Discover video, audio, and image files in a folder with bounded traversal, revision-aware pagination, and optional compact metadata that preserves individual probe failures.
+- Review up to 30 seconds of motion and audio in a managed H.264/AAC clip before final export.
 
 ### Fixed
 
 - Preserve success confirmations and saved revisions for large project creations, edits, and restores, including batches, so callers do not repeat an already saved change.
 - Correct media-replacement guidance to name the supported `replace_item_media` operation.
+- Respect configured filesystem boundaries before creating managed previews, including paths redirected by directory symlinks or Windows junctions.
 - Prevent simultaneous project edits from taking over each other's recovered lock, preserving revision checks and backups.
 
 ### Changed

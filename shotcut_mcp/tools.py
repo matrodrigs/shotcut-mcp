@@ -42,6 +42,7 @@ from .render import (
     RENDER_PRESETS,
     cancel_render,
     list_render_jobs,
+    render_review_clip,
     render_status,
     start_render,
 )
@@ -1074,6 +1075,7 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
             "source_folders": "Use discover_media for source folders and follow next_cursor. Candidate kinds come from extensions; probe representative files and ground creative choices in inspected media and previews.",
             "inspection": "Use inspect_project with track/frame filters, detail=summary for smaller results, and pagination.next_offset with expected_revision to continue without mixing project revisions. Collection pages are independent; markers/resources remain project-wide.",
             "committed_receipts": "result_truncated=true on create/edit/restore is a successful commit with omitted details. Do not repeat it; inspect_project can retrieve the saved revision in pages.",
+            "audiovisual_review": "Use render_review_clip for an inclusive range of at most 30 seconds when reviewing motion or sound. Show the returned MP4 resource/path. It is managed temporary review, separate from final export.",
             "compatibility": (
                 "Read shotcut_doctor.status: tested confirms a tested version pair with "
                 "passing runtime checks; untested is a warning, not a version-based block; "
@@ -1879,6 +1881,38 @@ TOOLS: list[ToolDefinition] = [
             "destructiveHint": True,
             "idempotentHint": True,
             "openWorldHint": True,
+        },
+    },
+    {
+        "name": "render_review_clip",
+        "title": "Render a short audiovisual review",
+        "description": "Use to review pacing, transitions, motion or sound. Renders at most 30 seconds to a managed H.264/AAC MP4 within 1280x720, preserving aspect ratio. This temporary review is separate from final export and replaces only the previous managed review for this project; surface the playable resource or path to the user.",
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "in_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Inclusive first timeline frame of the review.",
+                },
+                "out_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Inclusive last timeline frame, at least in_frame and within the project. Selected duration must not exceed 30 seconds.",
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Optional inspected project revision; stale revisions are rejected before rendering.",
+                },
+            },
+            ["project_path", "in_frame", "out_frame"],
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
         },
     },
     {
@@ -3585,6 +3619,23 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
             "managed_output": BOOLEAN,
         }
     ),
+    "render_review_clip": _result_schema(
+        {
+            "created": BOOLEAN,
+            "path": STRING,
+            "uri": STRING,
+            "mime_type": STRING,
+            "managed_output": BOOLEAN,
+            "size_bytes": INTEGER,
+            "revision": STRING,
+            "in_frame": INTEGER,
+            "out_frame": INTEGER,
+            "duration_frames": INTEGER,
+            "duration_seconds": {"type": "number"},
+            "width": INTEGER,
+            "height": INTEGER,
+        }
+    ),
     "diagnose_color_workflow": _result_schema(
         {
             "project_path": STRING,
@@ -3899,6 +3950,7 @@ HANDLERS: dict[str, Callable[[dict[str, object]], Mapping[str, object]]] = {
     ),
     "validate_project": validate_project,
     "render_preview": render_preview_tool,
+    "render_review_clip": render_review_clip,
     "render_preview_batch": render_preview_batch_tool,
     "render_contact_sheet": render_project_contact_sheet,
     "detect_hardware_encoders": lambda arguments: detect_hardware_encoders(

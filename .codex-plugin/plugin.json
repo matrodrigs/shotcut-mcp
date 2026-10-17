@@ -26,7 +26,7 @@
   "interface": {
     "displayName": "Shotcut MCP",
     "shortDescription": "Edit complete Shotcut timelines with transactional safety.",
-    "longDescription": "Local Shotcut and MLT integration for source-quality analysis, creative multitrack editing, visual review, explicitly requested export, durable progress, backups, and delivery of rendered media with the exact editable project.",
+    "longDescription": "Local Shotcut and MLT integration for media discovery, source-quality analysis, creative multitrack editing, audiovisual review, explicitly requested export, durable progress, backups, and delivery of rendered media with the exact editable project.",
     "developerName": "matrodrigs",
     "category": "Productivity",
     "capabilities": [
@@ -36,7 +36,7 @@
     ],
     "defaultPrompt": [
       "Check readiness and source quality; distinguish untested-version warnings from runtime failures and missing media.",
-      "Create a well-paced edit from my media. Choose cuts and transitions that fit my brief, then show a visual review.",
+      "Discover media in my folder and create a well-paced edit that fits my brief, then show a review with motion and sound.",
       "Export this project as H.264, monitor the render, and deliver the video and exact editable project."
     ]
   }

@@ -131,6 +131,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("shotcut_capabilities", names)
         self.assertIn("restore_project_backup", names)
         self.assertIn("discover_media", names)
+        self.assertIn("render_review_clip", names)
 
 
 class RenderSafetyTests(unittest.TestCase):

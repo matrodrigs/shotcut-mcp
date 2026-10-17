@@ -18,6 +18,7 @@ from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import render_preview
 from shotcut_mcp.render import cancel_render, render_status, start_render
 from shotcut_mcp.storage import OutputTransaction
+from tests.path_assertions import assert_canonical_paths
 
 
 class PreviewSafetyTests(unittest.TestCase):
@@ -125,7 +126,7 @@ class PreviewSafetyTests(unittest.TestCase):
             previews = list(
                 (Path(directory) / ".shotcut-mcp" / "previews").rglob("*.png")
             )
-            self.assertEqual(previews, [Path(first_result["path"])])
+            assert_canonical_paths(self, [first_result["path"]], previews)
 
 
 class RenderPropertySafetyTests(unittest.TestCase):

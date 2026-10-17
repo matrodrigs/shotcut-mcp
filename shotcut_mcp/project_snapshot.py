@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar
 
@@ -193,6 +193,7 @@ class ProjectRenderInput:
     fps: float
     duration_frames: int
     markers: list[MarkerSummary]
+    profile: dict[str, str] = field(default_factory=dict)
 
 
 def _resource_path(document: ProjectDocument, resource: str) -> Path | None:
@@ -517,4 +518,5 @@ def load_project_render_input(path: Path) -> ProjectRenderInput:
         fps=document.fps,
         duration_frames=int(snapshot["duration_frames"]),
         markers=list(snapshot["markers"]),
+        profile=dict(document.profile().attrib),
     )

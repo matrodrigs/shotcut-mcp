@@ -1832,6 +1832,65 @@ class ProtocolNegotiationTests(unittest.TestCase):
                         [str(rendered), str(editable)],
                     )
 
+    def test_review_clip_returns_version_gated_playable_resource(self) -> None:
+        path = Path(tempfile.gettempdir()).resolve() / "review.mp4"
+        payload = {
+            "created": True,
+            "path": str(path),
+            "uri": path.as_uri(),
+            "mime_type": "video/mp4",
+            "managed_output": True,
+            "size_bytes": 1024,
+            "revision": "a" * 64,
+            "in_frame": 10,
+            "out_frame": 39,
+            "duration_frames": 30,
+            "duration_seconds": 1.0,
+            "width": 1280,
+            "height": 720,
+        }
+        schema = next(
+            tool["outputSchema"]
+            for tool in TOOLS
+            if tool["name"] == "render_review_clip"
+        )
+        self.assertEqual(schema_errors(payload, schema), [])
+        for version in ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"):
+            with (
+                self.subTest(version=version),
+                patch.dict(
+                    HANDLERS, {"render_review_clip": lambda _arguments: payload}
+                ),
+            ):
+                response = handle_request(
+                    request(
+                        "tools/call",
+                        {
+                            "name": "render_review_clip",
+                            "arguments": {
+                                "project_path": "project.mlt",
+                                "in_frame": 10,
+                                "out_frame": 39,
+                            },
+                        },
+                    ),
+                    ProtocolSession(protocol_version=version),
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                content = result["content"]
+                if version in {"2025-06-18", "2025-11-25"}:
+                    self.assertEqual(
+                        [item["type"] for item in content], ["text", "resource_link"]
+                    )
+                    self.assertEqual(content[1]["uri"], path.as_uri())
+                    self.assertEqual(content[1]["mimeType"], "video/mp4")
+                    self.assertEqual(result["structuredContent"], payload)
+                else:
+                    self.assertEqual([item["type"] for item in content], ["text"])
+                    self.assertNotIn("structuredContent", result)
+                    self.assertEqual(json.loads(content[0]["text"]), payload)
+
     def test_discovery_pages_match_published_output_contract(self) -> None:
         schema = next(
             tool["outputSchema"] for tool in TOOLS if tool["name"] == "discover_media"
