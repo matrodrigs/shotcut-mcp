@@ -6,6 +6,7 @@
 
 - Discover video, audio, and image files in a folder with bounded traversal, revision-aware pagination, and optional compact metadata that preserves individual probe failures.
 - Review up to 30 seconds of motion and audio in a managed H.264/AAC clip before final export.
+- Check Python discovery and Shotcut readiness before connecting MCP with the existing server entry point's `--check` option.
 
 ### Fixed
 
