@@ -14,6 +14,7 @@ from .platform import (
     compatibility_doctor,
     describe_service,
     detect_hardware_encoders,
+    discover_media,
     expand_path,
     list_services,
     open_in_shotcut,
@@ -1070,6 +1071,7 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
         ),
         "render_presets": RENDER_PRESETS,
         "feature_guidance": {
+            "source_folders": "Use discover_media for source folders and follow next_cursor. Candidate kinds come from extensions; probe representative files and ground creative choices in inspected media and previews.",
             "inspection": "Use inspect_project with track/frame filters, detail=summary for smaller results, and pagination.next_offset with expected_revision to continue without mixing project revisions. Collection pages are independent; markers/resources remain project-wide.",
             "committed_receipts": "result_truncated=true on create/edit/restore is a successful commit with omitted details. Do not repeat it; inspect_project can retrieve the saved revision in pages.",
             "compatibility": (
@@ -1132,6 +1134,7 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
         },
         "workflow": [
             "run shotcut_doctor after installing or upgrading Shotcut",
+            "use discover_media when sources are supplied as a folder; page with next_cursor",
             "use probe_media for stream facts and analyze_media_quality for source QC",
             "inspect_project to obtain revision and revision-scoped item_ref values; follow pagination.next_offset with expected_revision when needed",
             "optionally list_mlt_services/describe_mlt_service",
@@ -1382,6 +1385,46 @@ TOOLS: list[ToolDefinition] = [
                     "description": "Optional edit operation to describe in full.",
                 }
             }
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "discover_media",
+        "title": "Discover media in a folder",
+        "description": "Use when the user supplies a source folder. Lists media candidates by extension in deterministic pages, with optional bounded stream metadata. Respects path policy and skips directory symlinks; use probe_media to inspect individual files and do not infer visual content from filenames.",
+        "inputSchema": _object_schema(
+            {
+                "folder_path": {
+                    **PATH,
+                    "description": "Existing authorized local folder to scan; network folders require administrator opt-in.",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include subfolders up to 16 levels; directory symlinks are not followed. Scans stop with guidance after 20,000 entries or 30 seconds.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 50,
+                    "description": "Maximum media candidates returned on this page.",
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Opaque next_cursor from the preceding page with the same folder and recursive option. Changed file listings invalidate it.",
+                },
+                "include_metadata": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Probe returned candidates for duration, video dimensions and audio. Probe failures are reported per file; remaining work shares a bounded time budget.",
+                },
+            },
+            ["folder_path"],
         ),
         "annotations": {
             "readOnlyHint": True,
@@ -3272,6 +3315,53 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
         },
         ["transaction_guarantees", "operations"],
     ),
+    "discover_media": _result_schema(
+        {
+            "folder_path": STRING,
+            "recursive": BOOLEAN,
+            "revision": STRING,
+            "items": _output_array(
+                _output_object(
+                    {
+                        "path": STRING,
+                        "relative_path": STRING,
+                        "kind": {"type": "string", "enum": ["video", "audio", "image"]},
+                        "size_bytes": INTEGER,
+                        "metadata": _output_object(
+                            {
+                                "duration_seconds": NULLABLE_NUMBER,
+                                "has_video": BOOLEAN,
+                                "has_audio": BOOLEAN,
+                                "width": NULLABLE_INTEGER,
+                                "height": NULLABLE_INTEGER,
+                                "frame_rate": NULLABLE_NUMBER,
+                                "audio_channels": NULLABLE_INTEGER,
+                            },
+                            [
+                                "duration_seconds",
+                                "has_video",
+                                "has_audio",
+                                "width",
+                                "height",
+                                "frame_rate",
+                                "audio_channels",
+                            ],
+                        ),
+                        "probe_error": _output_object(
+                            {"code": STRING, "message": STRING}, ["code", "message"]
+                        ),
+                    },
+                    ["path", "relative_path", "kind", "size_bytes"],
+                ),
+                "Media candidates on this page, with optional per-file metadata or probe errors.",
+            ),
+            "total": INTEGER,
+            "offset": INTEGER,
+            "next_cursor": NULLABLE_STRING,
+            "scanned_entries": INTEGER,
+            "skipped_entries": INTEGER,
+        }
+    ),
     "probe_media": MEDIA_SUMMARY_OUTPUT_SCHEMA,
     "analyze_media_quality": _result_schema(
         {
@@ -3790,6 +3880,7 @@ HANDLERS: dict[str, Callable[[dict[str, object]], Mapping[str, object]]] = {
     "shotcut_status": lambda _: status(),
     "shotcut_doctor": lambda _: compatibility_doctor(),
     "shotcut_capabilities": capabilities,
+    "discover_media": discover_media,
     "probe_media": lambda arguments: dict(
         summarize_media(expand_path(arguments.get("path", "")))
     ),

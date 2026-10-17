@@ -11,20 +11,28 @@ import unittest
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.build_release import build_release
 from shotcut_mcp import __version__
+from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import (
     analyze_media_quality,
     compatibility_doctor,
     discover_executables,
+    discover_media,
     render_contact_sheet,
     render_preview,
     render_preview_batch,
+    run_capture,
     summarize_media,
 )
 from shotcut_mcp.project import create_project, edit_project, validate_project
-from shotcut_mcp.render import cancel_render, render_status, start_render
+from shotcut_mcp.render import (
+    cancel_render,
+    render_status,
+    start_render,
+)
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 
@@ -33,6 +41,68 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_discovery_pages_probe_real_media_and_preserve_unreadable_candidates(
+        self,
+    ) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        self.assertIsNotNone(ffmpeg)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            media = root / "a-source.mp4"
+            result = run_capture(
+                [
+                    str(ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=160x90:rate=25:duration=1",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=800:duration=1",
+                    "-shortest",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    str(media),
+                ],
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            (root / "b-broken.mp4").write_bytes(b"invalid media")
+            arguments = {
+                "folder_path": str(root),
+                "include_metadata": True,
+                "limit": 1,
+            }
+            with patch.dict(os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(root)}):
+                first = discover_media(arguments)
+                self.assertEqual(first["total"], 2)
+                self.assertEqual(first["items"][0]["path"], str(media))
+                metadata = first["items"][0]["metadata"]
+                self.assertEqual((metadata["width"], metadata["height"]), (160, 90))
+                self.assertEqual(metadata["frame_rate"], 25)
+                self.assertTrue(metadata["has_video"])
+                self.assertTrue(metadata["has_audio"])
+                self.assertGreaterEqual(metadata["audio_channels"], 1)
+                self.assertAlmostEqual(metadata["duration_seconds"], 1, delta=0.1)
+                second = discover_media({**arguments, "cursor": first["next_cursor"]})
+                self.assertIsNone(second["next_cursor"])
+                self.assertEqual(second["revision"], first["revision"])
+                self.assertEqual(second["items"][0]["relative_path"], "b-broken.mp4")
+                self.assertEqual(
+                    second["items"][0]["probe_error"]["code"], "media_probe_failed"
+                )
+                media.rename(root / "renamed.mp4")
+                with self.assertRaises(ToolError) as caught:
+                    discover_media({**arguments, "cursor": first["next_cursor"]})
+                self.assertEqual(
+                    caught.exception.code, "media_discovery_revision_conflict"
+                )
+
     def test_batch_previews_preserve_fractional_fps_relative_media_and_frame_order(
         self,
     ) -> None:

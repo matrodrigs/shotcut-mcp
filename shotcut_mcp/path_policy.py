@@ -46,7 +46,12 @@ def _enabled(name: str) -> bool:
     return os.environ.get(name, "").lower() in {"1", "true", "yes"}
 
 
-def expand_path(value: object, *, enforce_policy: bool = True) -> Path:
+def expand_path(
+    value: object,
+    *,
+    enforce_policy: bool = True,
+    enforce_network_policy: bool = False,
+) -> Path:
     """Resolve a user path and enforce the administrator's root policy."""
 
     if not isinstance(value, str) or not value.strip():
@@ -55,7 +60,10 @@ def expand_path(value: object, *, enforce_policy: bool = True) -> Path:
             code="invalid_path",
             recommended_action="provide_valid_path_and_retry",
         )
-    expanded = Path(os.path.expandvars(value)).expanduser()
+    expanded_value = os.path.expandvars(value)
+    if enforce_policy and enforce_network_policy:
+        _enforce_network_path_policy(os.path.expanduser(expanded_value))
+    expanded = Path(expanded_value).expanduser()
     if (
         enforce_policy
         and _enabled("SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS")
@@ -69,6 +77,8 @@ def expand_path(value: object, *, enforce_policy: bool = True) -> Path:
             details={"path": value},
         )
     resolved = expanded.resolve()
+    if enforce_policy and enforce_network_policy:
+        _enforce_network_path_policy(str(resolved))
     configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
     if enforce_policy and configured_roots:
         roots = [
@@ -136,6 +146,18 @@ def is_network_resource(value: str) -> bool:
         value[:2].replace("\\", "/") == "//"
         or value.partition(":")[0].lower() in NETWORK_SCHEMES
     )
+
+
+def _enforce_network_path_policy(value: str) -> None:
+    if is_network_resource(value) and not _enabled(
+        "SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES"
+    ):
+        raise ToolError(
+            "Network data paths are disabled by the configured path policy.",
+            code="network_resource_policy_denied",
+            recommended_action="choose_local_path_or_change_policy",
+            recommended_tool="shotcut_doctor",
+        )
 
 
 def resolve_project_resource(

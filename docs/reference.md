@@ -28,6 +28,7 @@ integrators, and users who need more control.
 | `shotcut_status` | Discover Shotcut, Melt, FFmpeg, and FFprobe and report versions |
 | `shotcut_doctor` | Verify the Shotcut/MLT stack, RNNoise, FFmpeg analyzer availability, and path policy |
 | `shotcut_capabilities` | Return the complete edit catalog and context, or one focused operation schema and example |
+| `discover_media` | Find media files in a folder with revision-aware pagination and optional compact metadata |
 | `probe_media` | Inspect streams, codecs, dimensions, frame rate, audio, and duration |
 | `analyze_media_quality` | Measure silence, black frames, freezes, interlacing, and EBU R128 loudness |
 | `inspect_project` | Inspect saved project state with revision-scoped item references and bounded track, interval, and page selection |
@@ -66,6 +67,12 @@ for request parameters.
 The default `detail: "full"` keeps nested filter lists and their properties with each returned track or item. `detail: "summary"` preserves identifiers and timing while clearing notes, captions, property bags, and subtitle text. Use summary mode or a smaller page when a detailed inspection exceeds the message budget.
 
 Successful create and edit calls normally include the updated project; restores return revision, backup, and validation details. If a successful response would exceed the MCP message budget, the server returns a compact receipt with the tool's success flag (`created`, `edited`, or `restored`) set to true, the saved `revision`, `result_truncated: true`, and `recommended_tool: "inspect_project"`. Paths, backup details, and operation results are included only when they fit. Reinspect the relevant scope to obtain item references for the new revision; do not repeat the committed mutation because its snapshot was omitted.
+
+## Media discovery
+
+`discover_media` lists known video, audio, and image extensions in `folder_path`. It searches the immediate folder by default; set `recursive: true` for subfolders. Pages default to 50 files and accept up to 200. Reuse the returned `next_cursor` with the same search arguments; a changed listing requires restarting pagination. Extension-based kinds are a discovery hint, not proof that a file can be decoded.
+
+Set `include_metadata: true` to probe the current page for compact duration, dimensions, frame rate, and audio facts. A failed or timed-out probe remains a per-file `probe_error` so other candidates stay usable. Traversal applies path policy, skips directory symlinks and junctions, and is bounded by 20,000 entries and 16 levels. Traversal and metadata probing share a 30-second budget. Narrow the folder when a scan limit is reached; use `probe_media` when you need complete stream details for a selected file.
 
 ## Rendering
 

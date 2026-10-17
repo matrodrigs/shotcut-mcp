@@ -1832,6 +1832,33 @@ class ProtocolNegotiationTests(unittest.TestCase):
                         [str(rendered), str(editable)],
                     )
 
+    def test_discovery_pages_match_published_output_contract(self) -> None:
+        schema = next(
+            tool["outputSchema"] for tool in TOOLS if tool["name"] == "discover_media"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for name in ("a.mp4", "b.wav", "c.png", "notes.txt"):
+                (root / name).write_bytes(b"candidate")
+            paths = []
+            arguments = {"folder_path": str(root), "limit": 1}
+            for _ in range(3):
+                response = handle_request(
+                    request(
+                        "tools/call", {"name": "discover_media", "arguments": arguments}
+                    )
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                payload = result["structuredContent"]
+                self.assertEqual(schema_errors(payload, schema), [])
+                self.assertEqual(payload["total"], 3)
+                self.assertEqual(len(payload["items"]), 1)
+                paths.append(payload["items"][0]["relative_path"])
+                arguments["cursor"] = payload["next_cursor"]
+            self.assertIsNone(arguments["cursor"])
+            self.assertEqual(paths, ["a.mp4", "b.wav", "c.png"])
+
     def test_file_writing_tools_are_conservatively_destructive(self) -> None:
         listed = handle_request(request("tools/list"))
         by_name = {tool["name"]: tool for tool in listed["result"]["tools"]}

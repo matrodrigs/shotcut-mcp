@@ -7,6 +7,7 @@ handlers and allows tests to replace process functions at the public interface.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -159,6 +160,7 @@ __all__ = [
     "describe_service",
     "detect_hardware_encoders",
     "discover_executables",
+    "discover_media",
     "enforce_project_resource_policy",
     "ensure_melt_ready",
     "expand_path",
@@ -184,6 +186,263 @@ __all__ = [
     "validate_project_file",
     "version_line",
 ]
+
+
+_MEDIA_EXTENSIONS = {
+    **dict.fromkeys(
+        [
+            ".3gp",
+            ".avi",
+            ".flv",
+            ".m2t",
+            ".m2ts",
+            ".m4v",
+            ".mkv",
+            ".mov",
+            ".mp4",
+            ".mpeg",
+            ".mpg",
+            ".mts",
+            ".mxf",
+            ".ogv",
+            ".ts",
+            ".vob",
+            ".webm",
+            ".wmv",
+        ],
+        "video",
+    ),
+    **dict.fromkeys(
+        [
+            ".aac",
+            ".aif",
+            ".aiff",
+            ".alac",
+            ".flac",
+            ".m4a",
+            ".mp3",
+            ".oga",
+            ".ogg",
+            ".opus",
+            ".wav",
+            ".wma",
+        ],
+        "audio",
+    ),
+    **dict.fromkeys(
+        [
+            ".avif",
+            ".bmp",
+            ".gif",
+            ".heic",
+            ".heif",
+            ".jpeg",
+            ".jpg",
+            ".png",
+            ".svg",
+            ".tif",
+            ".tiff",
+            ".webp",
+        ],
+        "image",
+    ),
+}
+
+
+def _discover_media_files(
+    root: Path, recursive: bool, deadline: float
+) -> tuple[list[tuple[str, Path, os.stat_result]], int, int]:
+    pending = [(root, 0)]
+    files: list[tuple[str, Path, os.stat_result]] = []
+    scanned = 0
+    skipped = 0
+    while pending:
+        directory, depth = pending.pop()
+        try:
+            with os.scandir(
+                expand_path(str(directory), enforce_network_policy=True)
+            ) as entries:
+                for entry in entries:
+                    if cancellation_requested():
+                        raise RequestCancelled("Media discovery cancelled.")
+                    scanned += 1
+                    if scanned > 20_000 or time.monotonic() >= deadline:
+                        raise ToolError(
+                            "Media discovery exceeded 20,000 entries or 30 seconds. "
+                            "Choose a smaller folder or disable recursive discovery.",
+                            code="media_discovery_limit_exceeded",
+                            recommended_action="choose_narrower_folder_and_retry",
+                            recommended_tool="discover_media",
+                        )
+                    candidate = Path(entry.path)
+                    try:
+                        authorized = expand_path(
+                            str(candidate), enforce_network_policy=True
+                        )
+                        if entry.is_dir(follow_symlinks=False):
+                            if authorized != candidate:
+                                skipped += 1
+                                continue
+                            if recursive:
+                                if depth >= 16:
+                                    raise ToolError(
+                                        "Recursive media discovery is limited to 16 levels.",
+                                        code="media_discovery_limit_exceeded",
+                                        recommended_action="choose_narrower_folder_and_retry",
+                                        recommended_tool="discover_media",
+                                    )
+                                pending.append((candidate, depth + 1))
+                        elif candidate.suffix.lower() in _MEDIA_EXTENSIONS:
+                            if authorized.is_file():
+                                files.append(
+                                    (
+                                        candidate.relative_to(root).as_posix(),
+                                        authorized,
+                                        authorized.stat(),
+                                    )
+                                )
+                        elif entry.is_symlink():
+                            skipped += 1
+                    except ToolError as exc:
+                        if exc.code == "media_discovery_limit_exceeded":
+                            raise
+                        skipped += 1
+                    except OSError:
+                        skipped += 1
+        except OSError as exc:
+            raise ToolError(
+                f"Could not read media folder: {exc}",
+                code="media_discovery_failed",
+                recommended_action="check_folder_access_and_retry",
+                recommended_tool="discover_media",
+            ) from exc
+    files.sort(key=lambda item: (item[0].casefold(), item[0]))
+    return files, scanned, skipped
+
+
+def discover_media(arguments: dict[str, object]) -> dict[str, object]:
+    recursive = arguments.get("recursive", False)
+    include_metadata = arguments.get("include_metadata", False)
+    limit = arguments.get("limit", 50)
+    cursor = arguments.get("cursor")
+    if not isinstance(recursive, bool) or not isinstance(include_metadata, bool):
+        raise ToolError("recursive and include_metadata must be booleans.")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+        raise ToolError("limit must be an integer between 1 and 200.")
+    if cursor is not None and (
+        not isinstance(cursor, str)
+        or re.fullmatch(r"[a-f0-9]{64}:[0-9]{1,5}", cursor) is None
+    ):
+        raise ToolError(
+            "cursor must be a next_cursor returned by discover_media.",
+            code="invalid_discovery_cursor",
+            recommended_action="restart_discovery_without_cursor",
+            recommended_tool="discover_media",
+        )
+    if cancellation_requested():
+        raise RequestCancelled("Media discovery cancelled.")
+    root = expand_path(arguments.get("folder_path"), enforce_network_policy=True)
+    if not root.is_dir():
+        raise ToolError(
+            f"Media folder not found: {root}",
+            code="media_folder_not_found",
+            recommended_action="choose_existing_folder_and_retry",
+            recommended_tool="discover_media",
+        )
+    deadline = time.monotonic() + 30
+    files, scanned, skipped = _discover_media_files(root, recursive, deadline)
+    digest = hashlib.sha256(f"{root}\0{recursive}\0".encode())
+    for relative, path, stat in files:
+        digest.update(
+            f"{relative}\0{path}\0{stat.st_dev}\0{stat.st_ino}\0"
+            f"{stat.st_size}\0{stat.st_mtime_ns}\0{stat.st_ctime_ns}\0".encode()
+        )
+    revision = digest.hexdigest()
+    offset = 0
+    if isinstance(cursor, str):
+        previous_revision, _, previous_offset = cursor.partition(":")
+        offset = int(previous_offset)
+        if previous_revision != revision or not 0 < offset < len(files):
+            raise ToolError(
+                "The media listing changed or the cursor no longer identifies a page.",
+                code="media_discovery_revision_conflict",
+                recommended_action="restart_discovery_without_cursor",
+                recommended_tool="discover_media",
+                details={"current_revision": revision},
+            )
+    items: list[dict[str, object]] = []
+    page = files[offset : offset + limit]
+    for relative, path, stat in page:
+        if cancellation_requested():
+            raise RequestCancelled("Media discovery cancelled.")
+        item: dict[str, object] = {
+            "path": str(path),
+            "relative_path": relative,
+            "kind": _MEDIA_EXTENSIONS[Path(relative).suffix.lower()],
+            "size_bytes": stat.st_size,
+        }
+        if include_metadata:
+            try:
+                remaining = int(deadline - time.monotonic())
+                if remaining <= 0:
+                    raise ToolError(
+                        "Metadata was not probed within the 30-second discovery budget. "
+                        "Use probe_media for this file.",
+                        code="media_discovery_probe_timeout",
+                    )
+                media = summarize_media(
+                    expand_path(str(path), enforce_network_policy=True),
+                    timeout_seconds=remaining,
+                )
+                video = next(
+                    (
+                        stream
+                        for stream in media["streams"]
+                        if stream["type"] == "video"
+                    ),
+                    None,
+                )
+                audio = next(
+                    (
+                        stream
+                        for stream in media["streams"]
+                        if stream["type"] == "audio"
+                    ),
+                    None,
+                )
+                item["metadata"] = {
+                    "duration_seconds": media["duration_seconds"],
+                    "has_video": video is not None,
+                    "has_audio": audio is not None,
+                    "width": video.get("width") if video else None,
+                    "height": video.get("height") if video else None,
+                    "frame_rate": video.get("frame_rate") if video else None,
+                    "audio_channels": audio.get("channels") if audio else None,
+                }
+            except RequestCancelled:
+                raise
+            except (ToolError, OSError) as exc:
+                item["probe_error"] = {
+                    "code": exc.code
+                    if isinstance(exc, ToolError)
+                    else "media_probe_failed",
+                    "message": str(exc)[-500:],
+                }
+        items.append(item)
+    next_offset = offset + len(page)
+    return {
+        "folder_path": str(root),
+        "recursive": recursive,
+        "revision": revision,
+        "items": items,
+        "total": len(files),
+        "offset": offset,
+        "next_cursor": f"{revision}:{next_offset}"
+        if next_offset < len(files)
+        else None,
+        "scanned_entries": scanned,
+        "skipped_entries": skipped,
+    }
 
 
 def ensure_melt_ready(

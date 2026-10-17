@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Discover video, audio, and image files in a folder with bounded traversal, revision-aware pagination, and optional compact metadata that preserves individual probe failures.
+
 ### Fixed
 
 - Preserve success confirmations and saved revisions for large project creations, edits, and restores, including batches, so callers do not repeat an already saved change.

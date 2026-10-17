@@ -124,11 +124,13 @@ class ProtocolTests(unittest.TestCase):
             json.loads(line) for line in result.stdout.decode("utf-8").splitlines()
         ]
         self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-11-25")
-        names = {item["name"] for item in responses[1]["result"]["tools"]}
-        self.assertEqual(len(names), 26)
+        listed = responses[1]["result"]["tools"]
+        names = {item["name"] for item in listed}
+        self.assertEqual(len(names), len(listed))
         self.assertIn("edit_project", names)
         self.assertIn("shotcut_capabilities", names)
         self.assertIn("restore_project_backup", names)
+        self.assertIn("discover_media", names)
 
 
 class RenderSafetyTests(unittest.TestCase):

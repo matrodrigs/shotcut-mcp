@@ -312,7 +312,7 @@ def _dynamic_range(transfer: object) -> str:
     return "unknown"
 
 
-def probe_media_raw(media_path: Path) -> ProbePayload:
+def probe_media_raw(media_path: Path, *, timeout_seconds: int = 60) -> ProbePayload:
     """Return cached raw FFprobe JSON for a concrete file revision."""
 
     if not media_path.is_file():
@@ -347,7 +347,7 @@ def probe_media_raw(media_path: Path) -> ProbePayload:
             "json",
             str(media_path),
         ],
-        timeout=60,
+        timeout=timeout_seconds,
     )
     if result.returncode:
         raise ToolError(
@@ -383,10 +383,10 @@ def probe_media_raw(media_path: Path) -> ProbePayload:
     return payload
 
 
-def summarize_media(media_path: Path) -> MediaSummary:
+def summarize_media(media_path: Path, *, timeout_seconds: int = 60) -> MediaSummary:
     """Return the MCP-facing normalized summary for a media file."""
 
-    payload = probe_media_raw(media_path)
+    payload = probe_media_raw(media_path, timeout_seconds=timeout_seconds)
     streams: list[MediaStreamSummary] = []
     for stream in payload.get("streams", []):
         item: MediaStreamSummary = {
