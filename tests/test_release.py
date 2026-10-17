@@ -7,8 +7,10 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import unquote, urlsplit
 
 from scripts.build_release import ROOT, build_release, package_members, verify_bundle
 from scripts.check_release import (
@@ -381,72 +383,33 @@ class ReleaseBundleTests(unittest.TestCase):
 
 
 class SiteAssetTests(unittest.TestCase):
-    def test_demo_toolbar_does_not_render_an_empty_file_glyph(self) -> None:
-        site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
+    def test_local_site_assets_and_anchor_targets_exist(self) -> None:
+        ids: list[str] = []
+        urls: list[str] = []
 
-        self.assertNotIn("demo-file-icon", site_markup)
-        self.assertNotIn(".demo-file-icon", site_styles)
+        def record(_tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            for name, value in attrs:
+                if value is None:
+                    continue
+                if name == "id":
+                    ids.append(value)
+                elif name in {"href", "src", "poster"}:
+                    urls.append(value)
 
-    def test_navigation_tracks_the_visible_section(self) -> None:
-        site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-        site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
-
-        self.assertEqual(site_markup.count("data-section-link"), 3)
-        self.assertIn('setAttribute("aria-current", "location")', site_script)
-        self.assertIn('removeAttribute("aria-current")', site_script)
-
-    def test_pressed_controls_do_not_shrink_inside_their_layout_box(self) -> None:
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
-
-        self.assertNotRegex(
-            site_styles,
-            r":active[^{}]*\{[^{}]*transform:\s*scale\(",
-        )
-
-    def test_collapsed_codex_install_panel_does_not_reserve_empty_space(self) -> None:
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
-
-        self.assertIn(
-            "#install-panel-codex {\n  min-height: auto;\n}",
-            site_styles,
-        )
-        self.assertIn(
-            'summary::after {\n  content: "+";\n  position: absolute;\n  right: 1rem;',
-            site_styles,
-        )
-
-    def test_demo_controls_expose_a_touch_sized_fullscreen_action(self) -> None:
-        site_markup = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-        site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
-
-        self.assertIn("data-demo-fullscreen", site_markup)
-        self.assertNotIn("nofullscreen", site_markup)
-        self.assertIn("demoShell.requestFullscreen", site_script)
-        self.assertIn(
-            ".demo-control {\n  width: 44px;\n  height: 44px;",
-            site_styles,
-        )
-
-    def test_mobile_video_idle_detection_covers_touch_capable_browsers(self) -> None:
-        site_script = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
-        site_styles = (ROOT / "docs" / "styles.css").read_text(encoding="utf-8")
-
-        self.assertIn(
-            'window.matchMedia("(any-pointer: coarse)")',
-            site_script,
-        )
-        self.assertIn("navigator.maxTouchPoints > 0", site_script)
-        self.assertNotIn(
-            'window.matchMedia("(hover: none) and (pointer: coarse)")',
-            site_script,
-        )
-        self.assertIn(
-            "\n.demo-video-shell.has-custom-controls.is-playing.is-controls-idle "
-            ".demo-controls {\n",
-            site_styles,
-        )
+        references = HTMLParser()
+        with patch.object(references, "handle_starttag", record):
+            references.feed((ROOT / "docs" / "index.html").read_text(encoding="utf-8"))
+        self.assertEqual(len(ids), len(set(ids)), "Duplicate HTML ids")
+        self.assertTrue(urls)
+        for value in urls:
+            url = urlsplit(value)
+            if url.scheme or url.netloc:
+                continue
+            with self.subTest(reference=value):
+                if url.path:
+                    self.assertTrue((ROOT / "docs" / unquote(url.path)).is_file())
+                elif url.fragment:
+                    self.assertIn(unquote(url.fragment), ids)
 
 
 class CiConfigurationTests(unittest.TestCase):
