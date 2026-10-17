@@ -181,6 +181,10 @@ def run_worker(job_id: str) -> int:
             snapshot.cleanup_if_owned()
             write_job(metadata)
             return 0
+        if not gate_path(job_id).is_file():
+            raise ToolError(
+                "The parent did not confirm render startup before the deadline."
+            )
 
         path = log_path(job_id)
         log = _BoundedLog(str(path))

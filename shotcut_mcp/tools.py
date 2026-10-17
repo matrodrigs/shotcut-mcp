@@ -1076,6 +1076,7 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
             "inspection": "Use inspect_project with track/frame filters, detail=summary for smaller results, and pagination.next_offset with expected_revision to continue without mixing project revisions. Collection pages are independent; markers/resources remain project-wide.",
             "committed_receipts": "result_truncated=true on create/edit/restore is a successful commit with omitted details. Do not repeat it; inspect_project can retrieve the saved revision in pages.",
             "audiovisual_review": "Use render_review_clip for an inclusive range of at most 30 seconds when reviewing motion or sound. Show the returned MP4 resource/path. It is managed temporary review, separate from final export.",
+            "render_capacity": "SHOTCUT_MCP_MAX_ACTIVE_RENDERS limits durable renders across server processes (default 2, administrator range 1..8). On render_capacity_reached, list_render_jobs and wait; do not cancel existing jobs without user authorization.",
             "compatibility": (
                 "Read shotcut_doctor.status: tested confirms a tested version pair with "
                 "passing runtime checks; untested is a warning, not a version-based block; "

@@ -22,6 +22,7 @@ from .platform import (
     require_executable,
     run_capture,
     start_render_supervisor,
+    terminate_process,
 )
 from .project_snapshot import load_project_render_input
 from .protocol import cancellation_requested, is_object, report_progress
@@ -30,10 +31,10 @@ from .render_jobs import (
     RenderJob,
     list_jobs,
     log_path,
-    prune_jobs,
     read_job,
     read_progress,
     release_gate,
+    render_admission,
     render_input_snapshot,
     request_cancel,
     startup_log_path,
@@ -534,99 +535,111 @@ def start_render(arguments: dict[str, object]) -> RenderJob:
     melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
     ensure_melt_ready(melt)
     report_progress(1, 4, "Render toolchain is ready.")
-    prune_jobs()
-    job_id = uuid.uuid4().hex
-    snapshot = RenderInputSnapshot.create(
-        project_path,
-        job_id,
-        render_input.source,
-        project_revision,
-    )
-    try:
-        enforce_project_resource_policy(snapshot.path)
-        output = OutputTransaction.prepare(
-            output_path,
-            overwrite=overwrite,
-            protected_paths=(project_path, snapshot.path),
+    with render_admission():
+        job_id = uuid.uuid4().hex
+        snapshot = RenderInputSnapshot.create(
+            project_path,
+            job_id,
+            render_input.source,
+            project_revision,
         )
-    except Exception:
-        snapshot.cleanup_if_owned()
-        raise
-    report_progress(2, 4, "Immutable project snapshot prepared.")
-    metadata: RenderJob = {
-        "job_id": job_id,
-        "pid": None,
-        "worker_pid": None,
-        "renderer_pid": None,
-        "status": "queued",
-        "return_code": None,
-        "project_path": str(project_path),
-        "source_project_path": str(project_path),
-        "render_project_path": str(snapshot.path),
-        "editable_project_path": str(snapshot.path),
-        "output_path": str(output_path),
-        "temporary_output_path": str(output.temporary),
-        "output_transaction": output.serialize(),
-        "overwrite": overwrite,
-        "preset": preset,
-        "consumer_properties": properties,
-        "in_frame": in_frame,
-        "out_frame": out_frame,
-        "total_frames": total_frames,
-        "range_duration_frames": range_duration_frames or source_duration_frames,
-        "source_duration_frames": source_duration_frames,
-        "project_revision": project_revision,
-        "rendered_project_revision": project_revision,
-        "marker_id": marker_id,
-        "marker_text": marker_text,
-        "melt_path": str(melt),
-        "log_path": str(log_path(job_id)),
-        "started_at": time.time(),
-        "updated_at": time.time(),
-        "finished_at": None,
-        "progress_percent": 0,
-        "current_frame": None,
-        "progress_samples": [],
-    }
-    try:
-        write_job(metadata)
-    except Exception:
-        output.cleanup()
-        snapshot.cleanup_if_owned()
-        raise
-    report_progress(3, 4, "Render job metadata persisted.")
-    try:
-        process = start_render_supervisor(job_id, startup_log_path(job_id))
-    except OSError as exc:
-        output.cleanup()
-        snapshot.cleanup_if_owned()
-        metadata.update(
-            {
-                "status": "failed",
-                "status_note": f"Could not start the render supervisor: {exc}",
-                "finished_at": time.time(),
-            }
-        )
-        write_job(metadata)
-        raise ToolError(
-            f"Could not start the render: {exc}",
-            code="render_start_failed",
-            recommended_action="run_compatibility_diagnostics",
-            recommended_tool="shotcut_doctor",
-            details={"job_id": job_id},
-        ) from exc
-    with _RUNNING_JOBS_LOCK:
-        RUNNING_JOBS[job_id] = process
-    threading.Thread(
-        target=_reap_supervisor, args=(job_id, process), daemon=True
-    ).start()
-    metadata.update(
-        {"pid": process.pid, "worker_pid": process.pid, "status": "running"}
-    )
-    write_job(metadata)
-    release_gate(job_id)
-    report_progress(4, 4, "Render supervisor started.")
-    return metadata
+        try:
+            enforce_project_resource_policy(snapshot.path)
+            output = OutputTransaction.prepare(
+                output_path,
+                overwrite=overwrite,
+                protected_paths=(project_path, snapshot.path),
+            )
+        except Exception:
+            snapshot.cleanup_if_owned()
+            raise
+        report_progress(2, 4, "Immutable project snapshot prepared.")
+        metadata: RenderJob = {
+            "job_id": job_id,
+            "pid": None,
+            "worker_pid": None,
+            "renderer_pid": None,
+            "status": "queued",
+            "return_code": None,
+            "project_path": str(project_path),
+            "source_project_path": str(project_path),
+            "render_project_path": str(snapshot.path),
+            "editable_project_path": str(snapshot.path),
+            "output_path": str(output_path),
+            "temporary_output_path": str(output.temporary),
+            "output_transaction": output.serialize(),
+            "overwrite": overwrite,
+            "preset": preset,
+            "consumer_properties": properties,
+            "in_frame": in_frame,
+            "out_frame": out_frame,
+            "total_frames": total_frames,
+            "range_duration_frames": range_duration_frames or source_duration_frames,
+            "source_duration_frames": source_duration_frames,
+            "project_revision": project_revision,
+            "rendered_project_revision": project_revision,
+            "marker_id": marker_id,
+            "marker_text": marker_text,
+            "melt_path": str(melt),
+            "log_path": str(log_path(job_id)),
+            "started_at": time.time(),
+            "updated_at": time.time(),
+            "finished_at": None,
+            "progress_percent": 0,
+            "current_frame": None,
+            "progress_samples": [],
+        }
+        try:
+            write_job(metadata)
+        except Exception:
+            output.cleanup()
+            snapshot.cleanup_if_owned()
+            raise
+        report_progress(3, 4, "Render job metadata persisted.")
+        process: subprocess.Popen[bytes] | None = None
+        try:
+            if cancellation_requested():
+                raise RequestCancelled()
+            process = start_render_supervisor(job_id, startup_log_path(job_id))
+            metadata.update(
+                {"pid": process.pid, "worker_pid": process.pid, "status": "running"}
+            )
+            write_job(metadata)
+            with _RUNNING_JOBS_LOCK:
+                RUNNING_JOBS[job_id] = process
+            threading.Thread(
+                target=_reap_supervisor, args=(job_id, process), daemon=True
+            ).start()
+            release_gate(job_id)
+        except Exception as exc:
+            if process is not None:
+                request_cancel(job_id)
+                terminate_process(process)
+                with _RUNNING_JOBS_LOCK:
+                    RUNNING_JOBS.pop(job_id, None)
+            output.cleanup()
+            snapshot.cleanup_if_owned()
+            metadata.update(
+                {
+                    "status": "cancelled"
+                    if isinstance(exc, RequestCancelled)
+                    else "failed",
+                    "status_note": f"Could not start the render supervisor: {exc}",
+                    "finished_at": time.time(),
+                }
+            )
+            write_job(metadata)
+            if not isinstance(exc, OSError):
+                raise
+            raise ToolError(
+                f"Could not start the render: {exc}",
+                code="render_start_failed",
+                recommended_action="run_compatibility_diagnostics",
+                recommended_tool="shotcut_doctor",
+                details={"job_id": job_id},
+            ) from exc
+        report_progress(4, 4, "Render supervisor started.")
+        return metadata
 
 
 def _reap_supervisor(job_id: str, process: subprocess.Popen[bytes]) -> None:

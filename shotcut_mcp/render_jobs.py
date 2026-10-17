@@ -11,13 +11,19 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TypedDict, TypeGuard
 
-from .errors import ToolError
+from .errors import ConflictError, ToolError
 from .protocol import is_array, is_object
-from .storage import RenderInputSnapshot, fsync_directory
+from .storage import (
+    RenderInputSnapshot,
+    exclusive_file_lock,
+    fsync_directory,
+    process_is_alive,
+)
 
 ProgressSample = TypedDict(
     "ProgressSample",
@@ -218,6 +224,77 @@ def ensure_job_directory() -> Path:
     if os.name != "nt":
         JOB_DIR.chmod(0o700)
     return JOB_DIR
+
+
+@contextmanager
+def _admission_lock(directory: Path) -> Iterator[None]:
+    try:
+        with exclusive_file_lock(directory / "admission.lock"):
+            yield
+    except ConflictError as exc:
+        if exc.code != "project_locked":
+            raise
+        raise ToolError(
+            "Another process is starting a render. Retry shortly.",
+            code="render_admission_busy",
+            recommended_action="wait_and_retry",
+            recommended_tool="list_render_jobs",
+        ) from exc
+
+
+@contextmanager
+def render_admission() -> Iterator[None]:
+    try:
+        configured = int(os.environ.get("SHOTCUT_MCP_MAX_ACTIVE_RENDERS", "2"))
+    except ValueError:
+        configured = 2
+    maximum = min(8, max(1, configured))
+    directory = ensure_job_directory()
+    with _admission_lock(directory):
+        history: list[Path] = []
+        for index, path in enumerate(directory.glob("*.json")):
+            if index >= 5000:
+                raise ToolError(
+                    "Render history exceeds the safe admission scan limit.",
+                    code="render_history_limit_reached",
+                    recommended_action="review_render_history",
+                    recommended_tool="list_render_jobs",
+                )
+            history.append(path)
+        prune_jobs()
+        active: list[str] = []
+        for path in history:
+            if not path.is_file():
+                continue
+            metadata = read_job(path.stem)
+            if metadata.get("status") not in {"queued", "running", "orphaned"}:
+                continue
+            pids = (
+                metadata.get("worker_pid"),
+                metadata.get("renderer_pid"),
+                metadata.get("pid"),
+            )
+            alive = any(isinstance(pid, int) and process_is_alive(pid) for pid in pids)
+            starting = (
+                metadata.get("status") == "queued"
+                and all(pid is None for pid in pids)
+                and time.time() - float(metadata.get("started_at") or 0) < 10
+            )
+            if alive or starting:
+                active.append(metadata["job_id"])
+            if len(active) >= maximum:
+                raise ToolError(
+                    f"The active render limit ({maximum}) has been reached. "
+                    "Wait for a render to finish or cancel an active job.",
+                    code="render_capacity_reached",
+                    recommended_action="wait_or_cancel_active_render",
+                    recommended_tool="list_render_jobs",
+                    details={
+                        "maximum_active_renders": maximum,
+                        "active_job_ids": active,
+                    },
+                )
+        yield
 
 
 def validate_job_id(job_id: object) -> str:
@@ -514,6 +591,15 @@ def prune_jobs(max_age_days: int = 30) -> None:
                 continue
             metadata = read_job(metadata_file.stem)
             if metadata.get("status") not in TERMINAL_STATUSES:
+                continue
+            if metadata.get("status") == "orphaned" and any(
+                isinstance(pid, int) and process_is_alive(pid)
+                for pid in (
+                    metadata.get("worker_pid"),
+                    metadata.get("renderer_pid"),
+                    metadata.get("pid"),
+                )
+            ):
                 continue
             job_id = metadata_file.stem
             for related in (

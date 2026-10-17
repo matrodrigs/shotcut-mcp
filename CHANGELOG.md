@@ -17,6 +17,7 @@
 ### Changed
 
 - Bound project inspection with track and interval filters, summary mode, and revision-checked pagination for large timelines.
+- Limit simultaneous background renders to two by default across the user's server processes; administrators can configure 1–8 with `SHOTCUT_MCP_MAX_ACTIVE_RENDERS`.
 
 ## 1.5.6 (2026-09-12)
 
