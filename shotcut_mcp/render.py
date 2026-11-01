@@ -341,7 +341,11 @@ def render_review_clip(arguments: dict[str, object]) -> dict[str, object]:
         report_progress(1, 3, "Rendering the selected review range.")
         with tempfile.TemporaryDirectory(prefix="shotcut-mcp-review-") as directory:
             profile_path = Path(directory) / "profile"
+            # Melt 7.42.0 crashes (SIGSEGV) when it loads a profile file that
+            # has no description. Write one from numbers only, so that project
+            # data cannot add lines or keys to the profile.
             profile_path.write_text(
+                f"description=Shotcut MCP review {width}x{height}\n"
                 f"frame_rate_num={frame_rate_num}\nframe_rate_den={frame_rate_den}\n"
                 f"width={width}\nheight={height}\nprogressive=1\n"
                 "sample_aspect_num=1\nsample_aspect_den=1\n"

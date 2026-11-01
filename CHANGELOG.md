@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Write a profile description for review clips, so that MLT 7.42.0 does not crash (SIGSEGV) when `render_review_clip` loads the temporary profile.
+
 ## 1.6.0 (2026-10-17)
 
 ### Added

@@ -101,6 +101,45 @@ class ReviewClipTests(unittest.TestCase):
             list(Path(first["path"]).parent.glob("*.mp4")), [Path(first["path"])]
         )
 
+    def test_review_profile_has_description_and_keeps_scaled_values(self) -> None:
+        # Regression: melt 7.42.0 crashes (SIGSEGV) when it loads a profile
+        # file that has no "description" line. Read the profile that the
+        # review call gives to melt, while the file exists.
+        profiles: list[str] = []
+
+        def render(
+            command: list[str], **options: object
+        ) -> subprocess.CompletedProcess[str]:
+            profile = Path(command[command.index("-profile") + 1])
+            profiles.append(profile.read_text(encoding="utf-8"))
+            return self._render(command, **options)
+
+        with patch("shotcut_mcp.render.run_capture", side_effect=render):
+            render_review_clip(self.arguments)
+        text = profiles[0]
+        self.assertTrue(text.endswith("\n"))
+        lines = text.splitlines()
+        self.assertTrue(all(line.count("=") == 1 for line in lines), lines)
+        values = dict(line.split("=", 1) for line in lines)
+        self.assertEqual(len(values), len(lines), "duplicate profile keys")
+        description = values.pop("description", "")
+        self.assertRegex(description, r"^[A-Za-z0-9 ./x-]+$")
+        self.assertEqual(
+            values,
+            {
+                "frame_rate_num": "30",
+                "frame_rate_den": "1",
+                "width": "1280",
+                "height": "720",
+                "progressive": "1",
+                "sample_aspect_num": "1",
+                "sample_aspect_den": "1",
+                "display_aspect_num": "1280",
+                "display_aspect_den": "720",
+                "colorspace": "709",
+            },
+        )
+
     def test_rejects_stale_revision_and_invalid_or_unbounded_ranges(self) -> None:
         with patch("shotcut_mcp.render.run_capture") as capture:
             with self.assertRaises(ConflictError):
