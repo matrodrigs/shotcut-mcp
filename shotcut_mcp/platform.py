@@ -529,6 +529,8 @@ def _safe_version(
 ) -> tuple[str | None, str | None]:
     try:
         return version_line(executable, args), None
+    except RequestCancelled:
+        raise
     except ToolError as exc:
         return None, str(exc)
 
@@ -551,6 +553,8 @@ def status() -> RuntimeStatus:
         try:
             ensure_melt_ready(executables.melt)
             repository_ready = True
+        except RequestCancelled:
+            raise
         except ToolError as exc:
             repository_error = str(exc)
     return {
@@ -719,6 +723,8 @@ def _safe_service_description(
 ) -> ServiceDescription | ServiceDescriptionError:
     try:
         return describe_service(kind, name)
+    except RequestCancelled:
+        raise
     except ToolError as exc:
         return {"available": False, "error": str(exc)}
 
@@ -731,6 +737,8 @@ def compatibility_doctor() -> CompatibilityReport:
         try:
             ensure_melt_ready(executables.melt)
             repository_ready = True
+        except RequestCancelled:
+            raise
         except ToolError as exc:
             repository_error = str(exc)
 
@@ -1381,6 +1389,8 @@ def detect_hardware_encoders(refresh: object = False) -> dict[str, object]:
                         probe = run_capture(
                             command, timeout=15, max_output_bytes=262_144
                         )
+                    except RequestCancelled:
+                        raise
                     except ToolError as exc:
                         item["diagnostic"] = str(exc)[-1200:]
                     else:

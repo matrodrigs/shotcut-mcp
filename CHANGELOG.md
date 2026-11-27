@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fix Claude Code plugin startup from another workspace on Windows and retain project-scoped startup from the repository root.
+- Propagate MCP cancellation through runtime diagnostics and media probes. On Windows, stop child processes launched by the cancelled command as well.
 - Write a profile description for review clips, so that MLT 7.42.0 does not crash (SIGSEGV) when `render_review_clip` loads the temporary profile.
 
 ## 1.6.0 (2026-10-17)

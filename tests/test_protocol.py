@@ -178,6 +178,21 @@ class SchemaValidationTests(unittest.TestCase):
 
 
 class ProtocolValidationTests(unittest.TestCase):
+    def test_cancelled_runtime_probe_returns_protocol_cancellation(self) -> None:
+        with (
+            patch("shotcut_mcp.platform.version_line", side_effect=RequestCancelled()),
+            patch(
+                "shotcut_mcp.platform.discover_executables",
+                return_value=SimpleNamespace(
+                    shotcut=None, melt=None, ffmpeg=None, ffprobe=None
+                ),
+            ),
+        ):
+            response = handle_request(
+                request("tools/call", {"name": "shotcut_status", "arguments": {}})
+            )
+        self.assertEqual(response["error"]["code"], -32800)
+
     def test_malformed_cancellation_does_not_end_the_session(self) -> None:
         for invalid_id in ([], {}, True, None, 1.5):
             with self.subTest(request_id=invalid_id):

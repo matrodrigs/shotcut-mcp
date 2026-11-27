@@ -210,6 +210,8 @@ def _probe_candidate(
     state.probe_count += 1
     try:
         media_summary = summarize_media(candidate)
+    except RequestCancelled:
+        raise
     except ToolError as exc:
         return {"path": str(candidate), "error": str(exc)}, 0
 

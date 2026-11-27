@@ -190,6 +190,8 @@ def validate_project(arguments: dict[str, object]) -> dict[str, object]:
             continue
         try:
             installed = set(list_services(kind)["services"])
+        except RequestCancelled:
+            raise
         except ToolError as exc:
             service_errors[kind] = str(exc)
             continue
@@ -479,6 +481,8 @@ def _build_edit_candidate(arguments: dict[str, object]) -> EditCandidate:
                 progress_total,
                 f"Applied {index + 1} of {len(operations)} operations in memory.",
             )
+        except RequestCancelled:
+            raise
         except ToolError as exc:
             operation_name = (
                 raw_operation.get("op") if is_object(raw_operation) else None
@@ -798,6 +802,8 @@ def diagnose_color_workflow(arguments: dict[str, object]) -> dict[str, object]:
                 and (dynamic_range := stream.get("dynamic_range")) is not None
                 and dynamic_range != "unknown"
             )
+        except RequestCancelled:
+            raise
         except ToolError as exc:
             media.append({"path": resolved, "error": str(exc)})
     color = snapshot["color_workflow"]

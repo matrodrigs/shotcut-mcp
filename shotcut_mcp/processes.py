@@ -296,9 +296,22 @@ def terminate_process(
                 raise OSError("process-group signals are unavailable")
             kill_group(process.pid, signal.SIGTERM)
         else:
-            process.terminate()
+            taskkill = (
+                Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
+                / "System32"
+                / "taskkill.exe"
+            )
+            subprocess.run(
+                [str(taskkill), "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags(),
+                timeout=grace_seconds,
+                check=True,
+            )
         process.wait(timeout=grace_seconds)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.SubprocessError):
         try:
             if os.name != "nt":
                 kill_group = getattr(os, "killpg", None)

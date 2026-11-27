@@ -19,7 +19,7 @@ from typing import (
     TypeVar,
 )
 
-from .errors import ToolError
+from .errors import RequestCancelled, ToolError
 from .processes import (
     discover_executables,
     require_executable,
@@ -501,6 +501,8 @@ def quality_analyzer_capabilities(
     else:
         try:
             available_filters = _available_ffmpeg_filters(ffmpeg)
+        except RequestCancelled:
+            raise
         except ToolError as exc:
             error = str(exc)
     return {
