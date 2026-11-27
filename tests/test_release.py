@@ -70,44 +70,68 @@ class ReleaseBundleTests(unittest.TestCase):
             self.assertEqual(checksum, f"{first['digest']}  {first_artifact.name}\n")
             self.assertTrue(Path(first["notes"]).read_text(encoding="utf-8").strip())
 
-            messages = "\n".join(
-                [
-                    json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": 1,
-                            "method": "initialize",
-                            "params": {
-                                "protocolVersion": "2025-11-25",
-                                "capabilities": {},
-                                "clientInfo": {"name": "release-test", "version": "1"},
-                            },
-                        }
-                    ),
-                    json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-                    "",
+            self._assert_stdio_tools(
+                [str(extracted / "scripts/shotcut_mcp_server.py")], root
+            )
+
+    def test_claude_launchers_connect_from_their_documented_directories(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shotcut plugin space ") as directory:
+            workspace = Path(directory)
+            plugin = workspace / "installed plugin"
+            self._copy_client_adapter_fixture(plugin)
+            shutil.copytree(ROOT / "shotcut_mcp", plugin / "shotcut_mcp")
+            project = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))
+            manifest = json.loads(
+                (plugin / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
+            )
+            project_args = project["mcpServers"]["shotcut"]["args"]
+            plugin_servers = {**project["mcpServers"], **manifest.get("mcpServers", {})}
+            with self.subTest(mode="installed plugin"):
+                args = [
+                    arg.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin))
+                    for arg in plugin_servers["shotcut"]["args"]
                 ]
-            )
-            result = subprocess.run(
-                [sys.executable, str(extracted / "scripts/shotcut_mcp_server.py")],
-                input=messages.encode("utf-8"),
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-            self.assertEqual(
-                result.returncode, 0, result.stderr.decode(errors="replace")
-            )
-            responses = [
-                json.loads(line) for line in result.stdout.decode("utf-8").splitlines()
+                self._assert_stdio_tools(args, workspace)
+            with self.subTest(mode="source checkout"):
+                self._assert_stdio_tools(project_args, plugin)
+
+    def _assert_stdio_tools(self, args: list[str], cwd: Path) -> None:
+        messages = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {},
+                            "clientInfo": {"name": "release-test", "version": "1"},
+                        },
+                    }
+                ),
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+                "",
             ]
-            self.assertEqual(
-                responses[0]["result"]["serverInfo"]["version"], self.version
-            )
-            manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(
-                len(responses[1]["result"]["tools"]), len(manifest["tools"])
-            )
+        )
+        result = subprocess.run(
+            [sys.executable, *args],
+            cwd=cwd,
+            input=messages.encode("utf-8"),
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        responses = [
+            json.loads(line) for line in result.stdout.decode("utf-8").splitlines()
+        ]
+        self.assertEqual(responses[0]["result"]["serverInfo"]["version"], self.version)
+        manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            {tool["name"] for tool in responses[1]["result"]["tools"]},
+            {tool["name"] for tool in manifest["tools"]},
+        )
 
     def test_checked_in_tool_contracts_match_the_runtime_projection(self) -> None:
         validate_tool_contracts(ROOT, runtime_tool_entries())

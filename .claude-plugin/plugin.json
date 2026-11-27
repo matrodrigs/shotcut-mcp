@@ -13,5 +13,11 @@
     "video",
     "mlt",
     "mcp"
-  ]
+  ],
+  "mcpServers": {
+    "shotcut": {
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/shotcut_mcp_server.py"]
+    }
+  }
 }

@@ -367,30 +367,20 @@ def validate_client_adapters(root: Path, version: str) -> None:
             "Claude Code marketplace catalog does not match the plugin manifest"
         )
 
-    shared_launcher = {
-        "shotcut": {
-            "command": "python",
-            "args": [f"./{SERVER_SCRIPT}"],
-            "cwd": ".",
-        }
-    }
-    if codex_manifest.get("mcpServers") != shared_launcher:
+    checkout_server = {"command": "python", "args": [f"./{SERVER_SCRIPT}"]}
+    if codex_manifest.get("mcpServers") != {"shotcut": {**checkout_server, "cwd": "."}}:
         raise RuntimeError(
             "Codex launcher does not match the shared server entry point"
         )
-    if "mcpServers" in claude_manifest:
-        raise RuntimeError(
-            "Claude Code plugin must use the root .mcp.json without an inline duplicate"
-        )
-    claude_config = {
-        "mcpServers": {
-            "shotcut": {
-                "command": "python",
-                "args": [f"${{CLAUDE_PLUGIN_ROOT:-.}}/{SERVER_SCRIPT}"],
-            }
-        }
+    plugin_server = {
+        "command": "python",
+        "args": [f"${{CLAUDE_PLUGIN_ROOT}}/{SERVER_SCRIPT}"],
     }
-    if project_config != claude_config:
+    if claude_manifest.get("mcpServers") != {"shotcut": plugin_server}:
+        raise RuntimeError(
+            "Claude Code plugin must launch the server from its installed root"
+        )
+    if project_config != {"mcpServers": {"shotcut": checkout_server}}:
         raise RuntimeError(
             "Claude Code .mcp.json does not match the shared server entry point"
         )

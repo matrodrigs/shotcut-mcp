@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fix Claude Code plugin startup from another workspace on Windows and retain project-scoped startup from the repository root.
 - Write a profile description for review clips, so that MLT 7.42.0 does not crash (SIGSEGV) when `render_review_clip` loads the temporary profile.
 
 ## 1.6.0 (2026-10-17)

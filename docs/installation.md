@@ -76,7 +76,7 @@ Run these commands inside Claude Code. No repository clone is required.
 /plugin install shotcut-mcp@matrodrigs
 ```
 
-Run `/reload-plugins` to activate the plugin without restarting Claude Code.
+Run `/reload-plugins` to activate the plugin and `/mcp` to check that Shotcut is connected. The plugin uses `${CLAUDE_PLUGIN_ROOT}` to find the server from any workspace. The client must be able to run Python 3.10+ as `python`. If only `py` or `python3` works, use the manual registration below with that interpreter.
 
 <details>
 <summary>Manual stdio registration</summary>
