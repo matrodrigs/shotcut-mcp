@@ -37,6 +37,14 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def file_revision(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _project_identity(project_path: Path) -> str:
     canonical = os.path.normcase(str(project_path.resolve(strict=False)))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -59,6 +67,27 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def preserve_posix_mode(path: Path, mode: int | None) -> None:
+    if os.name != "nt" and mode is not None:
+        os.chmod(path, mode)
+
+
+@contextmanager
+def staged_file(target: Path, data: bytes, *, mode: int = 0o666) -> Iterator[Path]:
+    temporary = target.with_name(
+        f".{target.name}.{uuid.uuid4().hex}.tmp{target.suffix}"
+    )
+    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        yield temporary
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def publish_new_file(temporary: Path, target: Path) -> None:
@@ -85,6 +114,8 @@ def publish_new_file(temporary: Path, target: Path) -> None:
             recommended_action="choose_a_filesystem_supporting_atomic_publication",
             details={"path": str(target)},
         ) from exc
+    if os.name != "nt":
+        temporary.unlink()
 
 
 def _file_signature(path: Path) -> tuple[int, int, int, int] | None:
@@ -161,6 +192,9 @@ class OutputTransaction:
                 recommended_action="inspect_render_diagnostics",
                 details={"path": str(self.target)},
             )
+        with self.temporary.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        preserve_posix_mode(self.temporary, self.initial_mode)
         if _file_signature(self.target) != self.initial_signature:
             raise ConflictError(
                 f"The output changed while rendering and was not replaced: {self.target}",
@@ -169,11 +203,10 @@ class OutputTransaction:
                 recommended_tool=None,
                 details={"path": str(self.target)},
             )
-        with self.temporary.open("r+b") as handle:
-            os.fsync(handle.fileno())
-        if self.initial_mode is not None:
-            os.chmod(self.temporary, self.initial_mode)
-        os.replace(self.temporary, self.target)
+        if self.initial_signature is None:
+            publish_new_file(self.temporary, self.target)
+        else:
+            os.replace(self.temporary, self.target)
         fsync_directory(self.target.parent)
 
     def cleanup(self) -> None:
@@ -291,7 +324,7 @@ class RenderInputSnapshot:
                 handle.flush()
                 os.fsync(handle.fileno())
             with suppress(OSError):
-                os.chmod(snapshot.path, source.stat().st_mode)
+                preserve_posix_mode(snapshot.path, source.stat().st_mode)
             fsync_directory(snapshot.path.parent)
         except Exception:
             snapshot.path.unlink(missing_ok=True)
@@ -301,14 +334,10 @@ class RenderInputSnapshot:
     def is_exact(self) -> bool:
         if not self.path.is_file():
             return False
-        digest = hashlib.sha256()
         try:
-            with self.path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
+            return file_revision(self.path) == self.revision
         except OSError:
             return False
-        return digest.hexdigest() == self.revision
 
     def require_exact(self) -> None:
         if self.is_exact():
@@ -368,10 +397,6 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
                 descriptor = os.open(
                     lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
                 )
-                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
                 break
             except FileExistsError:
                 if attempt:
@@ -400,6 +425,10 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
                     details={"lock_path": str(lock_path)},
                 ) from None
         try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
             yield
         finally:
             lock_path.unlink(missing_ok=True)
@@ -511,11 +540,8 @@ def write_project_backup(project_path: Path, source: bytes, keep: int = 20) -> P
     _private_directory(directory)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_path = directory / f"{stamp}.{_sha256(source)[:12]}{project_path.suffix}"
-    descriptor = os.open(backup_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(source)
-        handle.flush()
-        os.fsync(handle.fileno())
+    with staged_file(backup_path, source, mode=0o600) as temporary:
+        publish_new_file(temporary, backup_path)
     fsync_directory(directory)
     isolated_backups = sorted(
         _backup_files(directory, _isolated_backup_pattern(project_path)),

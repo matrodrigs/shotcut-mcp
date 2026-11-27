@@ -43,6 +43,15 @@ class ProjectLockTests(unittest.TestCase):
         old = time.time() - 900
         os.utime(self.legacy_lock, (old, old))
 
+    def test_lock_write_failure_allows_the_next_edit_to_retry(self) -> None:
+        with (
+            patch("os.fsync", side_effect=OSError("disk full")),
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            edit_project(self.arguments)
+        self.assertEqual(self.project.read_bytes(), self.original)
+        self.assertTrue(edit_project(self.arguments)["edited"])
+
     def test_stale_lock_reclamation_excludes_a_second_project_writer(self) -> None:
         self.stale_lock(2**30)
         reclaiming = threading.Event()

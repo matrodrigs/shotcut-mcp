@@ -8,7 +8,7 @@ Provide a local MCP server that can create, inspect, edit, validate, preview and
 
 - Preserve unknown MLT XML elements, attributes and properties when editing.
 - Apply many edits in one parse/write transaction.
-- Guard writes with a revision hash and an MCP lock file; recheck the on-disk revision after validating the temporary project and before replacement.
+- Guard writes with a revision hash and an MCP lock file. Recheck the project after validation and again after backing it up, immediately before replacement. An explicitly forced edit starts from the version it loads and conflicts if that version subsequently changes. Create and edit receipts describe the committed document even when another writer immediately changes the path.
 - Create a timestamped backup in an isolated per-project namespace before every replacement.
 - Require explicit overwrite authorization when creating a project or generated output at an existing destination.
 - Render previews and exports to protected sibling files and promote them atomically only if the original target has not changed.

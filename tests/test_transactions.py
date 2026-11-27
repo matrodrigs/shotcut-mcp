@@ -275,6 +275,152 @@ class ProjectTransactionTests(unittest.TestCase):
 
             self.assertEqual(project_path.read_bytes(), external_contents)
 
+    def test_edit_commits_only_against_the_document_used_to_build_it(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ),
+        ):
+            path = Path(directory) / "project.mlt"
+            real_lock = project_module.project_lock
+            for force in (False, True):
+                for replacement in (None, b"<mlt/>"):
+                    with self.subTest(force=force, replacement=replacement):
+                        created = create_project(
+                            {"project_path": str(path), "overwrite": True}
+                        )
+
+                        @contextmanager
+                        def concurrent_change(
+                            target: Path, data: bytes | None = replacement
+                        ) -> Iterator[None]:
+                            if data is None:
+                                target.unlink()
+                            else:
+                                target.write_bytes(data)
+                            with real_lock(target):
+                                yield
+
+                        with (
+                            patch(
+                                "shotcut_mcp.project.project_lock", concurrent_change
+                            ),
+                            self.assertRaises(ConflictError),
+                        ):
+                            edit_project(
+                                {
+                                    "project_path": str(path),
+                                    "expected_revision": created["revision"],
+                                    "force": force,
+                                    "operations": [
+                                        {"op": "set_notes", "notes": "edited"}
+                                    ],
+                                }
+                            )
+                        self.assertEqual(
+                            path.read_bytes() if path.exists() else None, replacement
+                        )
+
+    def test_commit_receipt_survives_a_subsequent_external_move(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ),
+        ):
+            path = Path(directory) / "project.mlt"
+            moved = path.with_name("moved.mlt")
+            real_lock = project_module.project_lock
+
+            @contextmanager
+            def move_after_commit(target: Path) -> Iterator[None]:
+                with real_lock(target):
+                    yield
+                target.rename(moved)
+
+            with patch("shotcut_mcp.project.project_lock", move_after_commit):
+                created = create_project({"project_path": str(path)})
+                self.assertEqual(created["project"]["revision"], created["revision"])
+                moved.rename(path)
+                edited = edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": created["revision"],
+                        "operations": [{"op": "set_notes", "notes": "edited"}],
+                    }
+                )
+            self.assertEqual(edited["project"]["revision"], edited["revision"])
+            self.assertEqual(
+                edited["revision"], project_module.project_revision(moved.read_bytes())
+            )
+
+    def test_backup_failure_preserves_project_and_offers_no_partial_restore(
+        self,
+    ) -> None:
+        backup = project_module.write_project_backup
+
+        def failed_backup(path: Path, data: bytes) -> Path:
+            with patch("os.fsync", side_effect=OSError("backup flush failed")):
+                return backup(path, data)
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ),
+        ):
+            path = Path(directory) / "project.mlt"
+            created = create_project({"project_path": str(path)})
+            original = path.read_bytes()
+            with (
+                patch("shotcut_mcp.project.write_project_backup", failed_backup),
+                self.assertRaisesRegex(OSError, "backup flush failed"),
+            ):
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": created["revision"],
+                        "operations": [{"op": "set_notes", "notes": "edited"}],
+                    }
+                )
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list_backups(path)["backups"], [])
+
+    def test_external_save_during_backup_is_preserved(self) -> None:
+        backup = project_module.write_project_backup
+        external = b"<mlt/>"
+
+        def concurrent_save(path: Path, data: bytes) -> Path:
+            saved = backup(path, data)
+            path.write_bytes(external)
+            return saved
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ),
+        ):
+            path = Path(directory) / "project.mlt"
+            created = create_project({"project_path": str(path)})
+            with (
+                patch("shotcut_mcp.project.write_project_backup", concurrent_save),
+                self.assertRaises(ConflictError),
+            ):
+                edit_project(
+                    {
+                        "project_path": str(path),
+                        "expected_revision": created["revision"],
+                        "operations": [{"op": "set_notes", "notes": "edited"}],
+                    }
+                )
+            self.assertEqual(path.read_bytes(), external)
+
     def test_backups_are_isolated_between_similarly_named_projects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             first_path = Path(directory) / "movie.mlt"

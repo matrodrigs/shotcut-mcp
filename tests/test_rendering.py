@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,12 +18,38 @@ from shotcut_mcp import render_worker as render_worker_module
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.platform import render_preview
 from shotcut_mcp.render import cancel_render, render_status, start_render
-from shotcut_mcp.storage import OutputTransaction
+from shotcut_mcp.storage import OutputTransaction, RenderInputSnapshot
 from tests.path_assertions import assert_canonical_paths
 from tests.render_fixture import start_with_python_renderer
 
 
 class PreviewSafetyTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows read-only file attribute")
+    def test_readonly_input_can_be_reviewed_and_readonly_output_is_preserved(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "project.mlt"
+            data = b"<mlt/>"
+            source.write_bytes(data)
+            source.chmod(stat.S_IREAD)
+            snapshot = RenderInputSnapshot.create(
+                source, "a" * 32, data, hashlib.sha256(data).hexdigest()
+            )
+            self.assertTrue(snapshot.cleanup_if_owned())
+            target = source.with_suffix(".png")
+            target.write_bytes(b"original")
+            target.chmod(stat.S_IREAD)
+            output = OutputTransaction.prepare(target, overwrite=True)
+            output.temporary.write_bytes(b"preview")
+            with self.assertRaises(PermissionError):
+                output.commit()
+            output.cleanup()
+            self.assertFalse(source.stat().st_mode & stat.S_IWRITE)
+            self.assertFalse(target.stat().st_mode & stat.S_IWRITE)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(output.temporary.exists())
+
     @staticmethod
     def _platform_patches(render: object) -> tuple[object, ...]:
         return (
@@ -48,6 +76,23 @@ class PreviewSafetyTests(unittest.TestCase):
                 "choose_another_output_or_authorize_overwrite",
             )
             self.assertEqual(caught.exception.details["path"], str(output_path))
+
+    def test_new_output_preserves_a_destination_created_during_final_flush(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "export.mp4"
+            output = OutputTransaction.prepare(target, overwrite=False)
+            output.temporary.write_bytes(b"rendered")
+            with (
+                patch(
+                    "os.fsync", side_effect=lambda _fd: target.write_bytes(b"external")
+                ),
+                self.assertRaises(ToolError),
+            ):
+                output.commit()
+            self.assertEqual(target.read_bytes(), b"external")
+            self.assertEqual(output.temporary.read_bytes(), b"rendered")
 
     def test_preview_rejects_the_project_as_its_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

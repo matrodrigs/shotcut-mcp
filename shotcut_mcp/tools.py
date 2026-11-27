@@ -2194,7 +2194,7 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "tracks": "Initial tracks using add_track fields; V1 already exists.",
     "clips": "Initial clips using add_clip fields; track defaults to V1.",
     "overwrite": "Replace an existing destination only when the user explicitly authorized it.",
-    "force": "Bypass revision protection only with explicit user authorization; never retry conflicts with force automatically.",
+    "force": "Ignore the caller's expected_revision only with explicit authorization. Concurrent changes during the edit still cause a conflict.",
     "kind": "MLT service kind to list or describe.",
     "name": "Exact service name returned by list_mlt_services.",
     "frame": "Zero-based project frame to render.",

@@ -5,6 +5,9 @@
 ### Fixed
 
 - Fix Claude Code plugin startup from another workspace on Windows and retain project-scoped startup from the repository root.
+- Preserve concurrent saves and deletions during project edits and backup creation. Creation and edit responses now describe the revision actually committed even if another program immediately moves or changes the project.
+- Prevent a newly created export from replacing a competing output, release the project lock after a failed write, and publish backups only after their contents have been flushed.
+- Keep Windows review snapshots and staging files removable when a source or destination has the read-only attribute.
 - Apply network policy to direct data paths and projects opened in Shotcut, reject unreadable XML before launching the runtime, keep restricted media status private during inspection, and check backup directories before creating or reading them.
 - Propagate MCP cancellation through runtime diagnostics and media probes. On Windows, stop child processes launched by the cancelled command as well.
 - Write a profile description for review clips, so that MLT 7.42.0 does not crash (SIGSEGV) when `render_review_clip` loads the temporary profile.

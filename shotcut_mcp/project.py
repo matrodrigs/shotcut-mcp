@@ -10,7 +10,6 @@ from __future__ import annotations
 import difflib
 import os
 import re
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
@@ -56,11 +55,14 @@ from .protocol import (
 )
 from .storage import (
     OutputTransaction,
+    file_revision,
     fsync_directory,
     is_project_backup,
     list_project_backups,
+    preserve_posix_mode,
     project_lock,
     publish_new_file,
+    staged_file,
     write_project_backup,
 )
 
@@ -248,19 +250,29 @@ class EditCandidate:
     operation_results: list[dict[str, object]]
 
 
+def _check_project_revision(path: Path, expected: str | None) -> None:
+    try:
+        current = file_revision(path)
+    except FileNotFoundError:
+        current = None
+    if current != expected:
+        raise ConflictError(
+            "The project changed while the candidate was being prepared for replacement.",
+            expected_revision=expected,
+            current_revision=current,
+        )
+
+
 def _write_validated(
     document: ProjectDocument,
     *,
     expected_revision: str | None,
     force: bool,
-    validate: bool,
     timeout: int,
-    create_backup: bool,
     require_absent: bool = False,
 ) -> SavedProject:
     path = document.path
     data = document.to_bytes()
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp{path.suffix}")
     path.parent.mkdir(parents=True, exist_ok=True)
     with project_lock(path):
         current = path.read_bytes() if path.is_file() else None
@@ -273,8 +285,8 @@ def _write_validated(
                 recommended_action="choose_another_output_or_authorize_overwrite",
                 details={"project_path": str(path)},
             )
-        if current is not None and not force:
-            if not expected_revision:
+        if not force:
+            if current is not None and not expected_revision:
                 raise ConflictError(
                     "expected_revision is required to edit an existing project.",
                     current_revision=current_revision,
@@ -289,18 +301,8 @@ def _write_validated(
                     expected_revision=expected_revision,
                     current_revision=current_revision,
                 )
-        with temporary.open("wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if current_mode is not None:
-            os.chmod(temporary, current_mode)
-        try:
-            validation: dict[str, object] = (
-                validate_project_file(temporary, timeout=timeout)
-                if validate
-                else {"valid": True}
-            )
+        with staged_file(path, data) as temporary:
+            validation = validate_project_file(temporary, timeout=timeout)
             if not validation.get("valid"):
                 raise ToolError(
                     "MLT rejected the edit before the project was replaced: "
@@ -315,31 +317,21 @@ def _write_validated(
                         "return_code": validation.get("return_code"),
                     },
                 )
-            latest = path.read_bytes() if path.is_file() else None
-            latest_revision = project_revision(latest) if latest is not None else None
-            if latest_revision != current_revision:
-                raise ConflictError(
-                    "The project changed while the candidate edit was being validated. "
-                    f"Expected {current_revision}, current {latest_revision}.",
-                    expected_revision=current_revision,
-                    current_revision=latest_revision,
-                )
-            backup_path = (
-                write_project_backup(path, current)
-                if current is not None and create_backup
-                else None
-            )
-            if require_absent:
+            backup_path = None
+            if current is None:
                 publish_new_file(temporary, path)
             else:
+                _check_project_revision(path, current_revision)
+                backup_path = write_project_backup(path, current)
+                preserve_posix_mode(temporary, current_mode)
+                _check_project_revision(path, current_revision)
                 os.replace(temporary, path)
             fsync_directory(path.parent)
-        finally:
-            temporary.unlink(missing_ok=True)
-    revision = project_revision(data)
+    document.source = data
+    document.revision = project_revision(data)
     return {
         "path": str(path),
-        "revision": revision,
+        "revision": document.revision,
         "previous_revision": current_revision,
         "backup_path": str(backup_path) if backup_path else None,
         "validation": validation,
@@ -399,17 +391,14 @@ def create_project(arguments: dict[str, object]) -> dict[str, object]:
         document,
         expected_revision=None,
         force=overwrite,
-        validate=True,
         timeout=_int(arguments.get("timeout_seconds", 60), "timeout_seconds", 1),
-        create_backup=True,
         require_absent=not overwrite,
     )
-    loaded = ProjectDocument.load(path)
     return {
         "created": True,
         **saved,
         "operation_results": results,
-        "project": loaded.snapshot(),
+        "project": document.snapshot(),
     }
 
 
@@ -574,25 +563,9 @@ def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
     candidate = _build_edit_candidate(arguments)
     data = candidate.document.to_bytes()
     prospective_revision = project_revision(data)
-    temporary = candidate.path.with_name(
-        f".{candidate.path.name}.{uuid.uuid4().hex}.plan{candidate.path.suffix}"
-    )
-    with temporary.open("wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    try:
+    with staged_file(candidate.path, data) as temporary:
         validation = validate_project_file(temporary, timeout=candidate.timeout)
-    finally:
-        temporary.unlink(missing_ok=True)
-    latest = candidate.path.read_bytes() if candidate.path.is_file() else None
-    latest_revision = project_revision(latest) if latest is not None else None
-    if latest_revision != candidate.original_revision:
-        raise ConflictError(
-            "The project changed while the planned edit was being validated.",
-            expected_revision=candidate.original_revision,
-            current_revision=latest_revision,
-        )
+    _check_project_revision(candidate.path, candidate.original_revision)
 
     maximum_lines = _int(arguments.get("max_diff_lines", 2000), "max_diff_lines", 0)
     maximum_lines = min(maximum_lines, 5000)
@@ -626,25 +599,21 @@ def edit_project(arguments: dict[str, object]) -> dict[str, object]:
     candidate = _build_edit_candidate(arguments)
     saved = _write_validated(
         candidate.document,
-        expected_revision=candidate.expected_revision,
-        force=candidate.force,
-        validate=True,
+        expected_revision=candidate.original_revision,
+        force=False,
         timeout=candidate.timeout,
-        create_backup=True,
     )
     report_progress(
         len(candidate.operation_results) + 1,
         len(candidate.operation_results) + 1,
         "Project edit validated and committed.",
     )
-    updated = ProjectDocument.load(candidate.path)
-    candidate.document.revision = saved["revision"]
     return {
         "edited": True,
         **saved,
         "operation_results": candidate.operation_results,
         "item_bindings": candidate.document.item_bindings(),
-        "project": updated.snapshot(),
+        "project": candidate.document.snapshot(),
     }
 
 
@@ -764,7 +733,7 @@ def list_backups(project_path: Path) -> dict[str, object]:
             "path": str(path),
             "size_bytes": path.stat().st_size,
             "modified_at": path.stat().st_mtime,
-            "revision": project_revision(path.read_bytes()),
+            "revision": file_revision(path),
         }
         for path in list_project_backups(project_path)
     ]
@@ -966,8 +935,6 @@ def restore_backup(arguments: dict[str, object]) -> dict[str, object]:
             document,
             expected_revision=expected_revision,
             force=force,
-            validate=True,
             timeout=60,
-            create_backup=True,
         ),
     }

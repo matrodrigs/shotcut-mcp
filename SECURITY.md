@@ -20,7 +20,7 @@ The MCP client and administrator-provided executable paths are trusted to expres
 | Unsafe render sidecars or multi-file consumers | Consumer properties use a single-file-safe allowlist unless an administrator opts in |
 | Lost updates from concurrent writers | Revision checks, project locks, destination-absence checks for creation, post-validation revision recheck, and output identity recheck |
 | Partial or invalid project replacement | Sibling temporary file, complete MLT validation, `fsync` where supported, isolated backup, and atomic replace |
-| Overwriting existing output | Explicit overwrite authorization plus protected temporary output and atomic promotion |
+| Overwriting existing output | Explicit overwrite authorization, protected temporary output, and atomic publication that refuses a competing file at a previously absent destination |
 | Shared-producer mutation affecting unrelated clips | Clone a shared producer before a clip-local edit |
 | Resource exhaustion | Bounded messages, projects, operation batches, workers, pending work, active durable renders, process output, logs, caches, searches, diffs, and managed previews |
 | Corrupt or forged backup/job metadata | Canonical project identity, owned backup filenames, validated job shapes, and bounded logs/history |
@@ -29,7 +29,7 @@ Limits cover both complete payloads and incomplete process-output lines. Project
 
 Media discovery checks canonical file paths before returning or probing them and skips directory symlinks and junctions. Managed audiovisual previews have duration, resolution, output-size, and timeout limits; successful previews replace only the server-owned review artifact for that project.
 
-Inspection preserves the resource name stored in the XML and returns an unknown existence status for media outside the permitted roots. The server checks project resources before passing an MLT or XML project to Shotcut or Melt. Unreadable project XML stops the operation. Backup directories are checked before use.
+Inspection preserves the resource name stored in the XML and returns an unknown existence status for media outside the permitted roots. The server checks project resources before passing an MLT or XML project to Shotcut or Melt. Unreadable project XML stops the operation. Backup directories are checked before use, and a backup becomes available for recovery only after its contents have been flushed.
 
 ## Administrator hardening
 
