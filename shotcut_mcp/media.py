@@ -250,8 +250,24 @@ def _fraction(value: object) -> float | None:
     return num / den if num is not None and den not in (None, 0) else None
 
 
+STILL_FORMATS = frozenset({
+    "image2", "image2pipe", "jpeg_pipe", "png_pipe", "webp_pipe",
+    "tiff_pipe", "bmp_pipe", "gif_pipe",
+})
+
+# FFprobe reports duration = 1/fps (0.04 s at 25 fps) for a single still
+# image. That is indistinguishable from a one-frame video by duration alone,
+# so anything this short inside an image container is treated as a still and
+# the caller's requested still duration is used instead.
+STILL_MAX_SECONDS = 0.05
+
+
 def media_duration(payload: ProbePayload) -> float | None:
-    """Return the longest positive duration reported by FFprobe."""
+    """Return the longest positive duration reported by FFprobe.
+
+    Returns None for still images so callers fall back to the requested
+    still duration and the qimage producer instead of a one-frame clip.
+    """
 
     durations: list[float] = []
     value = _as_float(payload.get("format", {}).get("duration"))
@@ -261,7 +277,14 @@ def media_duration(payload: ProbePayload) -> float | None:
         value = _as_float(stream.get("duration"))
         if value is not None and value > 0:
             durations.append(value)
-    return max(durations) if durations else None
+    if not durations:
+        return None
+    longest = max(durations)
+    format_name = str(payload.get("format", {}).get("format_name") or "")
+    parts = {part.strip() for part in format_name.split(",") if part.strip()}
+    if longest <= STILL_MAX_SECONDS and parts & STILL_FORMATS:
+        return None
+    return longest
 
 
 def shotcut_file_hash(media_path: Path) -> str:
