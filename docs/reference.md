@@ -104,7 +104,7 @@ Common Shotcut installations are detected automatically, so most users can skip 
 | `SHOTCUT_FFPROBE_PATH` | FFprobe executable |
 | `SHOTCUT_MCP_ALLOWED_ROOTS` | Optional `PATH`-separator list of canonical roots available to MCP tools |
 | `SHOTCUT_MCP_REQUIRE_ABSOLUTE_PATHS` | Set to `1` to reject relative tool paths |
-| `SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES` | Set to `1` to allow HTTP/RTSP/etc. resources embedded in projects |
+| `SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES` | Set to `1` to allow network filesystem paths and network resources embedded in projects. Direct file arguments still require a filesystem path. |
 | `SHOTCUT_MCP_ALLOW_UNSAFE_CONSUMER_PROPERTIES` | Set to `1` to allow arbitrary consumer properties and sidecar formats |
 | `SHOTCUT_MCP_MAX_WORKERS` | Concurrent MCP tool requests, clamped to 1–8 (default 4) |
 | `SHOTCUT_MCP_MAX_PENDING` | Maximum in-flight tool requests or legacy batch items, clamped to 1–256 (default 32) |

@@ -50,7 +50,7 @@ def expand_path(
     value: object,
     *,
     enforce_policy: bool = True,
-    enforce_network_policy: bool = False,
+    enforce_network_policy: bool = True,
 ) -> Path:
     """Resolve a user path and enforce the administrator's root policy."""
 
@@ -76,11 +76,19 @@ def expand_path(
             recommended_tool="shotcut_doctor",
             details={"path": value},
         )
-    resolved = expanded.resolve()
-    if enforce_policy and enforce_network_policy:
+    if not enforce_policy:
+        return expanded.resolve()
+    return authorize_path(expanded, enforce_network_policy=enforce_network_policy)
+
+
+def authorize_path(path: Path, *, enforce_network_policy: bool = True) -> Path:
+    if enforce_network_policy:
+        _enforce_network_path_policy(str(path))
+    resolved = path.resolve()
+    if enforce_network_policy:
         _enforce_network_path_policy(str(resolved))
     configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
-    if enforce_policy and configured_roots:
+    if configured_roots:
         roots = [
             Path(os.path.expandvars(item)).expanduser().resolve()
             for item in configured_roots.split(os.pathsep)
@@ -142,6 +150,8 @@ def is_network_resource(value: str) -> bool:
     """Return whether an MLT resource points to a network location."""
 
     value = _decode_file_resource(value)
+    if os.name == "nt" and re.match(r"^//\?/[A-Za-z]:/", value.replace("\\", "/")):
+        return False
     return (
         value[:2].replace("\\", "/") == "//"
         or value.partition(":")[0].lower() in NETWORK_SCHEMES
@@ -169,12 +179,12 @@ def resolve_project_resource(
         return None
     cleaned = _decode_file_resource(value)
     candidate = Path(cleaned)
-    if candidate.is_absolute():
-        return candidate.resolve()
-    base = Path(xml_root) if xml_root else project_path.parent
-    if not base.is_absolute():
-        base = project_path.parent / base
-    return (base / candidate).resolve()
+    if not candidate.is_absolute():
+        if xml_root:
+            _enforce_network_path_policy(xml_root)
+        base = project_path.parent / _decode_file_resource(xml_root or "")
+        candidate = base / candidate
+    return authorize_path(candidate)
 
 
 def parsed_project_resources(
@@ -214,12 +224,7 @@ def project_network_resources(project_path: Path) -> list[str]:
 def enforce_project_resource_policy(project_path: Path) -> None:
     """Apply network and allowed-root policy to every embedded MLT resource."""
 
-    try:
-        root, references = parsed_project_resources(project_path)
-    except ToolError:
-        # Resource policy does not replace the XML/MLT validator. An unparsable
-        # document has no actionable embedded paths and is rejected by that seam.
-        return
+    root, references = parsed_project_resources(project_path)
     network = sorted(
         {
             reference.decoded_value
@@ -238,11 +243,7 @@ def enforce_project_resource_policy(project_path: Path) -> None:
             recommended_tool="shotcut_doctor",
             details={"resource_count": len(network)},
         )
-    if not os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip():
-        return
     for reference in references:
-        path = resolve_project_resource(
+        resolve_project_resource(
             project_path, root.get("root"), reference.decoded_value
         )
-        if path is not None:
-            expand_path(str(path))

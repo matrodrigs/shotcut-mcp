@@ -7,13 +7,13 @@ import time
 import tracemalloc
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from shotcut_mcp import render as render_module
 from shotcut_mcp import render_jobs, render_worker
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.storage import OutputTransaction, RenderInputSnapshot
+from tests.render_fixture import start_with_python_renderer
 
 
 class RenderMonitoringTests(unittest.TestCase):
@@ -174,35 +174,7 @@ class RenderMonitoringTests(unittest.TestCase):
                 "Path(target).write_bytes(b'rendered')\n",
                 encoding="utf-8",
             )
-            source = renderer.read_bytes()
-            render_input = SimpleNamespace(
-                source=source,
-                revision=hashlib.sha256(source).hexdigest(),
-                fps=30.0,
-                duration_frames=100,
-                markers=[],
-            )
-            with (
-                patch(
-                    "shotcut_mcp.render.load_project_render_input",
-                    return_value=render_input,
-                ),
-                patch(
-                    "shotcut_mcp.render.discover_executables",
-                    return_value=SimpleNamespace(melt=Path(sys.executable)),
-                ),
-                patch(
-                    "shotcut_mcp.render.require_executable",
-                    return_value=Path(sys.executable),
-                ),
-                patch("shotcut_mcp.render.ensure_melt_ready"),
-            ):
-                job = render_module.start_render(
-                    {
-                        "project_path": str(renderer),
-                        "output_path": str(output),
-                    }
-                )
+            job = start_with_python_renderer(renderer, output)
             job_id = str(job["job_id"])
             worker = render_module.RUNNING_JOBS[job_id]
             worker.wait(timeout=15)

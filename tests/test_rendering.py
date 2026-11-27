@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import sys
@@ -19,6 +18,7 @@ from shotcut_mcp.platform import render_preview
 from shotcut_mcp.render import cancel_render, render_status, start_render
 from shotcut_mcp.storage import OutputTransaction
 from tests.path_assertions import assert_canonical_paths
+from tests.render_fixture import start_with_python_renderer
 
 
 class PreviewSafetyTests(unittest.TestCase):
@@ -277,13 +277,13 @@ class RenderLifecycleTests(unittest.TestCase):
 import os, sys
 from pathlib import Path
 sys.path.insert(0, {str(root)!r})
-from tests.test_rendering import RenderLifecycleTests
+from tests.render_fixture import start_with_python_renderer
 from shotcut_mcp.render import RUNNING_JOBS, render_status
 source = Path('renderer.py').resolve()
 source.write_text("from pathlib import Path\\nimport sys\\ntarget = next(a[9:] for a in sys.argv if a.startswith('avformat:'))\\nPath(target).write_bytes(Path('relative-input.txt').read_bytes())\\n")
 Path('relative-input.txt').write_bytes(b'rendered from client cwd')
 output = Path('output.mp4').resolve()
-job = RenderLifecycleTests._start_with_python_renderer(source, output)
+job = start_with_python_renderer(source, output)
 RUNNING_JOBS[job['job_id']].wait(timeout=15)
 status = render_status(job['job_id'])
 assert status['status'] == 'completed', status
@@ -321,41 +321,6 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
             latest = render_status(job_id)
         return latest
 
-    @staticmethod
-    def _start_with_python_renderer(
-        renderer_path: Path, output_path: Path, **arguments: object
-    ) -> dict[str, object]:
-        source = renderer_path.read_bytes()
-        render_input = SimpleNamespace(
-            source=source,
-            revision=hashlib.sha256(source).hexdigest(),
-            fps=30.0,
-            duration_frames=100,
-            markers=[],
-        )
-        with (
-            patch(
-                "shotcut_mcp.render.load_project_render_input",
-                return_value=render_input,
-            ),
-            patch(
-                "shotcut_mcp.render.discover_executables",
-                return_value=SimpleNamespace(melt=Path(sys.executable)),
-            ),
-            patch(
-                "shotcut_mcp.render.require_executable",
-                return_value=Path(sys.executable),
-            ),
-            patch("shotcut_mcp.render.ensure_melt_ready"),
-        ):
-            return start_render(
-                {
-                    "project_path": str(renderer_path),
-                    "output_path": str(output_path),
-                    **arguments,
-                }
-            )
-
     def _wait_for_file(self, path: Path) -> None:
         deadline = time.monotonic() + 15
         while not path.is_file() and time.monotonic() < deadline:
@@ -375,7 +340,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 encoding="utf-8",
             )
 
-            job = self._start_with_python_renderer(renderer_path, output_path)
+            job = start_with_python_renderer(renderer_path, output_path)
             try:
                 self._wait_for_file(output_path)
                 status = self._wait_for_status(str(job["job_id"]), "completed")
@@ -410,7 +375,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 "Path(target).write_bytes(b'rendered')\n",
                 encoding="utf-8",
             )
-            job = self._start_with_python_renderer(renderer_path, output_path)
+            job = start_with_python_renderer(renderer_path, output_path)
             worker = render_module.RUNNING_JOBS.pop(str(job["job_id"]))
             try:
                 active = render_status(str(job["job_id"]))
@@ -431,7 +396,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 "import time\ntime.sleep(20)\n",
                 encoding="utf-8",
             )
-            job = self._start_with_python_renderer(renderer_path, output_path)
+            job = start_with_python_renderer(renderer_path, output_path)
             worker = render_module.RUNNING_JOBS.pop(str(job["job_id"]))
 
             try:
@@ -453,7 +418,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
             renderer_path = Path(directory) / "failed_renderer.py"
             output_path = Path(directory) / "output.mp4"
             renderer_path.write_text("raise SystemExit(3)\n", encoding="utf-8")
-            job = self._start_with_python_renderer(renderer_path, output_path)
+            job = start_with_python_renderer(renderer_path, output_path)
             try:
                 status = self._wait_for_status(str(job["job_id"]), "failed")
                 self.assertEqual(status["status"], "failed")
@@ -478,7 +443,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 encoding="utf-8",
             )
             original = renderer.read_bytes()
-            job = self._start_with_python_renderer(renderer, output, overwrite=True)
+            job = start_with_python_renderer(renderer, output, overwrite=True)
             try:
                 status = self._wait_for_status(job["job_id"], "failed")
                 self.assertEqual(status["status"], "failed")
@@ -505,7 +470,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 "time.sleep(20)\n",
                 encoding="utf-8",
             )
-            job = self._start_with_python_renderer(renderer, output, overwrite=True)
+            job = start_with_python_renderer(renderer, output, overwrite=True)
             try:
                 self._wait_for_file(Path(job["temporary_output_path"]))
                 cancel_render(job["job_id"])
@@ -533,7 +498,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 ),
                 self.assertRaises(ToolError) as caught,
             ):
-                self._start_with_python_renderer(renderer, output, overwrite=True)
+                start_with_python_renderer(renderer, output, overwrite=True)
             self.assertEqual(caught.exception.code, "render_start_failed")
             self.assertEqual(output.read_bytes(), b"existing export")
             status = render_status(caught.exception.details["job_id"])
@@ -560,7 +525,7 @@ assert str(Path.cwd()) == {str(client_root)!r} and 'PYTHONPATH' not in os.enviro
                 "Path(target).write_bytes(b'rendered')\n",
                 encoding="utf-8",
             )
-            job = self._start_with_python_renderer(renderer_path, output_path)
+            job = start_with_python_renderer(renderer_path, output_path)
             try:
                 self._wait_for_file(ready)
                 output_path.write_bytes(b"concurrent-output")

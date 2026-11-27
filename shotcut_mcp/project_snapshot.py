@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar
 
+from .errors import ToolError
 from .mlt_xml import (
     clock_to_frames,
     properties,
@@ -197,7 +198,14 @@ class ProjectRenderInput:
 
 
 def _resource_path(document: ProjectDocument, resource: str) -> Path | None:
-    return resolve_project_resource(document.path, document.root.get("root"), resource)
+    try:
+        return resolve_project_resource(
+            document.path, document.root.get("root"), resource
+        )
+    except ToolError as exc:
+        if exc.code in {"path_policy_denied", "network_resource_policy_denied"}:
+            return None
+        raise
 
 
 def _filter_summaries(host: Element) -> list[FilterSummary]:

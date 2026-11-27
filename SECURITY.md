@@ -15,7 +15,7 @@ The MCP client and administrator-provided executable paths are trusted to expres
 | Threat | Mitigation |
 | --- | --- |
 | Path traversal or access outside the intended workspace | Canonical resolution for every user-controlled data path, with optional allowed roots and absolute-path enforcement |
-| Network resources embedded in MLT XML | Denied by default across recognized properties, including remote `file:` authorities and decoded UNC paths |
+| Network filesystem paths and embedded MLT resources | Denied by default for data paths and recognized MLT properties, including remote `file:` authorities and decoded UNC paths. Trusted executable discovery has its own policy. |
 | Shell or argument injection | Shotcut, Melt, FFmpeg, and FFprobe run from argument lists without a shell |
 | Unsafe render sidecars or multi-file consumers | Consumer properties use a single-file-safe allowlist unless an administrator opts in |
 | Lost updates from concurrent writers | Revision checks, project locks, destination-absence checks for creation, post-validation revision recheck, and output identity recheck |
@@ -28,6 +28,8 @@ The MCP client and administrator-provided executable paths are trusted to expres
 Limits cover both complete payloads and incomplete process-output lines. Project candidates are checked before backup or replacement so the server cannot write a project it would refuse to reopen. See [configuration](docs/reference.md#configuration) for administrator-controlled limits and the [specification](docs/spec.md) for protocol and parsing contracts.
 
 Media discovery checks canonical file paths before returning or probing them and skips directory symlinks and junctions. Managed audiovisual previews have duration, resolution, output-size, and timeout limits; successful previews replace only the server-owned review artifact for that project.
+
+Inspection preserves the resource name stored in the XML and returns an unknown existence status for media outside the permitted roots. The server checks project resources before passing an MLT or XML project to Shotcut or Melt. Unreadable project XML stops the operation. Backup directories are checked before use.
 
 ## Administrator hardening
 

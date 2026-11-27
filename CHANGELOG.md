@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fix Claude Code plugin startup from another workspace on Windows and retain project-scoped startup from the repository root.
+- Apply network policy to direct data paths and projects opened in Shotcut, reject unreadable XML before launching the runtime, keep restricted media status private during inspection, and check backup directories before creating or reading them.
 - Propagate MCP cancellation through runtime diagnostics and media probes. On Windows, stop child processes launched by the cancelled command as well.
 - Write a profile description for review clips, so that MLT 7.42.0 does not crash (SIGSEGV) when `render_review_clip` loads the temporary profile.
 

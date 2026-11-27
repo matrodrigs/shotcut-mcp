@@ -306,6 +306,16 @@ class PathPolicyTests(unittest.TestCase):
             self.assertEqual(caught.exception.recommended_tool, "shotcut_doctor")
             self.assertEqual(caught.exception.details["path"], str(outside.resolve()))
 
+    def test_direct_data_paths_apply_network_policy_before_resolution(self) -> None:
+        with (
+            patch.dict(os.environ, {"SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES": "0"}),
+            patch.object(Path, "resolve", return_value=Path("unused")) as resolve,
+            self.assertRaises(ToolError) as caught,
+        ):
+            platform.expand_path("//media.invalid/share/clip.mp4")
+        self.assertEqual(caught.exception.code, "network_resource_policy_denied")
+        resolve.assert_not_called()
+
     def test_project_network_resources_are_blocked_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory) / "remote.mlt"
@@ -325,6 +335,28 @@ class PathPolicyTests(unittest.TestCase):
                 os.environ.pop("SHOTCUT_MCP_ALLOW_NETWORK_RESOURCES", None)
                 with self.assertRaisesRegex(ToolError, "network resources"):
                     platform.validate_project_file(project_path)
+
+                with patch("shotcut_mcp.platform.subprocess.Popen") as launch:
+                    with self.assertRaises(ToolError) as caught:
+                        platform.open_in_shotcut(project_path)
+                    self.assertEqual(
+                        caught.exception.code, "network_resource_policy_denied"
+                    )
+                    launch.assert_not_called()
+
+    def test_preview_rejects_unreadable_xml_before_launching_melt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "unfinished.mlt"
+            project.write_text("<mlt>", encoding="utf-8")
+            with (
+                patch(
+                    "shotcut_mcp.platform.discover_executables",
+                    return_value=platform.Executables(None, None, None, None),
+                ),
+                self.assertRaises(ToolError) as caught,
+            ):
+                platform.render_preview(project, project.with_suffix(".png"), 0, False)
+            self.assertEqual(caught.exception.code, "invalid_project_xml")
 
     def test_remote_file_uris_cannot_bypass_network_policy(self) -> None:
         from shotcut_mcp.path_policy import (

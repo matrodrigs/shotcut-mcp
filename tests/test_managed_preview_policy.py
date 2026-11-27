@@ -11,6 +11,7 @@ from unittest.mock import patch
 from shotcut_mcp import platform, render
 from shotcut_mcp.errors import ToolError
 from shotcut_mcp.project import ProjectDocument
+from shotcut_mcp.storage import write_project_backup
 
 
 class ManagedPreviewPolicyTests(unittest.TestCase):
@@ -55,6 +56,7 @@ class ManagedPreviewPolicyTests(unittest.TestCase):
                     lambda: render.render_review_clip(
                         {"project_path": str(project), "in_frame": 0, "out_frame": 4}
                     ),
+                    lambda: write_project_backup(project, project.read_bytes()),
                 )
                 with (
                     patch.dict(os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(root)}),

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .errors import ConflictError, ToolError
-from .path_policy import expand_path
+from .path_policy import authorize_path, expand_path
 from .processes import process_is_alive as process_is_alive
 
 
@@ -406,12 +406,16 @@ def project_lock(path: Path, stale_seconds: int = 600) -> Iterator[None]:
 
 
 def backup_directory(project_path: Path) -> Path:
-    return (
-        project_path.parent
-        / ".shotcut-mcp"
-        / "backups"
-        / f"{project_path.name}.{_project_identity(project_path)}"
-    )
+    root = legacy_backup_directory(project_path)
+    path = root / f"{project_path.name}.{_project_identity(project_path)}"
+    if authorize_path(path) != path:
+        raise ToolError(
+            "The project's backup directory has been redirected.",
+            code="path_policy_denied",
+            recommended_action="inspect_project_backup_policy",
+            details={"project_path": str(project_path)},
+        )
+    return path
 
 
 def managed_preview_path(project_path: Path, filename: str) -> Path:
@@ -452,27 +456,34 @@ def _isolated_backup_pattern(project_path: Path) -> re.Pattern[str]:
 
 
 def legacy_backup_directory(project_path: Path) -> Path:
-    return project_path.parent / ".shotcut-mcp" / "backups"
+    directory = authorize_path(project_path.parent / ".shotcut-mcp" / "backups")
+    if not directory.is_relative_to(project_path.parent.resolve()):
+        raise ToolError(
+            "The backup directory resolves outside the project directory.",
+            code="path_policy_denied",
+            recommended_action="inspect_project_backup_policy",
+            details={"project_path": str(project_path)},
+        )
+    return directory
+
+
+def _backup_files(directory: Path, pattern: re.Pattern[str]) -> Iterator[Path]:
+    if directory.is_dir():
+        for path in directory.iterdir():
+            if (
+                pattern.fullmatch(path.name)
+                and not path.is_symlink()
+                and path.is_file()
+            ):
+                yield path
 
 
 def list_project_backups(project_path: Path) -> list[Path]:
-    candidates: list[Path] = []
     isolated = backup_directory(project_path)
-    isolated_pattern = _isolated_backup_pattern(project_path)
-    if isolated.is_dir():
-        candidates.extend(
-            path
-            for path in isolated.iterdir()
-            if path.is_file() and isolated_pattern.fullmatch(path.name)
-        )
-    legacy = legacy_backup_directory(project_path)
-    pattern = _legacy_backup_pattern(project_path)
-    if legacy.is_dir():
-        candidates.extend(
-            path
-            for path in legacy.iterdir()
-            if path.is_file() and pattern.fullmatch(path.name)
-        )
+    candidates = [
+        *_backup_files(isolated, _isolated_backup_pattern(project_path)),
+        *_backup_files(isolated.parent, _legacy_backup_pattern(project_path)),
+    ]
     return sorted(candidates, reverse=True)
 
 
@@ -481,16 +492,15 @@ def is_project_backup(project_path: Path, candidate: Path) -> bool:
         resolved = candidate.resolve(strict=True)
     except (OSError, RuntimeError):
         return False
-    isolated = backup_directory(project_path).resolve(strict=False)
+    isolated = backup_directory(project_path)
     if resolved.parent == isolated:
         return (
             resolved.is_file()
             and _isolated_backup_pattern(project_path).fullmatch(resolved.name)
             is not None
         )
-    legacy = legacy_backup_directory(project_path).resolve(strict=False)
     return (
-        resolved.parent == legacy
+        resolved.parent == isolated.parent
         and resolved.is_file()
         and _legacy_backup_pattern(project_path).fullmatch(resolved.name) is not None
     )
@@ -499,17 +509,6 @@ def is_project_backup(project_path: Path, candidate: Path) -> bool:
 def write_project_backup(project_path: Path, source: bytes, keep: int = 20) -> Path:
     directory = backup_directory(project_path)
     _private_directory(directory)
-    try:
-        directory.resolve(strict=True).relative_to(
-            project_path.parent.resolve(strict=True)
-        )
-    except (OSError, ValueError) as exc:
-        raise ToolError(
-            "The backup directory resolves outside the project directory.",
-            code="path_policy_denied",
-            recommended_action="inspect_project_backup_policy",
-            details={"project_path": str(project_path)},
-        ) from exc
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_path = directory / f"{stamp}.{_sha256(source)[:12]}{project_path.suffix}"
     descriptor = os.open(backup_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -519,12 +518,7 @@ def write_project_backup(project_path: Path, source: bytes, keep: int = 20) -> P
         os.fsync(handle.fileno())
     fsync_directory(directory)
     isolated_backups = sorted(
-        (
-            path
-            for path in directory.iterdir()
-            if path.is_file()
-            and _isolated_backup_pattern(project_path).fullmatch(path.name)
-        ),
+        _backup_files(directory, _isolated_backup_pattern(project_path)),
         reverse=True,
     )
     for old in isolated_backups[keep:]:

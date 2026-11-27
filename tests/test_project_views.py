@@ -23,6 +23,21 @@ class ProjectViewTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.path = self.root / "timeline.mlt"
 
+    def test_snapshot_leaves_file_status_unknown_for_restricted_media(self) -> None:
+        self.make_project()
+        document = ProjectDocument.load(self.path)
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "source.mp4"
+            media.touch()
+            producer = document.root.find("producer")
+            resource = producer.find("property[@name='resource']")
+            resource.text = str(media)
+            with patch.dict(os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(self.root)}):
+                references = document.snapshot()["resources"]
+            entry = next(item for item in references if item["resource"] == str(media))
+            self.assertIsNone(entry["exists"])
+            self.assertIsNone(entry["resolved_path"])
+
     def make_project(self, count: int = 8) -> str:
         document = ProjectDocument.new(
             self.path,

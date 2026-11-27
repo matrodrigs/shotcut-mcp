@@ -860,6 +860,8 @@ def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, object]:
             recommended_action="check_path_and_retry",
             details={"path": str(path)},
         )
+    if path.suffix.lower() in {".mlt", ".xml"} and path.is_file():
+        enforce_project_resource_policy(path)
     shotcut = require_executable(
         discover_executables().shotcut, "Shotcut", "SHOTCUT_PATH"
     )

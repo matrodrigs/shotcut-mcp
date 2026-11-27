@@ -109,10 +109,10 @@ import json
 from pathlib import Path
 from shotcut_mcp import render_jobs
 from shotcut_mcp.errors import ToolError
-from tests.test_rendering import RenderLifecycleTests
+from tests.render_fixture import start_with_python_renderer
 render_jobs.JOB_DIR = Path({str(self.job_directory)!r})
 try:
-    RenderLifecycleTests._start_with_python_renderer(Path({str(self.project)!r}), Path({str(self.root / "other.mp4")!r}))
+    start_with_python_renderer(Path({str(self.project)!r}), Path({str(self.root / "other.mp4")!r}))
 except ToolError as exc:
     print(json.dumps({{'code': exc.code, 'details': exc.details}}))
 """
@@ -135,7 +135,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from shotcut_mcp import render, render_jobs
-from tests.test_rendering import RenderLifecycleTests
+from tests.render_fixture import start_with_python_renderer
 render_jobs.JOB_DIR = Path({str(self.job_directory)!r})
 def start(*_args):
     Path({str(ready)!r}).touch()
@@ -146,7 +146,7 @@ def start(*_args):
         time.sleep(0.01)
     return SimpleNamespace(pid=os.getpid())
 with patch.object(render, 'start_render_supervisor', side_effect=start), patch.object(render, 'threading', SimpleNamespace(Thread=lambda **kw: SimpleNamespace(start=lambda: None))):
-    RenderLifecycleTests._start_with_python_renderer(Path({str(self.project)!r}), Path({str(self.root / "other.mp4")!r}))
+    start_with_python_renderer(Path({str(self.project)!r}), Path({str(self.root / "other.mp4")!r}))
 """
         process = subprocess.Popen(
             [sys.executable, "-B", "-c", program],
