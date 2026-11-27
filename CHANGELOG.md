@@ -4,242 +4,230 @@
 
 ### Fixed
 
-- Fix Claude Code plugin startup from another workspace on Windows and retain project-scoped startup from the repository root.
-- Preserve concurrent saves and deletions during project edits and backup creation. Creation and edit responses now describe the revision actually committed even if another program immediately moves or changes the project.
-- Prevent a newly created export from replacing a competing output, release the project lock after a failed write, and publish backups only after their contents have been flushed.
-- Keep Windows review snapshots and staging files removable when a source or destination has the read-only attribute.
-- Apply network policy to direct data paths and projects opened in Shotcut, reject unreadable XML before launching the runtime, keep restricted media status private during inspection, and check backup directories before creating or reading them.
-- Propagate MCP cancellation through runtime diagnostics and media probes. On Windows, stop child processes launched by the cancelled command as well.
-- Write a profile description for review clips, so that MLT 7.42.0 does not crash (SIGSEGV) when `render_review_clip` loads the temporary profile.
+- Fix “Connection closed” when starting the Claude Code plugin from another workspace on Windows (#10).
+- Preserve changes made by another program while an edit or backup is in progress, including deletion of the project. The edit confirmation identifies the revision that was saved.
+- Preserve an export destination created by another program just before the export finishes. A failed save releases the project lock, and only fully written backups appear for recovery.
+- Clean up temporary preview and export files on Windows when the source or destination is read-only.
+- Respect configured access restrictions when inspecting media, using network paths, opening projects in Shotcut, and accessing backups. Report unreadable project XML before starting Shotcut or Melt.
+- Honor cancellation during diagnostics and media inspection. On Windows, cancelling a command also stops its child processes.
+- Fix a crash when creating a review clip with MLT 7.42.0.
 
 ## 1.6.0 (2026-10-17)
 
 ### Added
 
-- Discover video, audio, and image files in a folder with bounded traversal, revision-aware pagination, and optional compact metadata that preserves individual probe failures.
-- Review up to 30 seconds of motion and audio in a managed H.264/AAC clip before final export.
-- Check Python discovery and Shotcut readiness before connecting MCP with the existing server entry point's `--check` option.
-
-### Fixed
-
-- Preserve success confirmations and saved revisions for large project creations, edits, and restores, including batches, so callers do not repeat an already saved change.
-- Correct media-replacement guidance to name the supported `replace_item_media` operation.
-- Respect configured filesystem boundaries before creating managed previews, including paths redirected by directory symlinks or Windows junctions.
-- Prevent simultaneous project edits from taking over each other's recovered lock, preserving revision checks and backups.
+- Find video, audio, and image files in a folder or its subfolders. Optional metadata shows which files could be inspected and which failed.
+- Preview up to 30 seconds of motion and audio before exporting.
+- Check whether Python and Shotcut are ready before connecting a client with `scripts/shotcut_mcp_server.py --check`.
 
 ### Changed
 
-- Bound project inspection with track and interval filters, summary mode, and revision-checked pagination for large timelines.
-- Limit simultaneous background renders to two by default across the user's server processes; administrators can configure 1–8 with `SHOTCUT_MCP_MAX_ACTIVE_RENDERS`.
+- Inspect a large timeline by track or frame range, request a summary, or browse results a page at a time. Inspection reports if the project changes between pages.
+- Run up to two background renders at once by default. Administrators can set the limit from 1 to 8 with `SHOTCUT_MCP_MAX_ACTIVE_RENDERS`.
+
+### Fixed
+
+- Return the saved revision after creating, editing, or restoring large projects so the client can confirm success.
+- Correct the instructions for replacing a clip's source media.
+- Keep managed previews inside the configured folders, including when a folder is redirected.
+- Prevent simultaneous edits from overwriting each other during recovery of an abandoned project lock.
 
 ## 1.5.6 (2026-09-12)
 
 ### Changed
 
-- Render preview batches and contact-sheet frames through one Melt process while preserving frame order, duplicate selections, cancellation, and protected output promotion.
-- Cache successful version and service queries briefly, invalidating them on runtime changes and retrying failures immediately.
-- Bound materialized edit diffs without changing unified-diff output or total line counts.
+- Generate batched preview frames and contact sheets in one render, including repeated frames in the requested order.
+- Reuse recent successful tool and effect queries to speed up repeated checks.
+- Use less memory when showing the differences for a planned edit to a large project.
 
 ## 1.5.5 (2026-09-11)
 
-### Fixed
-
-- Recognize tested Shotcut/MLT pairs independently of project serialization. Distinguish untested-version warnings from concrete runtime failures, retain conservative `compatible` results, and generate the Windows integration matrix from the runtime contract.
-- Export chapters when external markers share a frame and one lacks an identifier, instead of comparing a null identifier with a string during sorting.
-- Report malformed FFprobe results and persistent render fields as structured errors before using them, while preserving existing media and unknown render metadata extensions.
-
 ### Changed
 
-- Default new projects to Shotcut 26.8.1 / MLT 7.41.0 while retaining integration coverage for Shotcut 26.6.25 / MLT 7.40.0 and preserving existing project metadata.
-- Strengthen typed media and render contracts, and cover failed or cancelled overwrites, supervisor startup failures, and concurrent output promotion with regression tests.
+- Create new projects in the Shotcut 26.8.1 / MLT 7.41.0 format and preserve the format recorded in existing projects.
+- Show a warning for an untested Shotcut/MLT combination and report a failure when a required tool or service fails its checks.
+
+### Fixed
+
+- Export chapters when imported markers share a frame and one has no identifier.
+- Report unreadable media metadata and invalid saved render status with recovery guidance.
 
 ## 1.5.4 (2026-09-07)
 
 ### Fixed
 
-- Normalize timeline service order in linear time when preparing edits, preserving service order and unknown XML content without repeated root-list searches.
-
-### Changed
-
-- Route validation and contact-sheet handlers directly to project workflows and remove brittle CSS string assertions that did not verify rendered layout.
-- Refresh the project website with a redesigned landing page, refined navigation, and an updated timeline project icon.
+- Reduce the time needed to prepare edits on large timelines while preserving the order of existing timeline elements.
 
 ## 1.5.3 (2026-09-05)
 
 ### Fixed
 
-- Preserve destinations created concurrently with `create_project(overwrite=False)`, including at atomic publication; decide backup creation under lock for authorized replacements.
-- Preserve surviving clip references across transition creation/removal, and allow updating a track while retaining its current name without accepting real name collisions.
-- Preserve original source bounds when replacing speed maps, including after trim/split, retain requested speed precision, and match MLT's per-frame integration and mapping origin.
-- Ignore malformed cancellation notifications without ending the MCP session. Schedule legacy batch calls through the same bounded cancellation path as individual calls.
-- Bound incomplete render-progress lines in memory and resume parsing after oversized lines.
-- Apply network policy to decoded remote `file:` URIs and UNC paths with mixed separators.
-- Request explicit RGBA pixels for PNG previews so Windows codec defaults do not shift colors in timeremap output; compare real rendered frames with unmapped native references.
+- Preserve a project created by another program while a new project is being prepared. When overwrite is authorized, back up the file being replaced.
+- Keep surviving clip references usable after adding or removing a transition. Allow updating a track while keeping its name.
+- Preserve source frames and requested speed precision when replacing a speed ramp, including after trimming or splitting a clip.
+- Keep the client connected after a malformed cancellation request and allow individual calls in older batch requests to be cancelled.
+- Continue reporting render progress after an unusually long log line.
+- Apply network restrictions to remote file URLs and Windows network paths written with mixed separators.
+- Preserve colors in PNG previews of speed-mapped clips on Windows.
 
 ### Changed
 
-- Reject speed-map replacement when legacy or externally modified maps lack trustworthy source bounds. Reject reverse maps landing on source frame zero, where tested MLT integration can return an invalid image; retain constant timewarp as the constant-reversal alternative.
-- Document MCPB installation and updates, diagnostic/recovery routes, compatibility coverage, and the required Windows integration CI gate separately from opt-in local integration.
-- Guide editing models to make creative choices within the user's brief, discover effects, create projects from a destination folder, and reuse existing authorization for the same action.
+- Explain when an older speed map lacks the source bounds needed for replacement. Reject reverse ramps that land on frame zero and can produce an invalid image. Constant-speed reversal remains available.
+- Allow the assistant to choose an unused project filename in a supplied folder and reuse authorization already given for the same action.
 
 ## 1.5.2 (2026-09-05)
 
 ### Fixed
 
-- Bootstrap the durable render supervisor through an absolute bundled entry point, preserving client-relative paths and working without an installed Python package or `PYTHONPATH`; retain bounded startup diagnostics when worker imports fail (#3).
-- Check Windows process liveness through a read-only native handle instead of `os.kill`, so render status polling and stale-lock checks cannot signal or terminate a live owner (#3).
-- Use a semver-compatible Python requirement in the MCPB manifest so supported Python installations pass Claude Desktop's installation check; reject invalid requirements during source and packaged-artifact release validation (#2).
+- Start background renders when the MCP client opens outside the extension directory. Relative media paths continue to resolve from the client's working directory, and startup failures include diagnostics (#3).
+- Prevent Windows render-status checks from stopping a running render (#3).
+- Allow Claude Desktop to install the MCPB when a supported Python version is present (#2).
 
 ## 1.5.1 (2026-08-02)
 
-### Changed
-
-- Make the MCPB Python command select the correct executable name on Windows, macOS, and Linux.
-- Require explicit export intent or a user-approved render summary in agent guidance, surface concise edit/preview outcomes, and monitor only meaningful durable progress changes.
-
 ### Added
 
-- Return completed rendered media and the exact revision-bound editable Shotcut project as structured artifacts, with MCP resource links on supported protocol revisions.
+- Deliver the rendered media together with the exact editable Shotcut project used to produce it.
+
+### Changed
+
+- Launch the MCPB with the appropriate Python executable on Windows, macOS, and Linux.
+- Ask for export approval when the request covers editing or preview only. An explicit export request already supplies that approval.
 
 ### Fixed
 
-- Render every full, range, and marker job from an immutable byte-for-byte sibling project snapshot so concurrent live-project edits cannot change the render or its editable delivery.
+- Render projects, frame ranges, and markers from a saved snapshot so later edits cannot change the export.
 
 ## 1.5.0 (2026-07-27)
 
 ### Added
 
-- Return opaque revision-scoped `item_ref` selectors from project snapshots and support transaction-local `as`/`@alias` bindings so earlier timeline edits cannot silently retarget later operations in the same batch.
-- Add semantic `animate_clip` keyframes for pan, zoom, rotation, opacity, and volume while keeping native MLT services, property names, and keyframe strings inside MCP-owned filters.
-- Return every tool execution failure with a published structured recovery contract, including a stable error code, recoverability, recommended action/tool, and bounded contextual details.
-- Route unsupported project structures, stale render cursors, missing streams/search roots, FFmpeg capability failures, unavailable visual frames, and corrupt durable render state to specific safe recovery actions.
+- Refer to the same clip throughout a batch of edits, including after earlier operations move it. Newly created clips can also receive a name for use later in the batch.
+- Animate pan, zoom, rotation, opacity, and volume with clip-relative keyframes using `animate_clip`.
+- Show specific recovery actions for problems such as missing media streams, unavailable preview frames, and stale render-history pages.
 
 ### Changed
 
-- Give cold MLT repository startup progressively longer 5, 10, and 20 second attempts through one shared policy used by status, validation, preview, and rendering.
-- Double the default MLT project limit to 128 MiB and allow administrators to configure a bounded 1–512 MiB limit with `SHOTCUT_MCP_MAX_PROJECT_BYTES`.
-- Avoid duplicating complete structured results in text content for modern MCP clients, reducing response size while retaining the full result in `structuredContent`.
+- Give Shotcut's effects and codecs more time to load on a cold start.
+- Open projects up to 128 MiB by default. Administrators can configure a limit from 1 to 512 MiB with `SHOTCUT_MCP_MAX_PROJECT_BYTES`.
+- Reduce the size of large responses sent to MCP clients that support structured results.
 
 ### Fixed
 
-- Enforce the configured MCP message limit on outbound responses and compact oversized progress notifications before they reach the client.
-- Reject an oversized serialized project candidate before validation, backup, or replacement so every saved project remains readable under the configured input policy.
+- Keep oversized responses and progress updates within the configured connection limit.
+- Reject edits that would make a project too large for the server to reopen.
 
 ## 1.4.5 (2026-07-26)
 
 ### Added
 
-- Report per-analyzer FFmpeg availability in `shotcut_doctor` and combine local-resource, required-service, and first-frame Melt checks in `validate_project`.
-- Support wholly reverse timeremap speed maps and all-unlocked cross-track ripple trims that preserve locked tracks and marker timing.
-
-### Changed
-
-- Clarify the MCP's saved-state, edit, readiness, visual-review and recovery guidance; distinguish `valid` from `ready` and avoid redundant post-edit readiness checks.
+- Show which FFmpeg analyzers are available. Project validation checks local media, required effects and services, and whether Melt can process the first frame.
+- Create fully reversed speed ramps and ripple trims across unlocked tracks while preserving locked tracks and marker timing.
 
 ## 1.4.2 (2026-07-26)
 
 ### Added
 
-- Add parallel Codex and Claude Code plugin adapters plus a self-hosted Claude marketplace catalog over the same client-neutral MCP stdio server.
-- Add a structured `set_clip_opacity` edit operation that accepts clip-relative keyframes, preserves RGB levels, and reuses one MCP-owned filter.
-
-### Changed
-
-- Document client-specific registration commands while preserving MCPB as the portable release artifact and validate both adapters against one version and server entry point.
+- Install Shotcut MCP as a Codex or Claude Code plugin, including through the Claude Code marketplace.
+- Set or animate clip opacity with clip-relative keyframes.
 
 ### Fixed
 
-- Use MLT's still-image producer when adding or replacing durationless image media so PNG and JPEG clips continue rendering after trims, splits, and source replacement.
-- Animate only filter alpha for structured opacity edits, avoiding the color darkening caused by attenuating both brightness and alpha during composition.
+- Keep PNG and JPEG clips renderable after trimming, splitting, or replacing the source.
+- Preserve the brightness of a clip when animating its opacity over another track.
 
 ## 1.4.1 (2026-07-25)
 
 ### Changed
 
-- Clarify that Shotcut MCP reads only the project saved on disk, prompting callers to save recent GUI edits first and avoid concurrent saves.
-- Guide callers to probe representative source media before choosing a new project's dimensions or frame rate when the user did not request them.
+- Prompt users to save recent edits in Shotcut before working with the project on disk.
+- Guide the assistant to inspect source media before choosing project dimensions or frame rate when the user leaves them unspecified.
 
 ### Fixed
 
-- Retry transient Windows sharing violations while reading durable render-job metadata so `render_status` and `cancel_render` remain reliable during atomic worker updates.
+- Keep render status and cancellation available when Windows briefly locks the job's status file.
 
 ## 1.4.0 (2026-07-23)
 
 ### Changed
 
-- Focus operation-specific `shotcut_capabilities` responses on the requested schema, example, and transaction guarantees; enforce those same schemas before planning or applying edits.
-- Publish required stable fields and typed nested collections for every tool output, including identifiers, indexes, units, validation results, media streams, render jobs, and project state.
+- Show the accepted parameters and a working example when requesting help for a specific edit operation.
 
 ### Fixed
 
-- Require either `expected_revision` or explicitly authorized `force: true` for edits and backup restores, while documenting the distinct plan and chapter-export revision contracts.
-- Reject incomplete or conflicting render ranges and structurally invalid advanced consumer properties at the MCP schema seam.
-- Align operation schemas with non-zero trim deltas, non-zero bounded clip speeds, marker-update requirements, and Shotcut's exclusive marker end convention.
-- Correct `validate_project` output to expose `return_code` and nullable `diagnostic` fields instead of the nonexistent `validator` field.
+- Require the current project revision or explicit permission to override it before editing or restoring a backup.
+- Reject conflicting render ranges, invalid custom export settings, and zero values for trim changes or clip speeds.
+- Validate marker updates using Shotcut's exclusive end frame.
+- Return Melt's exit code and diagnostic message from project validation.
 
 ## 1.3.1 (2026-07-22)
 
 ### Added
 
-- Agent-facing MCP workflow instructions, described input parameters, operation-specific schemas and examples, structured output contracts, recoverable conflict context, and bounded inline preview images.
-- Structured FFmpeg analysis for silence, black frames, frozen video, interlacing, and EBU R128 loudness with bounded partial results.
-- Full-project, inclusive-frame-range, and Shotcut range-marker renders plus atomic marker chapter exports.
-- Transactional clip duplication, safe source replacement, filter reordering, marker updates, and token-scoped MCP progress notifications.
+- Show preview images directly in supported MCP clients.
+- Analyze silence, black frames, frozen video, interlacing, and EBU R128 loudness with FFmpeg.
+- Export a full project, a frame range, or a named range marker. Export markers as a chapter list.
+- Duplicate clips, replace their source media, reorder filters, and update markers in a single edit. Clients can request progress updates during operations.
 
 ### Changed
 
-- Single-frame previews and contact sheets can use bounded server-managed output when callers omit a destination path, and local-only tools now advertise closed-world behavior.
+- Generate single-frame previews and contact sheets without requiring an output filename.
 
 ### Fixed
 
-- Retry transient Windows sharing violations when atomically updating render-job state, and record supervisor initialization failures instead of leaving jobs stuck as running.
-- Compare Windows media paths canonically, wait for durable render-job states in lifecycle tests, and block releases unless the exact tagged `main` commit has passed CI.
+- Keep render status up to date during temporary Windows file locks and report startup failures that previously left jobs marked as running.
 
 ## 1.2.0 (2026-07-22)
 
 ### Added
 
-- Exact-frame preview batches, atomic contact sheets, hardware-encoder smoke detection, render ETA/history, and bounded visual missing-media candidate sheets.
-- Semantic SDR/HLG/PQ project workflows, constant timewarp, positive timeremap speed maps, and roll/slip/slide plus explicit same-track ripple/non-ripple trim operations.
-- Normalized source color metadata and bounded Shotcut-hash/basename missing-media diagnosis.
+- Preview multiple exact frames, create contact sheets, check hardware encoders, and view render history and estimated completion time.
+- Work with SDR, HLG, and PQ projects. Apply constant speed changes or forward speed ramps, and use roll, slip, slide, and same-track ripple trims.
+- Inspect source color metadata and find missing media by Shotcut hash or filename. Review candidate matches in a contact sheet.
 
 ### Fixed
 
-- Apply allowed-root and network policy to media edits and all recognized embedded MLT resources.
-- Use Shotcut 26.6's canonical `Native8Cpu` processing mode and maintain Shotcut hashes on relink.
-- Bound project files, subprocess output, and render logs; reap finished supervisors without polling.
+- Apply configured folder and network restrictions when editing media and opening embedded project resources.
+- Use Shotcut 26.6's native 8-bit processing mode and update media hashes after relinking.
+- Limit project and render-log sizes and release completed render processes even when the client stops polling.
 
 ## 1.1.0 (2026-07-22)
 
 ### Added
 
-- `shotcut_doctor` for Shotcut 26.6.25 / MLT 7.40.x, repository, RNNoise and policy checks.
-- `plan_project_edit` for validated read-only snapshots and bounded XML diffs.
-- Restart-resilient render supervision, durable cancellation and automatic output promotion.
-- MCP input-schema validation, version-shaped tool schemas/results, 2025-03 batching and request cancellation, lifecycle enforcement and bounded request resources.
-- Canonical allowed-root, absolute-path, network-resource and unsafe-consumer policies.
-- Cross-platform CI with Ruff, Mypy, metadata checks and pinned release tooling.
-
-### Changed
-
-- Split project transactions, MLT document inspection, path policy, process supervision, and media probing into focused modules while preserving the public MCP interface.
-- Added repository-wide engineering guidance for architecture, safety, testing, and releases.
+- Check the local Shotcut and MLT installation, RNNoise availability, and access settings with `shotcut_doctor`.
+- Preview and validate proposed edits without saving them with `plan_project_edit`.
+- Monitor or cancel background renders after restarting the client. Completed exports are moved to their destination automatically.
+- Cancel in-flight requests and use clients that send batched requests.
+- Restrict access to selected folders, require absolute paths, and control access to network resources and custom export properties.
 
 ### Fixed
 
-- Prevent a project save made during MLT validation from being overwritten.
-- Isolate similarly named projects' backups and enforce exact restore ownership.
-- Prevent previews from overwriting their source project and preserve existing output on failure.
-- Prevent arbitrary consumer properties from writing sidecar files outside the render target.
-- Clone shared producers before clip-local filter edits.
-- Remove unreferenced generated services and reject duplicate IDs or ambiguous main tractors.
-- Report project filters, MLT links and technical color resources accurately.
-- Include the MLT repository environment in cold-start and service cache identities.
+- Preserve changes saved by another program during project validation.
+- Keep backups separate for similarly named projects and restore only recognized backups for the selected project.
+- Prevent previews from overwriting the project. Preserve existing output when a preview or render fails or another program changes the destination.
+- Restrict custom export properties to a single output file by default. Embedded network resources require administrator opt-in.
+- Apply a clip-local filter without changing other clips that share its source.
+- Clean up unused generated project elements and reject ambiguous timelines or duplicate identifiers.
+- Report project filters, MLT links, and color resources accurately. Refresh runtime checks when the MLT environment changes.
 
-### Security notes
+## 1.0.1 (2026-07-21)
 
-- Network resources embedded in MLT XML are denied by default.
-- Custom render properties are restricted to single-file outputs by default.
-- Preview/render promotion detects concurrent target changes and uses sibling atomic replacement.
-- Job state and backup storage use per-user/private directories where supported.
-- Backup restores reject unrecognized files even when they are injected into the private namespace.
+### Added
+
+- Install Shotcut MCP as a portable MCP Bundle in compatible clients.
+
+### Changed
+
+- Use English for tool responses and documentation.
+
+### Fixed
+
+- Keep clips visible on the timeline when reopening an edited project in Shotcut.
+
+## 1.0.0 (2026-07-13)
+
+### Added
+
+- Create and edit multitrack Shotcut projects with 16 tools and 24 timeline operations. Edits are validated with MLT and backed up before saving.
+- Preview frames and monitor renders with Shotcut 26.2.26 and MLT 7.37.0.
