@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
+from scripts import check_ci
 from scripts.build_release import ROOT, build_release, package_members, verify_bundle
 from scripts.check_release import (
     runtime_compatibility_contract,
@@ -437,6 +438,32 @@ class SiteAssetTests(unittest.TestCase):
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def test_test_runner_isolates_its_render_state_from_other_runs(self) -> None:
+        roots = []
+
+        def check_command(command, *, env=None):
+            if "unittest" in command:
+                temp = subprocess.check_output(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import tempfile; print(tempfile.gettempdir())",
+                    ],
+                    env=env,
+                    text=True,
+                )
+                root = Path(temp.strip()).resolve()
+                self.assertNotEqual(root, Path(tempfile.gettempdir()).resolve())
+                self.assertTrue(root.is_dir())
+                roots.append(root)
+
+        with patch.object(check_ci, "_run", side_effect=check_command):
+            check_ci.run_test_checks()
+            check_ci.run_test_checks()
+
+        self.assertEqual(len(set(roots)), 2)
+        self.assertFalse(any(root.exists() for root in roots))
+
     def test_ordinary_ci_covers_macos_without_enabling_real_integration(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("os: [ubuntu-latest, macos-latest, windows-latest]", ci)

@@ -47,25 +47,21 @@ def _mount_windows_temp_alias(subst: str, target: Path) -> str:
 
 
 @contextmanager
-def _unit_test_environment() -> Iterator[dict[str, str] | None]:
+def _unit_test_temp_path(target: Path) -> Iterator[str]:
     """Expose Windows temp files through a second path spelling during tests."""
 
     if os.name != "nt":
-        yield None
+        yield str(target)
         return
 
     subst = shutil.which("subst")
     if subst is None:
         raise RuntimeError("Windows path-alias tests require subst.exe")
-    target = Path(tempfile.gettempdir()).resolve(strict=True)
     drive = _mount_windows_temp_alias(subst, target)
     alias = f"{drive}\\"
-    environment = os.environ.copy()
-    environment["TEMP"] = alias
-    environment["TMP"] = alias
     print(f"Windows path-alias test root: {alias} -> {target}", flush=True)
     try:
-        yield environment
+        yield alias
     finally:
         result = subprocess.run(
             [subst, drive, "/d"],
@@ -101,7 +97,10 @@ def run_test_checks() -> None:
             "tests",
         ]
     )
-    with _unit_test_environment() as environment:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        _unit_test_temp_path(Path(directory).resolve(strict=True)) as temp_path,
+    ):
         _run(
             [
                 PYTHON,
@@ -113,7 +112,12 @@ def run_test_checks() -> None:
                 "tests",
                 "-v",
             ],
-            env=environment,
+            env={
+                **os.environ,
+                "TMPDIR": temp_path,
+                "TEMP": temp_path,
+                "TMP": temp_path,
+            },
         )
     _run([PYTHON, "-B", "scripts/check_release.py"])
 
