@@ -9,7 +9,7 @@ Install a local Shotcut MCP server and connect it to your preferred MCP client.
 ## Requirements
 
 - Python 3.10 or newer
-- Shotcut, preferably 26.8.1 with bundled MLT 7.41.0
+- Shotcut, preferably 26.11.15 with bundled MLT 7.43.0
 - Codex CLI, Claude Code, or another MCP client that supports local stdio servers
 
 The project serialization baseline and tested runtime pairs evolve independently:
@@ -18,7 +18,7 @@ The project serialization baseline and tested runtime pairs evolve independently
 | --- | --- |
 | New project baseline | Shotcut 26.8.1 / MLT 7.41.0 (7.41.x family); existing projects retain their metadata |
 | Ordinary tests | Windows, macOS, and Linux with Python 3.10 and 3.14 |
-| Real rendering integration | Windows / Python 3.10: Shotcut 26.6.25 with MLT 7.40.0, and Shotcut 26.8.1 with MLT 7.41.0, including the extracted MCPB over stdio |
+| Real rendering integration | Windows with Python 3.10 on Shotcut 26.8.1 / MLT 7.41.0 and Shotcut 26.11.15 / MLT 7.43.0, including the extracted MCPB over stdio |
 | Client GUI installation | Not exercised by the automated rendering suite |
 
 The [CI workflow](../.github/workflows/shotcut-integration.yml) exercises these versions; it does not certify every filter, encoder, GPU, or client installation.

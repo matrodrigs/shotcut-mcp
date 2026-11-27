@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from shotcut_mcp import (
+    MLT_VERSION,
     MLT_VERSION_FAMILY,
     SHOTCUT_VERSION,
     TESTED_RUNTIME_STACKS,
@@ -167,7 +168,7 @@ class MeltCacheTests(unittest.TestCase):
             patch("shotcut_mcp.platform.ensure_melt_ready"),
             patch(
                 "shotcut_mcp.platform.version_line",
-                side_effect=["Shotcut 26.6.25", "melt 7.40.0"],
+                side_effect=[f"Shotcut {SHOTCUT_VERSION}", f"melt {MLT_VERSION}"],
             ),
             patch("shotcut_mcp.platform.describe_service", return_value=unavailable),
         ):
@@ -214,7 +215,7 @@ class MeltCacheTests(unittest.TestCase):
             patch("shotcut_mcp.platform.ensure_melt_ready"),
             patch(
                 "shotcut_mcp.platform.version_line",
-                side_effect=["Shotcut 26.6.25", "melt 7.40.0"],
+                side_effect=[f"Shotcut {SHOTCUT_VERSION}", f"melt {MLT_VERSION}"],
             ),
             patch(
                 "shotcut_mcp.platform.describe_service",

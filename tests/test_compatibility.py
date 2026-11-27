@@ -113,6 +113,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_unknown_versions_patches_and_mixed_pairs_are_warnings(self) -> None:
         for shotcut, mlt in (
+            ("26.6.25", "7.40.0"),
             ("26.9.1", "7.42.0"),
             ("26.8.1", "7.41.1"),
             ("26.8.1-dev", "7.41.0"),

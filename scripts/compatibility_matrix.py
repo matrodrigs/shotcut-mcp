@@ -13,8 +13,8 @@ if str(ROOT) not in sys.path:
 from shotcut_mcp import TESTED_RUNTIME_STACKS  # noqa: E402
 
 WINDOWS_ARCHIVE_SHA256 = {
-    "26.6.25": "e44a28442c5686895e59eb5d4f4f86d9a71e9f5c008e0a4c35be78717ea15690",
     "26.8.1": "b0148856de01b39add4bf4d6a813bfbc554b4663b65e3ca25cb2589f47555a6a",
+    "26.11.15": "d704c12a8ce6d1fbe1a13155578ee5cf36b749a26503500cce38d8e68f900b0d",
 }
 
 

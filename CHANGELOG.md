@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Shotcut MCP recognizes Shotcut 26.11.15 with MLT 7.43.0 and Shotcut 26.8.1 with MLT 7.41.0 as tested installations. Shotcut 26.6.25 now shows an untested-version warning and can still be used when its runtime checks pass.
+
 ### Fixed
 
 - Fix “Connection closed” when starting the Claude Code plugin from another workspace on Windows (#10).

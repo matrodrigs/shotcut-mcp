@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/c70f064f-17e7-403d-9bcf-689a9c616cdf
 
 ## Quick start
 
-You need **Python 3.10+**, **Shotcut** (recommended **26.8.1**, bundled MLT **7.41.0**), and an MCP client that supports local `stdio` servers. Shotcut includes the required media tools, codecs, and filters. No additional Python packages are required.
+You need **Python 3.10+**, **Shotcut** (recommended **26.11.15**, bundled MLT **7.43.0**), and an MCP client that supports local `stdio` servers. Shotcut includes the required media tools, codecs, and filters. No additional Python packages are required.
 
 ### 1. Connect your client
 
@@ -58,7 +58,7 @@ See the [full capability reference](docs/reference.md#features) for supported ed
 
 ## Transactional safety
 
-Edits are checked against the inspected revision, validated with Melt, and backed up before atomically replacing the saved project. Unknown XML is preserved; ambiguous edits are rejected. Preview and render outputs also use temporary files and atomic promotion.
+New projects use the Shotcut 26.8.1 / MLT 7.41.0 file format. Edits are checked against the inspected revision, validated with Melt, and backed up before atomically replacing the saved project. Unknown XML is preserved; ambiguous edits are rejected. Preview and render outputs also use temporary files and atomic promotion.
 
 Each render uses an immutable project snapshot, so later timeline edits cannot change a running export. If export was not already requested, the client confirms the output, preset, range, and overwrite behavior first. An explicit export request does not need a second approval.
 

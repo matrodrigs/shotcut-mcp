@@ -7,6 +7,6 @@ SHOTCUT_VERSION = "26.8.1"
 MLT_VERSION = "7.41.0"
 MLT_VERSION_FAMILY = "7.41.x"
 TESTED_RUNTIME_STACKS = (
-    ("26.6.25", "7.40.0"),
     ("26.8.1", "7.41.0"),
+    ("26.11.15", "7.43.0"),
 )
