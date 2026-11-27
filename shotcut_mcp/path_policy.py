@@ -46,6 +46,15 @@ def _enabled(name: str) -> bool:
     return os.environ.get(name, "").lower() in {"1", "true", "yes"}
 
 
+def _resolve_path(path: Path) -> Path:
+    resolved = path.resolve()
+    if resolved.drive.startswith("\\\\?\\") and not path.drive.startswith("\\\\?\\"):
+        # Windows can return a transient extended path if a missing parent appears
+        # during resolution. Ask the filesystem again to preserve junction semantics.
+        return path.resolve()
+    return resolved
+
+
 def expand_path(
     value: object,
     *,
@@ -77,20 +86,20 @@ def expand_path(
             details={"path": value},
         )
     if not enforce_policy:
-        return expanded.resolve()
+        return _resolve_path(expanded)
     return authorize_path(expanded, enforce_network_policy=enforce_network_policy)
 
 
 def authorize_path(path: Path, *, enforce_network_policy: bool = True) -> Path:
     if enforce_network_policy:
         _enforce_network_path_policy(str(path))
-    resolved = path.resolve()
+    resolved = _resolve_path(path)
     if enforce_network_policy:
         _enforce_network_path_policy(str(resolved))
     configured_roots = os.environ.get("SHOTCUT_MCP_ALLOWED_ROOTS", "").strip()
     if configured_roots:
         roots = [
-            Path(os.path.expandvars(item)).expanduser().resolve()
+            _resolve_path(Path(os.path.expandvars(item)).expanduser())
             for item in configured_roots.split(os.pathsep)
             if item.strip()
         ]

@@ -290,6 +290,27 @@ class MeltCacheTests(unittest.TestCase):
 
 
 class PathPolicyTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows extended paths")
+    def test_new_path_in_allowed_root_survives_transient_extended_spelling(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "backups" / "project"
+            resolve = Path.resolve
+
+            def resolve_during_creation(path: Path) -> Path:
+                if path == target and not target.parent.exists():
+                    target.parent.mkdir()
+                    return Path("\\\\?\\" + str(target))
+                return resolve(path)
+
+            with (
+                patch.dict(os.environ, {"SHOTCUT_MCP_ALLOWED_ROOTS": str(root)}),
+                patch.object(Path, "resolve", resolve_during_creation),
+            ):
+                self.assertEqual(platform.expand_path(str(target)), target)
+
     def test_configured_allowed_roots_block_paths_outside_them(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             allowed = Path(directory) / "allowed"

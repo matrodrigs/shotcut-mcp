@@ -10,6 +10,7 @@
 
 - Fix “Connection closed” when starting the Claude Code plugin from another workspace on Windows (#10).
 - Preserve changes made by another program while an edit or backup is in progress, including deletion of the project. The edit confirmation identifies the revision that was saved.
+- Allow two projects in the same Windows folder to be edited at the same time when their shared backup folder is first created.
 - Preserve an export destination created by another program just before the export finishes. A failed save releases the project lock, and only fully written backups appear for recovery.
 - Clean up temporary preview and export files on Windows when the source or destination is read-only.
 - Respect configured access restrictions when inspecting media, using network paths, opening projects in Shotcut, and accessing backups. Report unreadable project XML before starting Shotcut or Melt.
