@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.0 (2026-11-28)
+
+### Added
+
+- Preview an edit before saving it. Compare a frame from the saved and proposed timelines side by side, or play the proposed range with sound.
+- Shorten pauses in a saved timeline. Review suggested cuts with configurable margins and listen to the largest change before applying the edits.
+- Reconnect moved media with a reviewable batch of unique hash matches. Changed replacements are detected before saving.
+- Inspect display dimensions and rotation for phone footage, and use those dimensions when choosing a project profile.
+- Test the client's launch command and working directory to diagnose a failed MCP connection.
+
+### Changed
+
+- Inspect a small range of a large timeline without constructing every clip's detailed response.
+
+### Fixed
+
+- Keep a still JPEG on the timeline for the requested duration. A JPEG can also replace a trimmed clip while preserving its range.
+- Preserve the source frame count when importing a video at the project's frame rate.
+- Show both landscape and portrait candidates in missing-media contact sheets, including searches with more than 64 candidates.
+- Missing-media searches reuse verified matches across repeated clips, count overlapping folders once, and keep the other matches if a file disappears during the search.
+- Restore the picture or sound when unhiding or unmuting tracks saved by Shotcut. Changing one setting preserves the other.
+- Offer recovery guidance when opening a project with a damaged frame rate.
+- Report a failed installation check when FFprobe or FFmpeg is missing or its version command fails.
+
 ## 1.6.1 (2026-11-26)
 
 ### Changed
