@@ -114,7 +114,8 @@ class MeltCacheTests(unittest.TestCase):
                 self.assertTrue(
                     platform.describe_service("link", "rnnoise")["available"]
                 )
-                platform.version_line(executable, ["--version"])
+                with self.assertRaisesRegex(ToolError, "failed"):
+                    platform.version_line(executable, ["--version"])
                 self.assertEqual(
                     platform.version_line(executable, ["--version"]), "melt 7.41.0"
                 )
@@ -168,7 +169,12 @@ class MeltCacheTests(unittest.TestCase):
             patch("shotcut_mcp.platform.ensure_melt_ready"),
             patch(
                 "shotcut_mcp.platform.version_line",
-                side_effect=[f"Shotcut {SHOTCUT_VERSION}", f"melt {MLT_VERSION}"],
+                side_effect=[
+                    f"Shotcut {SHOTCUT_VERSION}",
+                    f"melt {MLT_VERSION}",
+                    "ffprobe 8",
+                    "ffmpeg 8",
+                ],
             ),
             patch("shotcut_mcp.platform.describe_service", return_value=unavailable),
         ):
@@ -215,7 +221,12 @@ class MeltCacheTests(unittest.TestCase):
             patch("shotcut_mcp.platform.ensure_melt_ready"),
             patch(
                 "shotcut_mcp.platform.version_line",
-                side_effect=[f"Shotcut {SHOTCUT_VERSION}", f"melt {MLT_VERSION}"],
+                side_effect=[
+                    f"Shotcut {SHOTCUT_VERSION}",
+                    f"melt {MLT_VERSION}",
+                    "ffprobe 8",
+                    "ffmpeg 8",
+                ],
             ),
             patch(
                 "shotcut_mcp.platform.describe_service",

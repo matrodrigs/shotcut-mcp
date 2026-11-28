@@ -516,7 +516,11 @@ def version_line(executable: Path | None, args: list[str]) -> str | None:
     result = run_capture([str(executable), *args], timeout=10)
     output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
     version = output.splitlines()[0] if output else None
-    if result.returncode == 0 and version:
+    if result.returncode:
+        raise ToolError(
+            f"{executable.name} version check exited with code {result.returncode}: {output[-500:]}"
+        )
+    if version:
         with _DIAGNOSTIC_LOCK:
             if len(_VERSION_CACHE) >= DIAGNOSTIC_CACHE_ENTRIES:
                 _VERSION_CACHE.clear()
@@ -524,29 +528,32 @@ def version_line(executable: Path | None, args: list[str]) -> str | None:
     return version
 
 
-def _safe_version(
-    executable: Path | None, args: list[str]
-) -> tuple[str | None, str | None]:
+def _executable_status(executable: Path | None, args: list[str]) -> ExecutableStatus:
+    version = None
+    error = None
     try:
-        return version_line(executable, args), None
+        version = version_line(executable, args)
     except RequestCancelled:
         raise
     except ToolError as exc:
-        return None, str(exc)
+        error = str(exc)
+    return {
+        "found": executable is not None,
+        "path": str(executable) if executable else None,
+        "version": version,
+        "version_error": error,
+    }
 
 
 def status() -> RuntimeStatus:
-    executables = discover_executables()
-    shotcut_version, shotcut_version_error = _safe_version(
-        executables.shotcut, ["--version"]
-    )
-    melt_version, melt_version_error = _safe_version(executables.melt, ["--version"])
-    ffprobe_version, ffprobe_version_error = _safe_version(
-        executables.ffprobe, ["-version"]
-    )
-    ffmpeg_version, ffmpeg_version_error = _safe_version(
-        executables.ffmpeg, ["-version"]
-    )
+    return _runtime_status(discover_executables())
+
+
+def _runtime_status(executables: Executables) -> RuntimeStatus:
+    shotcut = _executable_status(executables.shotcut, ["--version"])
+    melt = _executable_status(executables.melt, ["--version"])
+    ffprobe = _executable_status(executables.ffprobe, ["-version"])
+    ffmpeg = _executable_status(executables.ffmpeg, ["-version"])
     repository_ready = False
     repository_error = None
     if executables.melt is not None:
@@ -558,34 +565,19 @@ def status() -> RuntimeStatus:
         except ToolError as exc:
             repository_error = str(exc)
     return {
-        "ready": all((executables.shotcut, executables.melt, executables.ffprobe))
+        "ready": all(
+            tool["found"] and tool["version"]
+            for tool in (shotcut, melt, ffprobe, ffmpeg)
+        )
         and repository_ready,
-        "shotcut": {
-            "found": executables.shotcut is not None,
-            "path": str(executables.shotcut) if executables.shotcut else None,
-            "version": shotcut_version,
-            "version_error": shotcut_version_error,
-        },
+        "shotcut": shotcut,
         "melt": {
-            "found": executables.melt is not None,
-            "path": str(executables.melt) if executables.melt else None,
-            "version": melt_version,
-            "version_error": melt_version_error,
+            **melt,
             "repository_ready": repository_ready,
             "repository_error": repository_error,
         },
-        "ffprobe": {
-            "found": executables.ffprobe is not None,
-            "path": str(executables.ffprobe) if executables.ffprobe else None,
-            "version": ffprobe_version,
-            "version_error": ffprobe_version_error,
-        },
-        "ffmpeg": {
-            "found": executables.ffmpeg is not None,
-            "path": str(executables.ffmpeg) if executables.ffmpeg else None,
-            "version": ffmpeg_version,
-            "version_error": ffmpeg_version_error,
-        },
+        "ffprobe": ffprobe,
+        "ffmpeg": ffmpeg,
         "environment_overrides": {
             key: os.environ.get(key)
             for key in (
@@ -729,35 +721,29 @@ def _safe_service_description(
         return {"available": False, "error": str(exc)}
 
 
-def compatibility_doctor() -> CompatibilityReport:
-    executables = discover_executables()
-    repository_error: str | None = None
-    repository_ready = False
-    if executables.melt is not None:
-        try:
-            ensure_melt_ready(executables.melt)
-            repository_ready = True
-        except RequestCancelled:
-            raise
-        except ToolError as exc:
-            repository_error = str(exc)
-
-    shotcut_version, shotcut_error = _safe_version(executables.shotcut, ["--version"])
-    mlt_version, mlt_error = _safe_version(executables.melt, ["--version"])
+def compatibility_doctor(runtime: RuntimeStatus | None = None) -> CompatibilityReport:
+    if runtime is None:
+        runtime = status()
+    repository_error = runtime["melt"]["repository_error"]
+    repository_ready = runtime["melt"]["repository_ready"]
+    shotcut_version = runtime["shotcut"]["version"]
+    mlt_version = runtime["melt"]["version"]
     detected_shotcut = _extract_version(shotcut_version)
     detected_mlt = _extract_version(mlt_version)
     tested = (detected_shotcut, detected_mlt) in TESTED_RUNTIME_STACKS
     issues: list[CompatibilityIssue] = []
-    for name, executable, version, error in (
-        ("shotcut", executables.shotcut, shotcut_version, shotcut_error),
-        ("mlt", executables.melt, mlt_version, mlt_error),
+    for name, tool in (
+        ("shotcut", runtime["shotcut"]),
+        ("mlt", runtime["melt"]),
+        ("ffmpeg", runtime["ffmpeg"]),
+        ("ffprobe", runtime["ffprobe"]),
     ):
-        if executable is None or not version or error:
+        if not tool["found"] or not tool["version"]:
             issues.append(
                 {
                     "code": f"{name}_unavailable",
                     "severity": "error",
-                    "message": error
+                    "message": tool["version_error"]
                     or f"Could not read the {name} executable version.",
                     "recommended_action": (
                         "Check the executable path and installation, then rerun shotcut_doctor."
@@ -808,7 +794,7 @@ def compatibility_doctor() -> CompatibilityReport:
                 in {shotcut for shotcut, _ in TESTED_RUNTIME_STACKS},
                 "expected": ", ".join(shotcut for shotcut, _ in TESTED_RUNTIME_STACKS),
                 "detected": shotcut_version,
-                "error": shotcut_error,
+                "error": runtime["shotcut"]["version_error"],
             }
         ),
         "mlt": VersionCheck(
@@ -816,7 +802,7 @@ def compatibility_doctor() -> CompatibilityReport:
                 "passed": detected_mlt in {mlt for _, mlt in TESTED_RUNTIME_STACKS},
                 "expected": ", ".join(mlt for _, mlt in TESTED_RUNTIME_STACKS),
                 "detected": mlt_version,
-                "error": mlt_error,
+                "error": runtime["melt"]["version_error"],
             }
         ),
         "repository": {
@@ -847,7 +833,9 @@ def compatibility_doctor() -> CompatibilityReport:
         "serialization": {"shotcut": SHOTCUT_VERSION, "mlt": MLT_VERSION},
         "issues": issues,
         "checks": checks,
-        "quality_analyzers": quality_analyzer_capabilities(executables.ffmpeg),
+        "quality_analyzers": quality_analyzer_capabilities(
+            Path(ffmpeg_path) if (ffmpeg_path := runtime["ffmpeg"]["path"]) else None
+        ),
         "path_policy": path_policy(),
     }
 

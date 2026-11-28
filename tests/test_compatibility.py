@@ -22,9 +22,20 @@ from shotcut_mcp.tools import TOOLS
 
 class CompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.versions = self.enter_patch(
-            "version_line", side_effect=["Shotcut 26.8.1", "melt 7.41.0"]
-        )
+        self.versions = {
+            "shotcut": "Shotcut 26.8.1",
+            "melt": "melt 7.41.0",
+            "ffprobe": "ffprobe 8",
+            "ffmpeg": "ffmpeg 8",
+        }
+
+        def version_line(path, args):
+            version = self.versions.get(str(path))
+            if isinstance(version, Exception):
+                raise version
+            return version
+
+        self.enter_patch("version_line", side_effect=version_line)
         self.executables = self.enter_patch(
             "discover_executables",
             return_value=platform.Executables(
@@ -102,7 +113,9 @@ class CompatibilityTests(unittest.TestCase):
         for protocol in SUPPORTED_PROTOCOL_VERSIONS:
             for shotcut, mlt in TESTED_RUNTIME_STACKS:
                 with self.subTest(protocol=protocol, shotcut=shotcut, mlt=mlt):
-                    self.versions.side_effect = [f"Shotcut {shotcut}", f"melt {mlt}"]
+                    self.versions.update(
+                        shotcut=f"Shotcut {shotcut}", melt=f"melt {mlt}"
+                    )
                     result = self.call_doctor(protocol)
                     self.assertTrue(result["compatible"])
                     self.assertEqual(result["status"], "tested")
@@ -124,7 +137,7 @@ class CompatibilityTests(unittest.TestCase):
             ("development build", "7.41.0"),
         ):
             with self.subTest(shotcut=shotcut, mlt=mlt):
-                self.versions.side_effect = [f"Shotcut {shotcut}", f"melt {mlt}"]
+                self.versions.update(shotcut=f"Shotcut {shotcut}", melt=f"melt {mlt}")
                 result = self.call_doctor()
                 self.assertEqual(result["status"], "untested")
                 self.assertTrue(result["runtime_ready"])
@@ -135,7 +148,7 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertEqual(result["issues"][0]["severity"], "warning")
 
     def test_repository_failure_takes_precedence_over_unknown_version(self) -> None:
-        self.versions.side_effect = ["Shotcut 26.9.1", "melt 7.42.0"]
+        self.versions.update(shotcut="Shotcut 26.9.1", melt="melt 7.42.0")
         self.repository.side_effect = ToolError("repository failure sentinel")
         result = self.call_doctor()
         self.assertEqual(result["status"], "failed")
@@ -148,7 +161,6 @@ class CompatibilityTests(unittest.TestCase):
     def test_rnnoise_variants_are_independent_and_either_can_pass(self) -> None:
         for available in ({"link"}, {"filter"}, set()):
             with self.subTest(available=available):
-                self.versions.side_effect = ["Shotcut 26.8.1", "melt 7.41.0"]
                 self.services.side_effect = lambda kind, name, available=available: {
                     "kind": kind,
                     "name": name,
@@ -178,12 +190,25 @@ class CompatibilityTests(unittest.TestCase):
                 self.executables.return_value = platform.Executables(
                     shotcut, mlt, None, None
                 )
-                self.versions.side_effect = versions
+                self.versions.update(shotcut=versions[0], melt=versions[1])
                 result = self.call_doctor()
                 self.assertEqual(result["status"], "failed")
                 self.assertFalse(result["runtime_ready"])
                 self.assertFalse(result["compatible"])
                 self.assertIn(expected, {issue["code"] for issue in result["issues"]})
+
+    def test_readiness_reports_missing_probe_and_failed_ffmpeg_command(self) -> None:
+        self.executables.return_value = platform.Executables(
+            Path("shotcut"), Path("melt"), None, Path("ffmpeg")
+        )
+        self.versions["ffmpeg"] = ToolError("failed to start FFmpeg")
+        self.assertFalse(platform.status()["ready"])
+        report = self.call_doctor()
+        self.assertFalse(report["runtime_ready"])
+        self.assertEqual(
+            {issue["code"] for issue in report["issues"]},
+            {"ffprobe_unavailable", "ffmpeg_unavailable"},
+        )
 
     def test_ci_matrix_matches_advertised_pairs_and_pins_every_archive(self) -> None:
         root = Path(__file__).resolve().parents[1]

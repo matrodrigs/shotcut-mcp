@@ -3,8 +3,10 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts.shotcut_mcp_server import main
@@ -55,6 +57,29 @@ class InstallationCheckTests(unittest.TestCase):
         report = json.loads(output.getvalue())
         self.assertFalse(report["runtime_ready"])
         self.assertEqual(report["doctor"]["issues"], doctor["issues"])
+
+    def test_client_check_uses_the_configured_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(__file__).resolve().parents[1]
+            for cwd, expected in ((root, True), (Path(folder), False)):
+                output = io.StringIO()
+                with self.subTest(cwd=cwd), redirect_stdout(output):
+                    status = main(
+                        [
+                            "--check-client",
+                            "--cwd",
+                            str(cwd),
+                            "--",
+                            sys.executable,
+                            "-B",
+                            "scripts/shotcut_mcp_server.py",
+                        ]
+                    )
+                    result = json.loads(output.getvalue())
+                    self.assertEqual(result["connected"], expected)
+                    self.assertEqual(status, 0 if expected else 1)
+                    if not expected:
+                        self.assertEqual(result["stage"], "initialize")
 
     def test_default_entrypoint_preserves_stdio_server(self) -> None:
         with patch("scripts.shotcut_mcp_server.serve_main", return_value=0) as server:

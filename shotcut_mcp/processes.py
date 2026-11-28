@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -218,6 +220,29 @@ def run_capture(
         stdout = stdout_file.read().decode("utf-8", errors="replace")
         stderr = stderr_file.read().decode("utf-8", errors="replace")
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+@contextmanager
+def client_stdio(command: list[str], cwd: Path) -> Iterator[subprocess.Popen[bytes]]:
+    with subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags(),
+        start_new_session=os.name != "nt",
+    ) as child:
+        try:
+            yield child
+        finally:
+            if child.stdin and not child.stdin.closed:
+                with suppress(BrokenPipeError):
+                    child.stdin.close()
+            try:
+                child.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                terminate_process(child)
 
 
 def start_render_supervisor(
