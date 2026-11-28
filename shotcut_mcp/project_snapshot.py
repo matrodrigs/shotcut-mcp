@@ -236,9 +236,46 @@ def _expected_media(owner: Element, fps: float) -> ExpectedMedia:
     }
 
 
-def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
-    """Build the stable read-only representation exposed through MCP."""
+@dataclass
+class _ItemPage:
+    track_id: str | None
+    first: int | None
+    last: int | None
+    offset: int
+    limit: int
+    total: int = 0
 
+    def includes(self, track: str, start: int, end: int) -> bool:
+        if self.track_id is not None and self.track_id != track:
+            return False
+        if (self.first is not None and end < self.first) or (
+            self.last is not None and start > self.last
+        ):
+            return False
+        index = self.total
+        self.total += 1
+        return self.offset <= index < self.offset + self.limit
+
+
+def _project_markers(document: ProjectDocument) -> list[MarkerSummary]:
+    marker_container = document.markers_container()
+    markers: list[MarkerSummary] = []
+    if marker_container is not None:
+        for marker in marker_container.findall("properties"):
+            props = properties(marker)
+            markers.append(
+                {
+                    "marker_id": marker.get("name"),
+                    "text": props.get("text"),
+                    "start_frame": clock_to_frames(props.get("start"), document.fps),
+                    "end_frame": clock_to_frames(props.get("end"), document.fps),
+                    "color": props.get("color"),
+                }
+            )
+    return markers
+
+
+def project_resources(document: ProjectDocument) -> list[ResourceSummary]:
     resources: list[ResourceSummary] = []
     seen: set[tuple[str | None, str, str]] = set()
     for reference in resource_references(document.root):
@@ -263,12 +300,25 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
                 "expected_media": _expected_media(reference.owner, document.fps),
             }
         )
+    return resources
+
+
+def build_project_snapshot(
+    document: ProjectDocument, item_page: _ItemPage | None = None
+) -> ProjectSnapshot:
+    """Build the stable read-only representation exposed through MCP."""
+
+    resources = project_resources(document)
     tracks: list[TrackSummary] = []
     for track in document.tracks():
         cursor = 0
         items: list[ItemSummary] = []
         for index, item in enumerate(document.sequence(track.playlist)):
             duration = document.item_duration(item)
+            start = cursor
+            cursor += duration
+            if item_page and not item_page.includes(track.id, start, cursor - 1):
+                continue
             summary: ItemSummary = {
                 "item_index": index,
                 "item_ref": (
@@ -281,9 +331,9 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
                 else "transition"
                 if document.is_transition(item)
                 else "clip",
-                "start_frame": cursor,
+                "start_frame": start,
                 "duration_frames": duration,
-                "end_frame": cursor + duration - 1,
+                "end_frame": cursor - 1,
             }
             if item.tag == "entry":
                 producer_id = item.get("producer")
@@ -305,7 +355,6 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
                     }
                 )
             items.append(summary)
-            cursor += duration
         tracks.append(
             {
                 "track_id": track.id,
@@ -318,20 +367,6 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
                 "items": items,
             }
         )
-    marker_container = document.markers_container()
-    markers: list[MarkerSummary] = []
-    if marker_container is not None:
-        for marker in marker_container.findall("properties"):
-            props = properties(marker)
-            markers.append(
-                {
-                    "marker_id": marker.get("name"),
-                    "text": props.get("text"),
-                    "start_frame": clock_to_frames(props.get("start"), document.fps),
-                    "end_frame": clock_to_frames(props.get("end"), document.fps),
-                    "color": props.get("color"),
-                }
-            )
     main = document.main_tractor()
     subtitles: list[SubtitleSummary] = [
         {
@@ -378,7 +413,7 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
             }
             for link in document.root.findall(".//link")
         ],
-        "markers": markers,
+        "markers": _project_markers(document),
         "subtitles": subtitles,
         "resources": resources,
         "network_resources": [
@@ -411,7 +446,7 @@ PageItem = TypeVar("PageItem")
 
 
 def project_snapshot_page(
-    snapshot: ProjectSnapshot,
+    document: ProjectDocument,
     *,
     detail: str,
     track_id: str | None,
@@ -420,7 +455,9 @@ def project_snapshot_page(
     offset: int,
     limit: int,
 ) -> dict[str, object]:
-    totals: dict[str, int] = {}
+    selection = _ItemPage(track_id, in_frame, out_frame, offset, limit)
+    snapshot = build_project_snapshot(document, selection)
+    totals: dict[str, int] = {"items": selection.total}
 
     def page(name: str, values: list[PageItem]) -> list[PageItem]:
         totals[name] = len(values)
@@ -431,24 +468,13 @@ def project_snapshot_page(
         for track in snapshot["tracks"]
         if track_id is None or track["track_id"] == track_id
     ]
-    items = [
-        (track["track_id"], item)
-        for track in selected_tracks
-        for item in track["items"]
-        if (in_frame is None or item["end_frame"] >= in_frame)
-        and (out_frame is None or item["start_frame"] <= out_frame)
-    ]
-    selected_items: dict[str, list[ItemSummary]] = {}
-    for item_track, item in page("items", items):
-        selected_items.setdefault(item_track, []).append(item)
     visible_tracks = {track["track_id"] for track in page("tracks", selected_tracks)}
-    visible_tracks.update(selected_items)
     result: ProjectSnapshot = {
         **snapshot,
         "tracks": [
-            {**track, "items": selected_items.get(track["track_id"], [])}
+            track
             for track in selected_tracks
-            if track["track_id"] in visible_tracks
+            if track["items"] or track["track_id"] in visible_tracks
         ],
         "filters": page("filters", snapshot["filters"]),
         "links": page("links", snapshot["links"]),

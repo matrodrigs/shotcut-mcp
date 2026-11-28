@@ -156,7 +156,7 @@ def inspect_project(arguments: dict[str, object]) -> dict[str, object]:
         document.find_track(arguments["track"]).id if "track" in arguments else None
     )
     return project_snapshot_page(
-        document.snapshot(),
+        document,
         detail=str(detail),
         track_id=track_id,
         in_frame=frame_in,
