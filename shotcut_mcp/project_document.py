@@ -2843,67 +2843,24 @@ class ProjectDocument:
         _, _, entry, frame_in, frame_out = self._regular_clip(
             track, operation.get("item_index")
         )
-        raw_keyframes = operation.get("opacity_keyframes")
-        if not is_array(raw_keyframes) or not 1 <= len(raw_keyframes) <= 64:
-            raise ToolError("opacity_keyframes must contain between 1 and 64 points.")
-        keyframes: list[tuple[int, float]] = []
-        for index, raw in enumerate(raw_keyframes):
-            if not is_object(raw):
-                raise ToolError(f"opacity_keyframes[{index}] must be an object.")
-            frame = _int(raw.get("frame"), f"opacity_keyframes[{index}].frame", 0)
-            opacity = _number(
-                raw.get("opacity"), f"opacity_keyframes[{index}].opacity", 0
-            )
-            if opacity > 1:
-                raise ToolError(
-                    f"opacity_keyframes[{index}].opacity must be between 0 and 1."
-                )
-            if keyframes and frame <= keyframes[-1][0]:
-                raise ToolError("Opacity keyframe frames must be strictly increasing.")
-            keyframes.append((frame, opacity))
-        if keyframes[0][0] != 0:
-            raise ToolError("The first opacity keyframe must be at frame 0.")
-        duration = frame_out - frame_in + 1
-        if keyframes[-1][0] >= duration:
-            raise ToolError(
-                f"Opacity keyframes must be within the clip duration ({duration} frames)."
-            )
-        interpolation = operation.get("interpolation", "linear")
-        separators = {"linear": "=", "discrete": "|=", "smooth": "~="}
-        if not isinstance(interpolation, str) or interpolation not in separators:
-            raise ToolError("interpolation must be linear, discrete, or smooth.")
-        separator = separators[interpolation]
-        serialized = ";".join(
-            f"{frame}{separator}{opacity:g}" for frame, opacity in keyframes
+        animation = _parse_clip_animation(
+            operation.get("opacity_keyframes"), frame_out - frame_in + 1
         )
-
+        if not animation.has_opacity:
+            raise ToolError("Every opacity keyframe requires opacity.")
+        interpolation, separator = self._animation_separator(
+            operation.get("interpolation", "linear")
+        )
         service = self.isolate_entry_service(entry)
         if service.tag not in {"producer", "chain"}:
             raise ToolError("Clip opacity requires a producer or chain clip.")
-        owned = [
-            element
-            for element in service.findall("filter")
-            if _property(element, "shotcut:mcpOpacity") == "1"
-        ]
-        if len(owned) > 1:
-            raise ToolError("The clip contains multiple MCP-owned opacity filters.")
-        if owned:
-            element = owned[0]
-        else:
-            element = ET.Element("filter", {"id": self.new_id("filter")})
-            service.append(element)
-            self.invalidate()
-        element.set("in", str(frame_in))
-        element.set("out", str(frame_out))
-        _set_property(element, "mlt_service", "brightness")
-        _set_property(element, "shotcut:mcpOpacity", 1)
-        _set_property(element, "level", 1)
-        _set_property(element, "alpha", serialized)
-        _remove_property(element, "disable")
+        filter_id = self._apply_opacity_animation(
+            service, animation, separator, frame_in, frame_out
+        )
         return {
             "opacity_updated": True,
-            "filter_id": element.get("id"),
-            "keyframe_count": len(keyframes),
+            "filter_id": filter_id,
+            "keyframe_count": len(animation.points),
             "interpolation": interpolation,
         }
 
