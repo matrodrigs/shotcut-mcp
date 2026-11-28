@@ -343,6 +343,11 @@ def _srt(items: list[object]) -> str:
     return "\n".join(lines)
 
 
+MAX_OPERATIONS = 500
+
+_TRACK_HIDE_MODES = ("", "video", "audio", "both")
+
+
 @dataclass
 class TrackRef:
     xml_index: int
@@ -354,6 +359,30 @@ class TrackRef:
     @property
     def id(self) -> str:
         return self.playlist.get("id", "")
+
+    def properties(self) -> dict[str, str]:
+        result = _properties(self.playlist)
+        mode = self.element.get("hide")
+        if mode in _TRACK_HIDE_MODES[1:]:
+            result["hide"] = str(_TRACK_HIDE_MODES.index(mode))
+        return result
+
+    def update_visibility(self, operation: dict[str, object]) -> None:
+        if "hidden" not in operation and "muted" not in operation:
+            return
+        current = self.properties().get("hide", "0")
+        if current not in {"0", "1", "2", "3"}:
+            raise ToolError(f"Unrecognized track visibility value: {current}")
+        hide = int(current)
+        for field, bit in (("hidden", 1), ("muted", 2)):
+            if field in operation:
+                enabled = _boolean(operation[field], field)
+                hide = (hide | bit) if enabled else (hide & ~bit)
+        _set_property(self.playlist, "hide", hide)
+        if hide:
+            self.element.set("hide", _TRACK_HIDE_MODES[hide])
+        else:
+            self.element.attrib.pop("hide", None)
 
 
 class ProjectDocument:
@@ -1315,18 +1344,7 @@ class ProjectDocument:
             if not isinstance(value, bool):
                 raise ToolError("locked must be a boolean.")
             _set_property(track.playlist, "shotcut:lock", 1 if value else 0)
-        hide = int(_property(track.playlist, "hide") or 0)
-        if "hidden" in operation:
-            value = operation["hidden"]
-            if not isinstance(value, bool):
-                raise ToolError("hidden must be a boolean.")
-            hide = (hide | 1) if value else (hide & ~1)
-        if "muted" in operation:
-            value = operation["muted"]
-            if not isinstance(value, bool):
-                raise ToolError("muted must be a boolean.")
-            hide = (hide | 2) if value else (hide & ~2)
-        _set_property(track.playlist, "hide", hide)
+        track.update_visibility(operation)
         if "composite" in operation:
             composite = operation["composite"]
             if not isinstance(composite, bool) or track.kind != "video":

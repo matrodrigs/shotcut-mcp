@@ -27,7 +27,13 @@ from shotcut_mcp.platform import (
     run_capture,
     summarize_media,
 )
-from shotcut_mcp.project import create_project, edit_project, validate_project
+from shotcut_mcp.project import (
+    ProjectDocument,
+    create_project,
+    edit_project,
+    plan_project_edit,
+    validate_project,
+)
 from shotcut_mcp.render import (
     cancel_render,
     render_review_clip,
@@ -1229,6 +1235,57 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             second_pixel = self._preview_pixel(executables.ffmpeg, second_preview)
             self.assertGreater(second_pixel[1], 60)
             self.assertLess(max(second_pixel[0], second_pixel[2]), 30)
+
+    def test_unhide_native_track_preserves_mute_and_restores_picture(self) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        assert ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "hidden.mlt"
+            state = create_project(
+                {"project_path": str(path), "width": 64, "height": 64}
+            )
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "color": "#ff0000",
+                            "duration_frames": 5,
+                        }
+                    ],
+                }
+            )
+            tree = ET.parse(path)
+            track_id = state["project"]["tracks"][0]["track_id"]
+            track = tree.find(f".//tractor/track[@producer='{track_id}']")
+            self.assertIsNotNone(track)
+            track.set("hide", "both")
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+            saved = ProjectDocument.load(path)
+            self.assertEqual(saved.snapshot()["tracks"][0]["properties"]["hide"], "3")
+            edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": saved.revision,
+                    "operations": [
+                        {"op": "update_track", "track": "V1", "hidden": False}
+                    ],
+                }
+            )
+            preview = root / "visible.png"
+            render_preview(path, preview, 0, False)
+            self.assertGreater(self._preview_pixel(ffmpeg, preview)[0], 180)
+            self.assertEqual(
+                ET.parse(path)
+                .find(f".//tractor/track[@producer='{track_id}']")
+                .get("hide"),
+                "audio",
+            )
 
     def test_jpeg_slideshow_uses_the_requested_duration(self) -> None:
         ffmpeg = discover_executables().ffmpeg

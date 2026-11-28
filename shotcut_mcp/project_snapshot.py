@@ -313,7 +313,7 @@ def build_project_snapshot(document: ProjectDocument) -> ProjectSnapshot:
                 "kind": track.kind,
                 "xml_index": track.xml_index,
                 "duration_frames": cursor,
-                "properties": properties(track.playlist),
+                "properties": track.properties(),
                 "filters": _filter_summaries(track.playlist),
                 "items": items,
             }
