@@ -34,7 +34,8 @@ def _mount_windows_temp_alias(subst: str, target: Path) -> str:
             [subst, drive, str(target)],
             cwd=ROOT,
             capture_output=True,
-            text=True,
+            encoding="mbcs",
+            errors="replace",
             check=False,
         )
         if result.returncode == 0:
@@ -67,7 +68,8 @@ def _unit_test_temp_path(target: Path) -> Iterator[str]:
             [subst, drive, "/d"],
             cwd=ROOT,
             capture_output=True,
-            text=True,
+            encoding="mbcs",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:

@@ -456,9 +456,11 @@ class CiConfigurationTests(unittest.TestCase):
                 self.assertNotEqual(root, Path(tempfile.gettempdir()).resolve())
                 self.assertTrue(root.is_dir())
                 roots.append(root)
+                if len(roots) == 1:
+                    check_ci.run_test_checks()
+                    self.assertTrue(root.is_dir())
 
         with patch.object(check_ci, "_run", side_effect=check_command):
-            check_ci.run_test_checks()
             check_ci.run_test_checks()
 
         self.assertEqual(len(set(roots)), 2)
