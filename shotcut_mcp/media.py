@@ -250,8 +250,35 @@ def _fraction(value: object) -> float | None:
     return num / den if num is not None and den not in (None, 0) else None
 
 
+def _frame_rate(stream: dict[str, object]) -> float | None:
+    return _fraction(stream.get("avg_frame_rate")) or _fraction(
+        stream.get("r_frame_rate")
+    )
+
+
+def _single_image_frame(payload: ProbePayload, duration: float) -> bool:
+    formats = str(payload.get("format", {}).get("format_name", "")).split(",")
+    if not any(
+        name in {"image2", "image2pipe"} or name.endswith("_pipe") for name in formats
+    ):
+        return False
+    streams = payload.get("streams", [])
+    if len(streams) != 1 or streams[0].get("codec_type") != "video":
+        return False
+    stream = streams[0]
+    count = _as_float(stream.get("nb_frames"))
+    if count is not None:
+        return count == 1
+    rate = _frame_rate(stream)
+    return (
+        rate is not None
+        and rate > 0
+        and math.isclose(duration, 1 / rate, rel_tol=0, abs_tol=0.5e-6)
+    )
+
+
 def media_duration(payload: ProbePayload) -> float | None:
-    """Return the longest positive duration reported by FFprobe."""
+    """Return the longest positive playback duration, excluding standalone stills."""
 
     durations: list[float] = []
     value = _as_float(payload.get("format", {}).get("duration"))
@@ -261,7 +288,12 @@ def media_duration(payload: ProbePayload) -> float | None:
         value = _as_float(stream.get("duration"))
         if value is not None and value > 0:
             durations.append(value)
-    return max(durations) if durations else None
+    duration = max(durations, default=None)
+    return (
+        None
+        if duration is not None and _single_image_frame(payload, duration)
+        else duration
+    )
 
 
 def shotcut_file_hash(media_path: Path) -> str:

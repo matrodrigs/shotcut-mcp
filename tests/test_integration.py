@@ -1175,7 +1175,7 @@ class RealShotcutIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             red = root / "red.png"
-            green = root / "green.png"
+            green = root / "green.jpg"
             self._create_image(executables.ffmpeg, red, "red")
             self._create_image(executables.ffmpeg, green, "green")
             project_path = root / "images.mlt"
@@ -1229,6 +1229,76 @@ class RealShotcutIntegrationTests(unittest.TestCase):
             second_pixel = self._preview_pixel(executables.ffmpeg, second_preview)
             self.assertGreater(second_pixel[1], 60)
             self.assertLess(max(second_pixel[0], second_pixel[2]), 30)
+
+    def test_jpeg_slideshow_uses_the_requested_duration(self) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        assert ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            slide = root / "slide-01.jpg"
+            subprocess.run(
+                [
+                    str(ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=s=64x64",
+                    "-frames:v",
+                    "1",
+                    str(slide),
+                ],
+                check=True,
+                timeout=30,
+            )
+            created = create_project(
+                {
+                    "project_path": str(root / "slides.mlt"),
+                    "width": 64,
+                    "height": 64,
+                    "fps_num": 25,
+                    "clips": [{"path": str(slide), "image_duration_seconds": 6}],
+                }
+            )
+            self.assertEqual(
+                created["project"]["tracks"][0]["items"][0]["duration_frames"], 150
+            )
+
+    def test_import_keeps_the_source_frame_count_at_the_project_rate(self) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        assert ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for numerator, denominator in ((25, 1), (24, 1), (30000, 1001)):
+                with self.subTest(rate=(numerator, denominator)):
+                    source = root / f"source-{numerator}.mp4"
+                    subprocess.run(
+                        [
+                            str(ffmpeg),
+                            "-v",
+                            "error",
+                            "-f",
+                            "lavfi",
+                            "-i",
+                            f"color=s=64x64:r={numerator}/{denominator}",
+                            "-frames:v",
+                            "7",
+                            str(source),
+                        ],
+                        check=True,
+                        timeout=30,
+                    )
+                    created = create_project(
+                        {
+                            "project_path": str(source.with_suffix(".mlt")),
+                            "fps_num": numerator,
+                            "fps_den": denominator,
+                            "clips": [{"path": str(source)}],
+                        }
+                    )
+                    self.assertEqual(created["project"]["duration_frames"], 7)
+
 
     def test_structured_opacity_preserves_color_during_composition(self) -> None:
         executables = discover_executables()

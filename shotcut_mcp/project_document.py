@@ -301,6 +301,15 @@ def _frames_to_clock(frames: int, fps: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
 
+def _frames_covering_seconds(seconds: float, fps: float) -> int:
+    frames = seconds * fps
+    nearest = round(frames)
+    # FFprobe prints durations to microsecond precision, including exact frame boundaries.
+    if round(nearest / fps, 6) == seconds:
+        return nearest
+    return math.ceil(frames)
+
+
 def _srt_time(milliseconds: int) -> str:
     hours, remainder = divmod(milliseconds, 3_600_000)
     minutes, remainder = divmod(remainder, 60_000)
@@ -501,9 +510,23 @@ class ProjectDocument:
     @property
     def fps(self) -> float:
         profile = self.profile()
-        numerator = int(profile.get("frame_rate_num", "25"))
-        denominator = int(profile.get("frame_rate_den", "1"))
-        return numerator / denominator if denominator else 25.0
+        num = profile.get("frame_rate_num", "25")
+        den = profile.get("frame_rate_den", "1")
+        try:
+            numerator, denominator = int(num), int(den)
+            if numerator > 0 and denominator > 0:
+                rate = numerator / denominator
+                if rate > 0:
+                    return rate
+        except (ValueError, OverflowError):
+            pass
+        raise _unsupported_project_structure(
+            f"The profile has an invalid frame rate: {num}/{den}.",
+            self.path,
+            "invalid_frame_rate",
+            frame_rate_num=num,
+            frame_rate_den=den,
+        )
 
     def main_tractor(self) -> ET.Element:
         producer_id = self.root.get("producer")
@@ -1368,7 +1391,9 @@ class ProjectDocument:
         image_duration = _number(
             operation.get("image_duration_seconds", 5.0), "image_duration_seconds", 0.04
         )
-        full_frames = max(1, math.ceil((duration_seconds or image_duration) * self.fps))
+        full_frames = max(
+            1, _frames_covering_seconds(duration_seconds or image_duration, self.fps)
+        )
         if "in_frame" in operation:
             frame_in = _int(operation["in_frame"], "in_frame", 0)
         else:
@@ -1377,13 +1402,15 @@ class ProjectDocument:
             )
         if "out_frame" in operation:
             frame_out = _int(operation["out_frame"], "out_frame", 0)
-        else:
+        elif "out_seconds" in operation:
             out_seconds = _number(
-                operation.get("out_seconds", duration_seconds or image_duration),
+                operation["out_seconds"],
                 "out_seconds",
                 0.001,
             )
-            frame_out = math.ceil(out_seconds * self.fps) - 1
+            frame_out = _frames_covering_seconds(out_seconds, self.fps) - 1
+        else:
+            frame_out = full_frames - 1
         if frame_out < frame_in or frame_out >= full_frames:
             raise ToolError(
                 f"Invalid range: in={frame_in}, out={frame_out}, media={full_frames} frames."
@@ -1512,7 +1539,7 @@ class ProjectDocument:
         duration_seconds = media_duration(payload)
         producer_service = _media_producer_service(payload, duration_seconds)
         full_frames = (
-            max(1, math.ceil(duration_seconds * self.fps))
+            max(1, _frames_covering_seconds(duration_seconds, self.fps))
             if duration_seconds is not None
             else frame_out + 1
         )

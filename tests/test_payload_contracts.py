@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from shotcut_mcp import render_jobs
 from shotcut_mcp.errors import ToolError
-from shotcut_mcp.media import ProbePayload, probe_media_raw
+from shotcut_mcp.media import ProbePayload, probe_media_raw, summarize_media
 
 
 def matches_contract(value: object, annotation: object) -> bool:
@@ -85,6 +85,39 @@ CANDIDATES = (
 
 
 class PayloadContractTests(unittest.TestCase):
+    def test_probe_distinguishes_single_images_from_timed_streams(self) -> None:
+        cases = (
+            ("image2", "12/1", "0.083333", None, None),
+            ("image2", "50/1", "0.040000", "2", 0.04),
+            ("image2", "50/1", "0.040000", None, 0.04),
+            ("gif", "50/1", "0.040000", "2", 0.04),
+            ("mov,mp4", "25/1", "0.040000", "1", 0.04),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source"
+            path.touch()
+            for fmt, rate, duration, count, expected in cases:
+                payload = {
+                    "format": {"format_name": fmt, "duration": duration},
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "avg_frame_rate": "0/0",
+                            "r_frame_rate": rate,
+                            "nb_frames": count,
+                        }
+                    ],
+                }
+                with (
+                    self.subTest(fmt=fmt, rate=rate, count=count),
+                    patch("shotcut_mcp.media.probe_media_raw", return_value=payload),
+                ):
+                    summary = summarize_media(path)
+                    self.assertEqual(summary["duration_seconds"], expected)
+                    self.assertEqual(
+                        summary["streams"][0]["frame_rate"], float(rate.split("/")[0])
+                    )
+
     def test_render_reader_matches_declared_fields_and_requiredness(self) -> None:
         fields = get_type_hints(render_jobs.RenderJob)
         job_id = "d" * 32

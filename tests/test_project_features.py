@@ -16,6 +16,7 @@ from shotcut_mcp.project import (
     create_project,
     diagnose_missing_media,
     edit_project,
+    inspect_project,
     plan_project_edit,
     render_project_contact_sheet,
 )
