@@ -41,6 +41,7 @@ from shotcut_mcp.render import (
     render_status,
     start_render,
 )
+from shotcut_mcp.silence import plan_silence_cuts
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 
@@ -49,6 +50,135 @@ PLUGIN_ROOT = Path(__file__).parents[1]
     os.environ.get("SHOTCUT_MCP_INTEGRATION") == "1", "real Shotcut integration"
 )
 class RealShotcutIntegrationTests(unittest.TestCase):
+    def test_planned_frame_shows_before_and_after_without_saving(self) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        assert ffmpeg is not None
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "colors.mlt"
+            state = create_project(
+                {"project_path": str(path), "width": 96, "height": 96}
+            )
+            state = edit_project(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "operations": [
+                        {
+                            "op": "add_generator",
+                            "track": "V1",
+                            "generator": "color",
+                            "color": color,
+                            "duration_frames": 20,
+                        }
+                        for color in ("#ff0000", "#0000ff")
+                    ],
+                }
+            )
+            before = path.read_bytes()
+            plan = plan_project_edit(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "operations": [
+                        {
+                            "op": "remove_range",
+                            "tracks": ["V1"],
+                            "position_frame": 0,
+                            "duration_frames": 20,
+                        }
+                    ],
+                    "review": {"frame": 2},
+                }
+            )
+            raw = subprocess.check_output(
+                [
+                    str(ffmpeg),
+                    "-v",
+                    "error",
+                    "-i",
+                    plan["review"]["path"],
+                    "-vf",
+                    "scale=2:1:flags=neighbor",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ],
+                timeout=30,
+            )
+            self.assertGreater(raw[0], 180)
+            self.assertGreater(raw[5], 180)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_silence_plan_detects_the_timeline_mix_and_previews_the_edit(self) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        assert ffmpeg is not None
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "speech.mlt"
+            source = path.with_suffix(".mp4")
+            subprocess.run(
+                [
+                    str(ffmpeg),
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=96x64:rate=25:duration=5",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=5",
+                    "-af",
+                    "volume=0:enable='between(t,1,4)'",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    str(source),
+                ],
+                check=True,
+                timeout=30,
+            )
+            state = create_project(
+                {
+                    "project_path": str(path),
+                    "fps_num": 25,
+                    "width": 96,
+                    "height": 64,
+                    "clips": [{"path": str(source)}],
+                }
+            )
+            before = path.read_bytes()
+            plan = plan_silence_cuts(
+                {
+                    "project_path": str(path),
+                    "expected_revision": state["revision"],
+                    "silence_threshold_db": -45,
+                    "margin_seconds": 0.2,
+                }
+            )
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(len(plan["cuts"]), 1, plan)
+            cut = plan["cuts"][0]
+            self.assertTrue(27 <= cut["in_frame"] <= 33, cut)
+            self.assertTrue(60 <= cut["duration_frames"] <= 68, cut)
+            self.assertTrue(Path(plan["review"]["path"]).is_file())
+            streams = summarize_media(Path(plan["review"]["path"]))["streams"]
+            self.assertEqual({stream["type"] for stream in streams}, {"audio", "video"})
+            edited = edit_project(
+                {
+                    "project_path": str(path),
+                    "operations": plan["operations"],
+                    "expected_revision": plan["expected_revision"],
+                }
+            )
+            self.assertEqual(
+                edited["project"]["duration_frames"],
+                state["project"]["duration_frames"] - cut["duration_frames"],
+            )
+
     def test_discovery_pages_probe_real_media_and_preserve_unreadable_candidates(
         self,
     ) -> None:

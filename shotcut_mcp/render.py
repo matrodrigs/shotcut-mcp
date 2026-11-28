@@ -253,7 +253,9 @@ def _consumer_properties(value: object) -> dict[str, str]:
     return result
 
 
-def render_review_clip(arguments: dict[str, object]) -> dict[str, object]:
+def render_review_clip(
+    arguments: dict[str, object], *, staged_output: Path | None = None
+) -> dict[str, object]:
     project_path = expand_path(arguments.get("project_path", ""))
     in_frame, out_frame = arguments.get("in_frame"), arguments.get("out_frame")
     if (
@@ -334,9 +336,11 @@ def render_review_clip(arguments: dict[str, object]) -> dict[str, object]:
     output: OutputTransaction | None = None
     try:
         enforce_project_resource_policy(snapshot.path)
-        output_path = expand_path(str(managed_preview_path(project_path, "review.mp4")))
+        output_path = staged_output or managed_preview_path(project_path, "review.mp4")
         output = OutputTransaction.prepare(
-            output_path, overwrite=True, protected_paths=(project_path, snapshot.path)
+            output_path,
+            overwrite=staged_output is None,
+            protected_paths=(project_path, snapshot.path),
         )
         report_progress(1, 3, "Rendering the selected review range.")
         with tempfile.TemporaryDirectory(prefix="shotcut-mcp-review-") as directory:

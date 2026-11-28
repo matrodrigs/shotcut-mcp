@@ -10,9 +10,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shotcut_mcp.project import ProjectDocument, edit_project
+from shotcut_mcp.errors import ToolError
+from shotcut_mcp.project import ProjectDocument, edit_project, plan_project_edit
 from shotcut_mcp.protocol import schema_errors
 from shotcut_mcp.server import ProtocolSession, handle_request, serve, write_message
+from shotcut_mcp.silence import plan_silence_cuts
+from shotcut_mcp.storage import managed_preview_path
 from shotcut_mcp.tools import TOOLS
 
 
@@ -79,6 +82,70 @@ class ProjectViewTests(unittest.TestCase):
             },
             ProtocolSession(protocol_version=version),
         )
+
+    def test_planned_review_preserves_previous_artifact_on_failure(self) -> None:
+        revision = self.make_project()
+        target = managed_preview_path(self.path, "plan.mp4")
+        target.write_bytes(b"previous review")
+        arguments = {
+            "project_path": str(self.path),
+            "expected_revision": revision,
+            "operations": [{"op": "set_notes", "notes": "changed"}],
+            "review": {"in_frame": 0, "out_frame": 3},
+        }
+
+        def racing_review(_args, *, staged_output):
+            staged_output.write_bytes(b"new review")
+            self.path.write_bytes(self.path.read_bytes() + b" ")
+            return {"created": True}
+
+        with (
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": False},
+            ),
+            self.assertRaises(ToolError) as rejected,
+        ):
+            plan_project_edit(arguments)
+        self.assertEqual(rejected.exception.code, "project_validation_failed")
+        self.assertEqual(target.read_bytes(), b"previous review")
+        with (
+            patch(
+                "shotcut_mcp.project.validate_project_file",
+                return_value={"valid": True},
+            ),
+            patch("shotcut_mcp.project.render_review_clip", side_effect=racing_review),
+            self.assertRaises(ToolError) as conflict,
+        ):
+            plan_project_edit(arguments)
+        self.assertEqual(conflict.exception.code, "project_revision_conflict")
+        self.assertEqual(target.read_bytes(), b"previous review")
+
+    def test_silence_plan_distinguishes_fully_silent_range_from_audible_last_frame(
+        self,
+    ) -> None:
+        revision = self.make_project(count=12)
+        arguments = {
+            "project_path": str(self.path),
+            "expected_revision": revision,
+            "margin_seconds": 0,
+        }
+        for end, length in ((4.0, 0), (119 / 30, 119)):
+            with (
+                self.subTest(end=end),
+                patch(
+                    "shotcut_mcp.silence.timeline_silences", return_value=[(0.0, end)]
+                ),
+                patch(
+                    "shotcut_mcp.silence.preview_edit_operations",
+                    return_value={"review": {"created": True}},
+                ),
+            ):
+                result = plan_silence_cuts(arguments)
+                self.assertEqual(
+                    sum(cut["duration_frames"] for cut in result["cuts"]), length
+                )
+                self.assertEqual(bool(result["review"]), bool(length))
 
     def test_pages_preserve_item_identity_and_reject_changed_revision(self) -> None:
         revision = self.make_project()

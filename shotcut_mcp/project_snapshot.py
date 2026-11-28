@@ -545,12 +545,11 @@ def load_project_render_input(path: Path) -> ProjectRenderInput:
     from .project_document import ProjectDocument
 
     document = ProjectDocument.load(path)
-    snapshot = build_project_snapshot(document)
     return ProjectRenderInput(
         source=document.source,
         revision=document.revision,
         fps=document.fps,
-        duration_frames=int(snapshot["duration_frames"]),
-        markers=list(snapshot["markers"]),
+        duration_frames=document.timeline_duration(),
+        markers=_project_markers(document),
         profile=dict(document.profile().attrib),
     )

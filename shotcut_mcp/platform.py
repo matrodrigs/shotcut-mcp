@@ -24,6 +24,7 @@ from .errors import RequestCancelled, ToolError
 from .media import (
     QualityAnalyzerCapability,
     analyze_media_quality,
+    is_interval_analysis,
     media_duration,
     probe_media_raw,
     quality_analyzer_capabilities,
@@ -879,6 +880,58 @@ def open_in_shotcut(path: Path, fullscreen: bool = False) -> dict[str, object]:
     return {"opened": True, "path": str(path), "pid": process.pid}
 
 
+def timeline_silences(
+    project_path: Path, first: int, last: int, options: dict[str, object]
+) -> list[tuple[float, float]]:
+    enforce_project_resource_policy(project_path)
+    melt = require_executable(discover_executables().melt, "melt", "SHOTCUT_MELT_PATH")
+    ensure_melt_ready(melt)
+    with tempfile.TemporaryDirectory(prefix="shotcut-mcp-audio-") as folder:
+        audio = Path(folder) / "mix.wav"
+        result = run_capture(
+            [
+                str(melt),
+                str(project_path),
+                f"in={first}",
+                f"out={last}",
+                "-consumer",
+                f"avformat:{audio}",
+                "f=wav",
+                "vn=1",
+                "acodec=pcm_s16le",
+                "frequency=48000",
+                "channels=2",
+                "real_time=-1",
+                "terminate_on_pause=1",
+                "-silent",
+            ],
+            timeout=180,
+        )
+        if result.returncode or not audio.is_file():
+            raise ToolError(
+                "Could not render the timeline audio for analysis.",
+                recommended_tool="validate_project",
+            )
+        analysis = analyze_media_quality(
+            audio, {**options, "analyzers": ["silence"], "max_intervals": 500}
+        )["analyzers"]["silence"]
+    if analysis["status"] != "ok" or not analysis["streams"]:
+        raise ToolError(
+            "Timeline silence detection is unavailable.",
+            recommended_tool="shotcut_doctor",
+        )
+    stream = analysis["streams"][0]
+    if not is_interval_analysis(stream) or stream["intervals_truncated"]:
+        raise ToolError(
+            "Could not obtain complete silence intervals; choose a shorter range."
+        )
+    return [
+        (item["start_seconds"], item["end_seconds"])
+        for item in stream["intervals"]
+        if item["start_seconds"] is not None and item["end_seconds"] is not None
+    ]
+
+
 def render_preview(
     project_path: Path, output_path: Path | None, frame: int, overwrite: bool
 ) -> dict[str, object]:
@@ -1202,6 +1255,7 @@ def render_media_contact_sheet(
     columns: int = 4,
     cell_width: int = 320,
     overwrite: bool = False,
+    require_all: bool = False,
 ) -> dict[str, object]:
     """Build a visual candidate map without trying to render a broken project."""
 
@@ -1266,9 +1320,11 @@ def render_media_contact_sheet(
                         "path": str(media_path),
                     }
                 )
-            if not cells:
+            if not cells or (require_all and skipped):
                 raise ToolError(
-                    "None of the candidates produced a visual frame.",
+                    "Could not render every requested comparison frame."
+                    if require_all
+                    else "None of the candidates produced a visual frame.",
                     code="no_visual_frame",
                     recommended_action="probe_candidates_or_skip_visualization",
                     recommended_tool="probe_media",

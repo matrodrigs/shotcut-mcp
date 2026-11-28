@@ -286,6 +286,19 @@ def _success_result_text(tool_name: str | None, payload: Mapping[str, object]) -
 def _artifact_resource_links(
     tool_name: str | None, payload: Mapping[str, object]
 ) -> list[dict[str, object]]:
+    if tool_name in {"plan_project_edit", "plan_silence_cuts"}:
+        review = payload.get("review")
+        if is_object(review) and review.get("created") is True:
+            return [
+                {
+                    "type": "resource_link",
+                    "uri": review["uri"],
+                    "name": Path(str(review["path"])).name,
+                    "title": "Planned edit review",
+                    "mimeType": review["mime_type"],
+                    "size": review["size_bytes"],
+                }
+            ]
     if tool_name == "render_review_clip" and payload.get("created") is True:
         path, uri, size = (
             payload.get("path"),
@@ -371,7 +384,12 @@ def _inline_image_limit() -> int:
 def _inline_image_content(
     tool_name: str | None, payload: Mapping[str, object]
 ) -> dict[str, object] | None:
-    if tool_name not in {"render_preview", "render_contact_sheet"}:
+    if tool_name == "plan_project_edit":
+        review = payload.get("review")
+        if not is_object(review) or review.get("mime_type") != "image/png":
+            return None
+        payload = review
+    elif tool_name not in {"render_preview", "render_contact_sheet"}:
         return None
     value = payload.get("path")
     if (
@@ -391,7 +409,8 @@ def _inline_image_content(
         size = path.stat().st_size
         if mime_type is None or limit <= 0 or size <= 0 or size > limit:
             return None
-        data = path.read_bytes()
+        with path.open("rb") as image:
+            data = image.read(limit + 1)
     except OSError:
         return None
     if len(data) > limit:

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .errors import ConflictError, ToolError
-from .path_policy import authorize_path, expand_path
+from .path_policy import authorize_path
 from .processes import process_is_alive as process_is_alive
 
 
@@ -456,17 +456,28 @@ def managed_preview_path(project_path: Path, filename: str) -> Path:
     output.
     """
 
-    if filename not in {"preview.png", "contact-sheet.png", "review.mp4"}:
+    if filename not in {
+        "preview.png",
+        "contact-sheet.png",
+        "review.mp4",
+        "plan.png",
+        "plan.mp4",
+    }:
         raise ValueError(f"Unsupported managed preview filename: {filename}")
     directory = (
-        project_path.parent
+        project_path.parent.resolve()
         / ".shotcut-mcp"
         / "previews"
         / f"{project_path.name}.{_project_identity(project_path)}"
     )
-    directory = expand_path(str(directory), enforce_network_policy=True)
+    target = directory / filename
+    if authorize_path(target) != target:
+        raise ToolError(
+            "Managed preview storage must use the project's own preview directory.",
+            code="managed_output_redirected",
+        )
     _private_directory(directory)
-    return directory / filename
+    return target
 
 
 def _legacy_backup_pattern(project_path: Path) -> re.Pattern[str]:

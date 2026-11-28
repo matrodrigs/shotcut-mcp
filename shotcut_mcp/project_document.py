@@ -1059,14 +1059,17 @@ class ProjectDocument:
             self.remove_unreferenced_services(removed_service_ids)
         self.update_main_duration()
 
-    def update_main_duration(self) -> None:
-        duration = max(
+    def timeline_duration(self) -> int:
+        return max(
             (
                 sum(self.item_duration(item) for item in self.sequence(track.playlist))
                 for track in self.tracks()
             ),
-            default=1,
+            default=0,
         )
+
+    def update_main_duration(self) -> None:
+        duration = self.timeline_duration()
         main = self.main_tractor()
         main.set("in", "0")
         main.set("out", str(max(0, duration - 1)))

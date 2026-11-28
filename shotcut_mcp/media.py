@@ -189,6 +189,14 @@ class IntervalAnalysis(_StreamSuccess, IntervalMetrics):
     pass
 
 
+def is_interval_analysis(stream: StreamAnalysis) -> TypeGuard[IntervalAnalysis]:
+    return (
+        stream["status"] == "ok"
+        and "intervals" in stream
+        and "intervals_truncated" in stream
+    )
+
+
 class InterlaceAnalysis(_StreamSuccess, InterlaceMetrics):
     """FFmpeg may succeed without emitting any interlace counters."""
 

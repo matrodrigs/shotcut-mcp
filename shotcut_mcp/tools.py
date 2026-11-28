@@ -47,6 +47,7 @@ from .render import (
     render_status,
     start_render,
 )
+from .silence import plan_silence_cuts
 
 OperationSummary = TypedDict(
     "OperationSummary",
@@ -1081,6 +1082,8 @@ def capabilities(arguments: dict[str, object]) -> dict[str, object]:
             "source_folders": "Use discover_media for source folders and follow next_cursor. Candidate kinds come from extensions; use display_width and display_height from representative files for the project profile and ground creative choices in inspected media and previews.",
             "inspection": "Use inspect_project with track/frame filters, detail=summary for smaller results, and pagination.next_offset with expected_revision to continue without mixing project revisions. Collection pages are independent; markers/resources remain project-wide.",
             "committed_receipts": "result_truncated=true on create/edit/restore is a successful commit with omitted details. Do not repeat it; inspect_project can retrieve the saved revision in pages.",
+            "silence_cuts": "Use plan_silence_cuts to preview timeline pause removal; pass the reviewed operations and expected_revision to edit_project.",
+            "planned_review": "Request plan_project_edit.review with frame or inclusive in_frame/out_frame to show the candidate before saving.",
             "audiovisual_review": "Use render_review_clip for an inclusive range of at most 30 seconds when reviewing motion or sound. Show the returned MP4 resource/path. It is managed temporary review, separate from final export.",
             "render_capacity": "SHOTCUT_MCP_MAX_ACTIVE_RENDERS limits durable renders across server processes (default 2, administrator range 1..8). On render_capacity_reached, list_render_jobs and wait; do not cancel existing jobs without user authorization.",
             "compatibility": (
@@ -1595,12 +1598,64 @@ TOOLS: list[ToolDefinition] = [
         },
     },
     {
+        "name": "plan_silence_cuts",
+        "title": "Plan silence cuts with an audiovisual review",
+        "description": "Shorten pauses in the saved timeline mix. Returns reverse-ordered ripple operations for unlocked tracks plus an audiovisual preview around the longest cut. Review before applying with edit_project. A completely silent range or a cut across a transition is skipped.",
+        "inputSchema": _object_schema(
+            {
+                "project_path": PATH,
+                "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Saved revision from inspect_project.",
+                },
+                "in_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "First timeline frame to analyze, default 0.",
+                },
+                "out_frame": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Last frame inclusive, default project end; select at most 10 minutes.",
+                },
+                "silence_threshold_db": {
+                    "type": "number",
+                    "minimum": -120,
+                    "maximum": 0,
+                    "default": -60,
+                    "description": "Audio levels below this dB threshold qualify as silence.",
+                },
+                "silence_min_duration_seconds": {
+                    "type": "number",
+                    "minimum": 0.05,
+                    "maximum": 600,
+                    "default": 2,
+                    "description": "Shortest pause to consider, in seconds.",
+                },
+                "margin_seconds": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 60,
+                    "default": 0.15,
+                    "description": "Seconds of silence to retain at each edge of a pause.",
+                },
+            },
+            ["project_path", "expected_revision"],
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
         "name": "plan_project_edit",
         "title": "Plan project edit",
         "description": (
             "Use for a dry run, uncertain edit, or user review before committing. Applies "
             "operations in memory using stable item_ref selectors when supplied, "
-            "validates with MLT, and returns a snapshot and diff without changing the project."
+            "validates with MLT, and returns a snapshot and diff. Request review for a before/after frame or a short audiovisual preview of the proposed edit without saving."
         ),
         "inputSchema": _object_schema(
             {
@@ -1615,6 +1670,36 @@ TOOLS: list[ToolDefinition] = [
                 },
                 "operations": _operations_input_schema(),
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+                "review": {
+                    "type": "object",
+                    "description": "Optional review of the unsaved plan: one common timeline frame for before/after, or an inclusive candidate range of up to 30 seconds with audio.",
+                    "properties": {
+                        "frame": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Zero-based frame present in both timelines.",
+                        },
+                        "in_frame": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "First candidate timeline frame.",
+                        },
+                        "out_frame": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Last candidate timeline frame, inclusive.",
+                        },
+                    },
+                    "oneOf": [
+                        {"type": "object", "required": ["frame"], "maxProperties": 1},
+                        {
+                            "type": "object",
+                            "required": ["in_frame", "out_frame"],
+                            "maxProperties": 2,
+                        },
+                    ],
+                    "additionalProperties": False,
+                },
                 "max_diff_lines": {
                     "type": "integer",
                     "minimum": 0,
@@ -2855,6 +2940,23 @@ INITIAL_OPERATION_RESULT_OUTPUT_SCHEMA = _output_object(
     ["track_id"],
     description="Result of one initial add_track or add_clip operation.",
 )
+PLAN_REVIEW_OUTPUT_SCHEMA: JsonSchema = {
+    "type": ["object", "null"],
+    "properties": {
+        "created": BOOLEAN,
+        "path": STRING,
+        "uri": STRING,
+        "size_bytes": INTEGER,
+        "mime_type": STRING,
+        "frame": INTEGER,
+        "order": {"type": "array", "items": STRING},
+        "in_frame": INTEGER,
+        "out_frame": INTEGER,
+    },
+    "required": ["created", "path", "uri", "mime_type", "size_bytes"],
+}
+
+
 MEDIA_STREAM_OUTPUT_SCHEMA = _output_object(
     {
         "index": NULLABLE_INTEGER,
@@ -3534,9 +3636,37 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
         ],
         additional_properties=False,
     ),
+    "plan_silence_cuts": _result_schema(
+        {
+            "project_path": STRING,
+            "expected_revision": STRING,
+            "operations": _output_array(
+                _output_object(
+                    {
+                        "op": STRING,
+                        "tracks": {"type": "array", "items": STRING},
+                        "position_frame": INTEGER,
+                        "duration_frames": INTEGER,
+                        "ripple": BOOLEAN,
+                    },
+                    ["op", "tracks", "position_frame", "duration_frames", "ripple"],
+                ),
+                "Validated remove_range operations, latest first.",
+            ),
+            "cuts": _output_array(
+                _output_object(
+                    {"in_frame": INTEGER, "duration_frames": INTEGER},
+                    ["in_frame", "duration_frames"],
+                ),
+                "Proposed cuts on the original timeline, in chronological order.",
+            ),
+            "review": PLAN_REVIEW_OUTPUT_SCHEMA,
+        }
+    ),
     "plan_project_edit": _result_schema(
         {
             "planned": BOOLEAN,
+            "review": PLAN_REVIEW_OUTPUT_SCHEMA,
             "changed": BOOLEAN,
             "project_path": STRING,
             "base_revision": STRING,
@@ -3967,6 +4097,7 @@ HANDLERS: dict[str, Callable[[dict[str, object]], Mapping[str, object]]] = {
     "inspect_project": inspect_project,
     "diagnose_color_workflow": diagnose_color_workflow,
     "diagnose_missing_media": diagnose_missing_media,
+    "plan_silence_cuts": plan_silence_cuts,
     "plan_project_edit": plan_project_edit,
     "create_project": create_project,
     "edit_project": edit_project,

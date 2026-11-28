@@ -10,6 +10,7 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
@@ -20,6 +21,8 @@ from .platform import (
     enforce_project_resource_policy,
     expand_path,
     list_services,
+    render_media_contact_sheet,
+    render_preview,
     summarize_media,
     validate_project_file,
 )
@@ -54,12 +57,14 @@ from .protocol import (
     is_text_array,
     report_progress,
 )
+from .render import render_review_clip
 from .storage import (
     OutputTransaction,
     file_revision,
     fsync_directory,
     is_project_backup,
     list_project_backups,
+    managed_preview_path,
     preserve_posix_mode,
     project_lock,
     publish_new_file,
@@ -249,7 +254,7 @@ class EditCandidate:
     operation_results: list[dict[str, object]]
 
 
-def _check_project_revision(path: Path, expected: str | None) -> None:
+def check_project_revision(path: Path, expected: str | None) -> None:
     try:
         current = file_revision(path)
     except FileNotFoundError:
@@ -320,10 +325,10 @@ def _write_validated(
             if current is None:
                 publish_new_file(temporary, path)
             else:
-                _check_project_revision(path, current_revision)
+                check_project_revision(path, current_revision)
                 backup_path = write_project_backup(path, current)
                 preserve_posix_mode(temporary, current_mode)
-                _check_project_revision(path, current_revision)
+                check_project_revision(path, current_revision)
                 os.replace(temporary, path)
             fsync_directory(path.parent)
     document.source = data
@@ -556,16 +561,117 @@ def _bounded_project_diff(
     return "\n".join(shown), count
 
 
+def _compare_plan_frame(
+    candidate: EditCandidate, temporary: Path, frame: int, destination: Path
+) -> dict[str, object]:
+    with (
+        staged_file(candidate.path, candidate.original) as original,
+        tempfile.TemporaryDirectory(dir=candidate.path.parent) as folder,
+    ):
+        cells = [
+            ("before", Path(folder) / "before.png"),
+            ("after", Path(folder) / "after.png"),
+        ]
+        for source, (_, image) in zip((original, temporary), cells, strict=True):
+            document = ProjectDocument.load(source)
+            if frame >= document.timeline_duration():
+                raise ToolError("The comparison frame must exist in both timelines.")
+            render_preview(source, image, frame, False)
+        render_media_contact_sheet(
+            cells,
+            destination,
+            columns=2,
+            cell_width=640,
+            overwrite=True,
+            require_all=True,
+        )
+    return {
+        "created": True,
+        "path": str(destination),
+        "uri": destination.as_uri(),
+        "mime_type": "image/png",
+        "size_bytes": destination.stat().st_size,
+        "frame": frame,
+        "order": ["before", "after"],
+    }
+
+
+def _preview_plan(
+    candidate: EditCandidate, temporary: Path, review: object
+) -> dict[str, object]:
+    if not is_object(review) or set(review) not in (
+        {"frame"},
+        {"in_frame", "out_frame"},
+    ):
+        raise ToolError("Select a comparison frame or an inclusive audiovisual range.")
+    filename = "plan.png" if "frame" in review else "plan.mp4"
+    destination = managed_preview_path(candidate.path, filename)
+    output = OutputTransaction.prepare(
+        destination, overwrite=True, protected_paths=(candidate.path, temporary)
+    )
+    try:
+        if "frame" in review:
+            details = _compare_plan_frame(
+                candidate,
+                temporary,
+                _int(review["frame"], "frame", 0),
+                output.temporary,
+            )
+        else:
+            details = render_review_clip(
+                {"project_path": str(temporary), **review},
+                staged_output=output.temporary,
+            )
+        with project_lock(candidate.path):
+            check_project_revision(candidate.path, candidate.original_revision)
+            if cancellation_requested():
+                raise RequestCancelled()
+            if managed_preview_path(candidate.path, filename) != destination:
+                raise ToolError("Managed preview destination changed during rendering.")
+            output.commit()
+        return {
+            **details,
+            "path": str(destination),
+            "uri": destination.as_uri(),
+            "managed_output": True,
+        }
+    finally:
+        output.cleanup()
+
+
+def _validate_plan(
+    candidate: EditCandidate, data: bytes, request: object
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    review = None
+    with staged_file(candidate.path, data) as temporary:
+        validation = validate_project_file(temporary, timeout=candidate.timeout)
+        check_project_revision(candidate.path, candidate.original_revision)
+        if request is not None:
+            if not validation.get("valid"):
+                raise ToolError(
+                    "MLT rejected the proposed edit; no preview was published.",
+                    code="project_validation_failed",
+                    recommended_tool="shotcut_doctor",
+                )
+            review = _preview_plan(candidate, temporary, request)
+    return validation, review
+
+
+def preview_edit_operations(
+    arguments: dict[str, object], review: dict[str, object]
+) -> dict[str, object]:
+    candidate = _build_edit_candidate(arguments)
+    _, artifact = _validate_plan(candidate, candidate.document.to_bytes(), review)
+    assert artifact is not None
+    return artifact
+
+
 def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
     if arguments.get("force") not in (None, False):
         raise ToolError("force is not supported by plan_project_edit.")
     candidate = _build_edit_candidate(arguments)
     data = candidate.document.to_bytes()
     prospective_revision = project_revision(data)
-    with staged_file(candidate.path, data) as temporary:
-        validation = validate_project_file(temporary, timeout=candidate.timeout)
-    _check_project_revision(candidate.path, candidate.original_revision)
-
     maximum_lines = _int(arguments.get("max_diff_lines", 2000), "max_diff_lines", 0)
     maximum_lines = min(maximum_lines, 5000)
     unified_diff, diff_lines = _bounded_project_diff(
@@ -573,6 +679,8 @@ def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
     )
     candidate.document.source = data
     candidate.document.revision = prospective_revision
+    snapshot = candidate.document.snapshot()
+    validation, review = _validate_plan(candidate, data, arguments.get("review"))
     report_progress(
         len(candidate.operation_results) + 1,
         len(candidate.operation_results) + 1,
@@ -580,6 +688,7 @@ def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
     )
     return {
         "planned": True,
+        "review": review,
         "changed": data != candidate.original,
         "project_path": str(candidate.path),
         "base_revision": candidate.original_revision,
@@ -587,7 +696,7 @@ def plan_project_edit(arguments: dict[str, object]) -> dict[str, object]:
         "operation_results": candidate.operation_results,
         "item_bindings": candidate.document.item_bindings(),
         "validation": validation,
-        "project": candidate.document.snapshot(),
+        "project": snapshot,
         "unified_diff": unified_diff,
         "diff_lines": diff_lines,
         "diff_truncated": diff_lines > maximum_lines,
