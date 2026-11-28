@@ -1241,7 +1241,8 @@ def render_media_contact_sheet(
                         "-frames:v",
                         "1",
                         "-vf",
-                        f"scale={cell_width}:-2:flags=lanczos",
+                        f"scale={cell_width}:{cell_width}:force_original_aspect_ratio=decrease:"
+                        f"reset_sar=1:flags=lanczos,pad={cell_width}:{cell_width}:(ow-iw)/2:(oh-ih)/2,format=rgb24",
                         str(target),
                     ],
                     timeout=30,

@@ -1612,14 +1612,18 @@ class ProtocolNegotiationTests(unittest.TestCase):
             candidate_path.write_bytes(b"audio")
             document = SimpleNamespace(
                 snapshot=lambda: {
+                    "revision": "b" * 64,
                     "resources": [
                         {
                             "reference_id": "resource-1",
                             "resource": "missing.mp4",
+                            "decoded_resource": "missing.mp4",
+                            "shotcut_hash": None,
+                            "property": "resource",
                             "resolved_path": str(root / "missing.mp4"),
                             "exists": False,
                         }
-                    ]
+                    ],
                 }
             )
             candidate = {

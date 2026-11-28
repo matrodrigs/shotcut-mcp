@@ -22,6 +22,7 @@ from shotcut_mcp.platform import (
     discover_executables,
     discover_media,
     render_contact_sheet,
+    render_media_contact_sheet,
     render_preview,
     render_preview_batch,
     run_capture,
@@ -881,7 +882,9 @@ class RealShotcutIntegrationTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _create_image(ffmpeg: Path, image: Path, color: str) -> None:
+    def _create_image(
+        ffmpeg: Path, image: Path, color: str, size: str = "64x64"
+    ) -> None:
         subprocess.run(
             [
                 str(ffmpeg),
@@ -892,7 +895,7 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                 "-f",
                 "lavfi",
                 "-i",
-                f"color=c={color}:s=64x64",
+                f"color=c={color}:s={size}",
                 "-frames:v",
                 "1",
                 str(image),
@@ -1356,6 +1359,39 @@ class RealShotcutIntegrationTests(unittest.TestCase):
                     )
                     self.assertEqual(created["project"]["duration_frames"], 7)
 
+    def test_candidate_sheet_preserves_landscape_and_portrait_cells(self) -> None:
+        ffmpeg = discover_executables().ffmpeg
+        assert ffmpeg is not None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidates = []
+            for color, size in (("red", "128x64"), ("blue", "64x128")):
+                source = root / f"{color}.png"
+                self._create_image(ffmpeg, source, color, size)
+                candidates.append((color, source))
+            sheet = root / "sheet.png"
+            render_media_contact_sheet(candidates, sheet, columns=2, cell_width=64)
+            pixels = subprocess.check_output(
+                [
+                    str(ffmpeg),
+                    "-v",
+                    "error",
+                    "-i",
+                    str(sheet),
+                    "-vf",
+                    "scale=2:1:flags=neighbor",
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ],
+                timeout=30,
+            )
+            self.assertGreater(pixels[0], 180)
+            self.assertGreater(pixels[5], 180)
 
     def test_structured_opacity_preserves_color_during_composition(self) -> None:
         executables = discover_executables()

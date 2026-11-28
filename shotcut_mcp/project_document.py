@@ -3192,12 +3192,23 @@ class ProjectDocument:
                 f"The basename {old!r} matches {len(matches)} resources; "
                 "use the full path or allow_multiple=true."
             )
+        digest = shotcut_file_hash(new_path)
+        expected_hash = operation.get("expected_hash")
+        if expected_hash is not None and (
+            not isinstance(expected_hash, str)
+            or digest.casefold() != expected_hash.casefold()
+        ):
+            raise ToolError(
+                "The replacement no longer matches the diagnosed Shotcut hash.",
+                code="relink_hash_changed",
+                recommended_tool="diagnose_missing_media",
+                recommended_action="repeat_missing_media_search",
+            )
         normalized = str(new_path).replace("\\", "/")
         owners: dict[int, ET.Element] = {}
         for reference in matches:
             reference.replace_path(normalized)
             owners[id(reference.owner)] = reference.owner
-        digest = shotcut_file_hash(new_path)
         for owner in owners.values():
             _set_property(owner, "shotcut:hash", digest)
             _set_property(owner, "shotcut:caption", new_path.name)

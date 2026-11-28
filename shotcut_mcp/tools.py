@@ -25,6 +25,7 @@ from .platform import (
 )
 from .project import (
     EDIT_OPERATION_CONTRACTS,
+    MAX_OPERATIONS,
     create_project,
     diagnose_color_workflow,
     diagnose_missing_media,
@@ -240,7 +241,7 @@ _OPERATION_CATALOG_BASE: dict[str, OperationSummary] = {
     "remove_subtitle_track": {"required": ["name"]},
     "relink_media": {
         "required": ["from", "to"],
-        "optional": ["match_basename", "allow_multiple"],
+        "optional": ["match_basename", "allow_multiple", "expected_hash"],
         "notes": "match_basename requires a unique target unless allow_multiple=true.",
     },
     "set_profile": {
@@ -568,6 +569,11 @@ OPERATION_FIELD_SCHEMAS: dict[str, JsonSchema] = {
         "description": "Missing resource path or basename to replace.",
     },
     "to": {"type": "string", "description": "Authorized existing replacement path."},
+    "expected_hash": {
+        "type": "string",
+        "pattern": "^[a-fA-F0-9]{32}$",
+        "description": "Shotcut hash returned by diagnosis. Reject a changed replacement before applying the relink.",
+    },
     "match_basename": {
         "type": "boolean",
         "description": "Match the from value as a basename instead of a full path.",
@@ -1222,7 +1228,7 @@ def _operations_input_schema() -> JsonSchema:
     return {
         "type": "array",
         "minItems": 1,
-        "maxItems": 500,
+        "maxItems": MAX_OPERATIONS,
         "items": {
             "type": "object",
             "properties": {"op": {"type": "string", "enum": OP_NAMES}},
@@ -2204,9 +2210,9 @@ PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "max_depth": "Maximum directory depth below each search root.",
     "max_files": "Maximum files examined across all search roots.",
     "max_candidates_per_resource": "Maximum ranked candidates returned for each missing resource.",
-    "max_hash_bytes": "Largest candidate file eligible for Shotcut hash verification.",
+    "max_hash_bytes": "Total bytes available for Shotcut hash verification across all search roots. Zero disables hashing.",
     "max_probe_candidates": "Maximum candidates inspected with FFprobe.",
-    "visual_output_path": "Optional PNG/JPEG destination for a missing-media candidate sheet.",
+    "visual_output_path": "Optional PNG/JPEG destination for a sheet of up to 64 distinct missing-media candidates.",
     "visual_columns": "Columns in the optional missing-media candidate sheet.",
     "visual_cell_width": "Width of each optional missing-media candidate cell in pixels.",
     "overwrite_visual": "Replace an existing candidate sheet only with explicit authorization.",
@@ -3687,6 +3693,19 @@ OUTPUT_SCHEMAS: dict[str, JsonSchema] = {
                     "timed_out",
                 ],
                 description="Bounded search telemetry.",
+            ),
+            "expected_revision": STRING,
+            "operations": _output_array(
+                _output_object(
+                    {
+                        "op": STRING,
+                        "from": STRING,
+                        "to": STRING,
+                        "expected_hash": STRING,
+                    },
+                    ["op", "from", "to", "expected_hash"],
+                ),
+                "Reviewable exact-path relinks for unique verified matches; reuse with expected_revision.",
             ),
             "commit_workflow": STRING,
             "visual": {

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from shotcut_mcp import project as project_module
 from shotcut_mcp.errors import ToolError
+from shotcut_mcp.media import shotcut_file_hash
 from shotcut_mcp.path_policy import project_network_resources
 from shotcut_mcp.project import (
     ProjectDocument,
@@ -715,14 +716,17 @@ class ProjectFeatureTests(unittest.TestCase):
             root = Path(directory)
             original = root / "original.mp4"
             original.write_bytes(b"same-content")
+            second = root / "copied.mp4"
+            second.write_bytes(original.read_bytes())
             project_path = root / "missing.mlt"
             create_project(
                 {
                     "project_path": str(project_path),
-                    "clips": [{"path": str(original)}],
+                    "clips": [{"path": str(original)}, {"path": str(second)}],
                 }
             )
             original.unlink()
+            second.unlink()
             search = root / "search"
             search.mkdir()
             replacement = search / "renamed.mov"
@@ -730,12 +734,161 @@ class ProjectFeatureTests(unittest.TestCase):
             result = diagnose_missing_media(
                 {
                     "project_path": str(project_path),
-                    "search_roots": [str(search)],
+                    "search_roots": [str(search), str(search)],
+                    "max_hash_bytes": replacement.stat().st_size,
+                    "max_probe_candidates": 0,
                 }
             )
-            candidate = result["resources"][0]["candidates"][0]
-            self.assertEqual(candidate["match"], "shotcut_hash")
-            self.assertTrue(candidate["verified"])
+            self.assertEqual(result["missing_count"], 2)
+            self.assertEqual(len(result["operations"]), 2)
+            batch = {
+                "project_path": str(project_path),
+                "expected_revision": result["expected_revision"],
+                "operations": result["operations"],
+            }
+            original_bytes = project_path.read_bytes()
+            replacement.write_bytes(b"changed")
+            with self.assertRaises(ToolError) as caught:
+                edit_project(batch)
+            self.assertEqual(caught.exception.code, "relink_hash_changed")
+            self.assertEqual(original_bytes, project_path.read_bytes())
+            replacement.write_bytes(b"same-content")
+            self.assertFalse(edit_project(batch)["project"]["missing_resources"])
+            self.assertEqual(result["search"]["files_examined"], 1)
+            self.assertEqual(
+                result["search"]["hash_bytes_read"], replacement.stat().st_size
+            )
+            for resource in result["resources"]:
+                self.assertEqual(resource["candidate_count"], 1)
+                candidate = resource["candidates"][0]
+                self.assertEqual(candidate["match"], "shotcut_hash")
+                self.assertTrue(candidate["verified"])
+
+    def test_missing_media_continues_when_a_candidate_disappears(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            root = Path(directory)
+            source = root / "original.mp4"
+            source.write_bytes(b"media")
+            project = root / "missing.mlt"
+            create_project(
+                {"project_path": str(project), "clips": [{"path": str(source)}]}
+            )
+            search = root / "search"
+            search.mkdir()
+            survivor = source.rename(search / "renamed.mp4")
+            disappearing = search / "temporary.mp4"
+            disappearing.touch()
+
+            def read_hash(path: Path) -> str:
+                if path == disappearing.resolve():
+                    path.unlink()
+                return shotcut_file_hash(path)
+
+            with patch(
+                "shotcut_mcp.missing_media.shotcut_file_hash", side_effect=read_hash
+            ):
+                result = diagnose_missing_media(
+                    {
+                        "project_path": str(project),
+                        "search_roots": [str(search)],
+                        "max_probe_candidates": 0,
+                    }
+                )
+            candidates = result["resources"][0]["candidates"]
+            self.assertEqual(
+                [(item["path"], item["verified"]) for item in candidates],
+                [(str(survivor.resolve()), True)],
+            )
+
+    def test_invalid_profile_rate_returns_a_recovery_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "damaged.mlt"
+            create_project({"project_path": str(path)})
+            tree = ET.parse(path)
+            profile = tree.find("profile")
+            assert profile is not None
+            for num, den in (("0", "1"), ("25", "0"), ("broken", "1")):
+                with self.subTest(num=num, den=den):
+                    profile.set("frame_rate_num", num)
+                    profile.set("frame_rate_den", den)
+                    tree.write(path, encoding="utf-8")
+                    before = path.read_bytes()
+                    with self.assertRaises(ToolError) as caught:
+                        inspect_project({"path": str(path)})
+                    self.assertEqual(
+                        caught.exception.details["reason"], "invalid_frame_rate"
+                    )
+                    self.assertEqual(
+                        caught.exception.recommended_action, "restore_or_resave_project"
+                    )
+                    self.assertEqual(path.read_bytes(), before)
+
+    def test_relink_batch_omits_ties_and_partial_searches(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, self._media_patch():
+            root = Path(folder)
+            project = root / "film.mlt"
+            old = root / "clip.mp4"
+            old.write_bytes(b"footage")
+            create_project(
+                {"project_path": str(project), "clips": [{"path": str(old)}]}
+            )
+            search = root / "moved"
+            search.mkdir()
+            other = search / "second.mp4"
+            other.write_bytes(old.read_bytes())
+            old.rename(search / "first.mp4")
+            args = {
+                "project_path": str(project),
+                "search_roots": [str(search)],
+                "max_candidates_per_resource": 1,
+                "max_probe_candidates": 0,
+            }
+            self.assertFalse(diagnose_missing_media(args)["operations"])
+            real_walk = os.walk
+
+            def incomplete_walk(*args, onerror, **kwargs):
+                onerror(PermissionError("unreadable folder"))
+                yield from real_walk(*args, **kwargs)
+
+            other.unlink()
+            with patch(
+                "shotcut_mcp.missing_media.os.walk", side_effect=incomplete_walk
+            ):
+                result = diagnose_missing_media(args)
+            self.assertTrue(result["resources"][0]["candidates"])
+            self.assertFalse(result["operations"])
+
+    def test_missing_media_visualization_caps_the_sheet_across_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self._media_patch():
+            root = Path(directory)
+            originals = root / "originals"
+            originals.mkdir()
+            paths = [originals / f"slide-{index}.jpg" for index in range(65)]
+            for path in paths:
+                path.touch()
+            project = root / "slideshow.mlt"
+            create_project(
+                {
+                    "project_path": str(project),
+                    "clips": [{"path": str(path)} for path in paths],
+                }
+            )
+            search = originals.rename(root / "moved")
+            with patch(
+                "shotcut_mcp.missing_media.render_media_contact_sheet",
+                return_value={"created": True},
+            ) as sheet:
+                result = diagnose_missing_media(
+                    {
+                        "project_path": str(project),
+                        "search_roots": [str(search)],
+                        "max_hash_bytes": 0,
+                        "max_probe_candidates": 0,
+                        "visual_output_path": str(root / "sheet.png"),
+                    }
+                )
+            self.assertEqual(result["missing_count"], 65)
+            self.assertEqual(len(sheet.call_args.args[0]), 64)
 
     def test_contact_sheet_sampling_crosses_the_project_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as directory, self._media_patch():
@@ -891,6 +1044,11 @@ class ProjectFeatureTests(unittest.TestCase):
 
     def test_still_images_use_qimage_across_creation_and_replacement(self) -> None:
         def probe(path: Path) -> dict[str, object]:
+            if path.suffix == ".jpg":
+                return {
+                    "format": {"format_name": "image2", "duration": "0.040000"},
+                    "streams": [{"codec_type": "video", "avg_frame_rate": "25/1"}],
+                }
             if path.suffix.lower() == ".png":
                 return {
                     "format": {},
@@ -918,7 +1076,7 @@ class ProjectFeatureTests(unittest.TestCase):
         ):
             root = Path(directory)
             video = root / "source.mp4"
-            first_image = root / "first.png"
+            first_image = root / "first.jpg"
             second_image = root / "second.png"
             for path in (video, first_image, second_image):
                 path.write_bytes(path.name.encode())

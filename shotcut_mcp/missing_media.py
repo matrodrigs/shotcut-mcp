@@ -11,6 +11,7 @@ import hashlib
 import os
 import time
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 
@@ -21,6 +22,7 @@ from .platform import (
     shotcut_file_hash,
     summarize_media,
 )
+from .project_document import MAX_OPERATIONS
 from .protocol import cancellation_requested, is_array, report_progress
 
 if TYPE_CHECKING:
@@ -113,11 +115,11 @@ class _SearchLimits:
 @dataclass
 class _SearchState:
     deadline: float
+    hash_incomplete: bool = False
     hashed_bytes: int = 0
     probe_count: int = 0
     hash_cache: dict[Path, str] = field(default_factory=dict)
 
-    @property
     def timed_out(self) -> bool:
         return time.monotonic() >= self.deadline
 
@@ -150,30 +152,40 @@ def _authorized_roots(arguments: dict[str, object]) -> list[Path]:
 def _discover_files(
     roots: list[Path], limits: _SearchLimits, state: _SearchState
 ) -> list[Path]:
-    files: list[Path] = []
+    files: dict[Path, None] = {}
+
+    def incomplete(_error: OSError) -> None:
+        state.hash_incomplete = True
+
     for root in roots:
-        for current, directories, names in os.walk(root, followlinks=False):
+        for current, directories, names in os.walk(
+            root, followlinks=False, onerror=incomplete
+        ):
             if cancellation_requested():
                 raise RequestCancelled("Missing-media diagnosis cancelled.")
-            if state.timed_out or len(files) >= limits.max_files:
+            if state.timed_out() or len(files) >= limits.max_files:
                 break
             current_path = Path(current)
             depth = len(current_path.relative_to(root).parts)
             if depth >= limits.max_depth:
                 directories[:] = []
             for name in names:
+                if state.timed_out():
+                    break
+                if cancellation_requested():
+                    raise RequestCancelled("Missing-media diagnosis cancelled.")
                 candidate = current_path / name
                 try:
                     authorized = expand_path(str(candidate))
                 except ToolError:
                     continue
                 if authorized.is_file():
-                    files.append(authorized)
+                    files[authorized] = None
                     if len(files) >= limits.max_files:
                         break
-        if state.timed_out or len(files) >= limits.max_files:
+        if state.timed_out() or len(files) >= limits.max_files:
             break
-    return files
+    return list(files)
 
 
 def _candidate_id(candidate: Path) -> str:
@@ -186,13 +198,14 @@ def _hash_matches(
     limits: _SearchLimits,
     state: _SearchState,
 ) -> bool:
-    if not expected_hash or state.hashed_bytes >= limits.max_hash_bytes:
-        return False
-    cost = min(candidate.stat().st_size, 2 * 1024 * 1024)
-    if state.hashed_bytes + cost > limits.max_hash_bytes:
+    if not expected_hash or limits.max_hash_bytes == 0:
         return False
     digest = state.hash_cache.get(candidate)
     if digest is None:
+        cost = min(candidate.stat().st_size, 2 * 1024 * 1024)
+        if state.hashed_bytes + cost > limits.max_hash_bytes:
+            state.hash_incomplete = True
+            return False
         digest = shotcut_file_hash(candidate)
         state.hash_cache[candidate] = digest
         state.hashed_bytes += cost
@@ -257,15 +270,20 @@ def _rank_candidates(
     expected_hash = reference.get("shotcut_hash")
     candidates: list[MediaCandidate] = []
     for candidate in files:
-        if state.timed_out:
+        if state.timed_out():
             break
         basename_match = candidate.name.casefold() == expected_name
-        hash_match = _hash_matches(candidate, expected_hash, limits, state)
-        if not basename_match and not hash_match:
+        try:
+            hash_match = _hash_matches(candidate, expected_hash, limits, state)
+            if not basename_match and not hash_match:
+                continue
+            size = candidate.stat().st_size
+            media_summary, media_score = _probe_candidate(
+                candidate, reference, limits, state
+            )
+        except OSError:
+            state.hash_incomplete = True
             continue
-        media_summary, media_score = _probe_candidate(
-            candidate, reference, limits, state
-        )
         candidates.append(
             {
                 "candidate_id": _candidate_id(candidate),
@@ -273,7 +291,7 @@ def _rank_candidates(
                 "score": 100 if hash_match else 60 + media_score,
                 "match": "shotcut_hash" if hash_match else "basename",
                 "verified": hash_match,
-                "size_bytes": candidate.stat().st_size,
+                "size_bytes": size,
                 "media": media_summary,
             }
         )
@@ -290,11 +308,12 @@ def _visualize_candidates(
     if not isinstance(visual_output, str):
         raise ToolError("visual_output_path must be a string.")
     selected: dict[str, Path] = {}
-    for resource in resources:
-        for candidate in resource["candidates"]:
-            selected.setdefault(candidate["candidate_id"], Path(candidate["path"]))
-            if len(selected) >= 64:
-                break
+    for candidate in chain.from_iterable(
+        resource["candidates"] for resource in resources
+    ):
+        selected.setdefault(candidate["candidate_id"], Path(candidate["path"]))
+        if len(selected) >= 64:
+            break
     if not selected:
         return {"created": False, "error": "No candidates are available."}
     overwrite = arguments.get("overwrite_visual", False)
@@ -339,8 +358,19 @@ def diagnose_missing_resources(
     files = _discover_files(roots, limits, state)
     report_progress(1, progress_total, f"Examined {len(files)} candidate files.")
     results: list[MissingResourceCandidates] = []
+    replacements: dict[str, set[tuple[str, str] | None]] = {}
     for index, reference in enumerate(missing, start=1):
         candidates = _rank_candidates(reference, files, limits, state)
+        verified = [item for item in candidates if item["verified"]]
+        digest = reference["shotcut_hash"]
+        choice = (
+            (verified[0]["path"], digest)
+            if len(verified) == 1
+            and digest
+            and reference["property"] in {"resource", "warp_resource"}
+            else None
+        )
+        replacements.setdefault(reference["decoded_resource"], set()).add(choice)
         results.append(
             {
                 "reference_id": reference["reference_id"],
@@ -356,10 +386,30 @@ def diagnose_missing_resources(
             progress_total,
             f"Ranked candidates for missing resource {index} of {len(missing)}.",
         )
+    operations: list[dict[str, object]] = []
+    if (
+        not state.hash_incomplete
+        and not state.timed_out()
+        and len(files) < limits.max_files
+    ):
+        for old, choices in replacements.items():
+            if len(choices) == 1 and (replacement := next(iter(choices))) is not None:
+                new, expected_hash = replacement
+                operations.append(
+                    {
+                        "op": "relink_media",
+                        "from": old,
+                        "to": new,
+                        "expected_hash": expected_hash,
+                    }
+                )
+                if len(operations) == MAX_OPERATIONS:
+                    break
     visual = _visualize_candidates(results, arguments)
     report_progress(progress_total, progress_total, "Missing-media diagnosis complete.")
     return {
         "missing_count": len(missing),
+        "operations": operations,
         "resources": results,
         "search": {
             "roots": [str(root) for root in roots],
@@ -367,7 +417,7 @@ def diagnose_missing_resources(
             "files_limit_reached": len(files) >= limits.max_files,
             "hash_bytes_read": state.hashed_bytes,
             "media_probes": state.probe_count,
-            "timed_out": state.timed_out,
+            "timed_out": state.timed_out(),
         },
         "visual": visual,
     }

@@ -30,6 +30,7 @@ from .project_document import (
     BACKGROUND_ID,
     EDIT_OPERATION_CONTRACTS,
     MAIN_BIN_IDS,
+    MAX_OPERATIONS,
     SEQUENCE_TAGS,
     EditOperationContract,
     TrackRef,
@@ -92,8 +93,6 @@ SavedProject = TypedDict(
     },
 )
 
-
-MAX_OPERATIONS = 500
 
 __all__ = [
     "BACKGROUND_ID",
@@ -905,6 +904,7 @@ def diagnose_missing_media(arguments: dict[str, object]) -> dict[str, object]:
     return {
         "project_path": str(project_path),
         **diagnosis,
+        "expected_revision": snapshot["revision"],
         "commit_workflow": "Choose a candidate and call plan_project_edit/edit_project with relink_media and expected_revision.",
     }
 
