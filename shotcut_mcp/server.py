@@ -62,7 +62,7 @@ SERVER_INSTRUCTIONS = (
     "Creating: When asked to create a project, use create_project. Choose a descriptive "
     ".mlt filename in the supplied destination folder; ask for a destination only if "
     "none is available. Use discover_media for a source folder, then probe representative "
-    "files before choosing an unspecified profile.\n"
+    "files before choosing an unspecified profile. Use display_width and display_height for oriented footage.\n"
     "Creative decisions: Follow the user's brief and constraints. Make reasonable "
     "choices for pacing, cuts, transitions, framing, titles, and sound within that brief; "
     "briefly state material assumptions. Ask only when missing inputs or a decision "

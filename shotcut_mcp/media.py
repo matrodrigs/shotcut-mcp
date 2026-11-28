@@ -100,6 +100,9 @@ _MediaStreamSummaryFields = TypedDict(
     {
         "width": int | None,
         "height": int | None,
+        "display_width": int | None,
+        "display_height": int | None,
+        "rotation_degrees": float | None,
         "pixel_format": str | None,
         "pixel_bit_depth": int | None,
         "color_primaries": str | None,
@@ -415,6 +418,27 @@ def probe_media_raw(media_path: Path, *, timeout_seconds: int = 60) -> ProbePayl
     return payload
 
 
+def _display_geometry(
+    stream: dict[str, object],
+) -> tuple[float | None, int | None, int | None]:
+    tags = stream.get("tags")
+    rotation = _as_float(tags.get("rotate", 0)) if is_object(tags) else 0.0
+    side_data = stream.get("side_data_list")
+    if is_array(side_data):
+        for entry in side_data:
+            if is_object(entry) and entry.get("side_data_type") == "Display Matrix":
+                rotation = _as_float(entry.get("rotation"))
+                break
+    width = _probe_field(stream, "width", int)
+    height = _probe_field(stream, "height", int)
+    if not width or not height or rotation is None or rotation % 90:
+        return rotation, None, None
+    ratio = _fraction(str(stream.get("sample_aspect_ratio", "")).replace(":", "/"))
+    if ratio and ratio > 0 and math.isfinite(width * ratio):
+        width = max(1, round(width * ratio))
+    return (rotation, height, width) if rotation % 180 else (rotation, width, height)
+
+
 def summarize_media(media_path: Path, *, timeout_seconds: int = 60) -> MediaSummary:
     """Return the MCP-facing normalized summary for a media file."""
 
@@ -428,10 +452,14 @@ def summarize_media(media_path: Path, *, timeout_seconds: int = 60) -> MediaSumm
             "duration_seconds": _as_float(stream.get("duration")),
         }
         if _probe_field(stream, "codec_type", str) == "video":
+            rotation, display_width, display_height = _display_geometry(stream)
             item.update(
                 {
                     "width": _probe_field(stream, "width", int),
                     "height": _probe_field(stream, "height", int),
+                    "display_width": display_width,
+                    "display_height": display_height,
+                    "rotation_degrees": rotation,
                     "pixel_format": _probe_field(stream, "pix_fmt", str),
                     "pixel_bit_depth": _pixel_bit_depth(stream),
                     "color_primaries": _probe_field(stream, "color_primaries", str),
@@ -441,9 +469,7 @@ def summarize_media(media_path: Path, *, timeout_seconds: int = 60) -> MediaSumm
                     "dynamic_range": _dynamic_range(
                         _probe_field(stream, "color_transfer", str)
                     ),
-                    "frame_rate": _fraction(
-                        stream.get("avg_frame_rate") or stream.get("r_frame_rate")
-                    ),
+                    "frame_rate": _frame_rate(stream),
                 }
             )
         elif _probe_field(stream, "codec_type", str) == "audio":

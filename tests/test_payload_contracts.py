@@ -85,6 +85,42 @@ CANDIDATES = (
 
 
 class PayloadContractTests(unittest.TestCase):
+    def test_display_geometry_preserves_coded_dimensions_and_honors_rotation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "phone.mp4"
+            path.touch()
+            for angle, expected in (
+                (90, (90, 160)),
+                (-90, (90, 160)),
+                (180, (160, 90)),
+                (45, (None, None)),
+            ):
+                stream = {
+                    "codec_type": "video",
+                    "width": 160,
+                    "height": 90,
+                    "side_data_list": [
+                        {"side_data_type": "Display Matrix", "rotation": angle}
+                    ],
+                }
+                with (
+                    self.subTest(angle=angle),
+                    patch(
+                        "shotcut_mcp.media.probe_media_raw",
+                        return_value={"streams": [stream]},
+                    ),
+                ):
+                    item = summarize_media(path)["streams"][0]
+                    self.assertEqual(
+                        (item["display_width"], item["display_height"]), expected
+                    )
+                    self.assertEqual(
+                        (item["width"], item["height"], item["rotation_degrees"]),
+                        (160, 90, angle),
+                    )
+
     def test_probe_distinguishes_single_images_from_timed_streams(self) -> None:
         cases = (
             ("image2", "12/1", "0.083333", None, None),

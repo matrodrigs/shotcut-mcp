@@ -416,6 +416,11 @@ def discover_media(arguments: dict[str, object]) -> dict[str, object]:
                     "has_audio": audio is not None,
                     "width": video.get("width") if video else None,
                     "height": video.get("height") if video else None,
+                    "display_width": video.get("display_width") if video else None,
+                    "display_height": video.get("display_height") if video else None,
+                    "rotation_degrees": video.get("rotation_degrees")
+                    if video
+                    else None,
                     "frame_rate": video.get("frame_rate") if video else None,
                     "audio_channels": audio.get("channels") if audio else None,
                 }
