@@ -50,6 +50,7 @@ You can request adjustments in ordinary language. See the [editing workflow and 
 ## Features
 
 - **Edit the timeline:** work with tracks, clips, transitions, speed changes, titles, and subtitles; discover source media in a folder and apply up to 500 operations in one transaction.
+- **Preview a proposed cut:** compare the same frame before and after, or listen to a planned edit before saving. Ask for a pause-removal plan to hear the largest cut and review the full list.
 - **Review the result:** inspect source quality and color, preview proposed changes, and generate frames, contact sheets, or short clips with motion and audio before exporting.
 - **Render and deliver:** export a full project, frame range, or named marker; receive the media and the exact editable project used for that render.
 - **Keep work local:** use effects from your installed MLT build, with revision checks, validation, isolated backups, and atomic file replacement.

@@ -36,7 +36,7 @@
     ],
     "defaultPrompt": [
       "Check readiness and source quality; distinguish untested-version warnings from runtime failures and missing media.",
-      "Discover media in my folder and create a well-paced edit that fits my brief, then show a review with motion and sound.",
+      "Discover media, create an edit that fits my brief, and preview proposed changes or silence cuts with motion and sound.",
       "Export this project as H.264, monitor the render, and deliver the video and exact editable project."
     ]
   }

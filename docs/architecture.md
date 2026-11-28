@@ -27,9 +27,10 @@ The diagram follows runtime calls and worker launches. The import rules are:
 
 ```text
 server -> protocol, tools
-tools -> platform, project, protocol, render
-project -> missing_media, platform, project_document, project_snapshot, protocol, storage
-missing_media -> platform, protocol
+tools -> platform, project, protocol, render, silence
+silence -> platform, project, project_document, project_snapshot, storage
+project -> missing_media, platform, project_document, project_snapshot, protocol, render, storage
+missing_media -> platform, project_document, protocol
 project_document -> media, mlt_xml, protocol
 project_snapshot -> project_document, mlt_xml, path_policy
 render -> platform, project_snapshot, protocol, render_jobs, storage

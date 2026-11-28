@@ -133,6 +133,16 @@ py -3 scripts/shotcut_mcp_server.py --check
 
 On macOS or Linux, use `python3 scripts/shotcut_mcp_server.py --check`. The command prints JSON with the actual Python executable and version, detected media tools, runtime diagnostics, and active path policy. It exits without starting MCP: exit code `0` means `runtime_ready` is true; `1` means a runtime check failed. Untested versions with passing checks still return `0`. Use the reported Python executable when registering the server. Do not add `--check` to the client's MCP launch arguments.
 
+If the runtime passes but the client reports a closed connection, run the configured launch command after `--` with the same working directory and environment as the client. For example, from the repository on Windows:
+
+```powershell
+py -3 scripts/shotcut_mcp_server.py --check-client --cwd "C:/path/to/shotcut-mcp" -- python ./scripts/shotcut_mcp_server.py
+```
+
+Use `python3` on macOS/Linux. Substitute the client's actual executable and argument values. The check negotiates MCP and reads the tool catalog. Its JSON identifies the failing stage (`launch`, `initialize` or `tools/list`); exit code 0 means the client command connected. The command inherits this terminal's environment.
+
+The readiness check runs the version commands for Shotcut, Melt, FFprobe, and FFmpeg. If one fails, inspect its path and error in the JSON report.
+
 Ask your MCP client:
 
 > Run shotcut_status and shotcut_doctor. Report tool paths, versions, failed runtime checks, and active path policy.

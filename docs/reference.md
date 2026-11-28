@@ -33,6 +33,7 @@ Detailed capabilities, MCP tools, export presets, and runtime policy for client 
 | `inspect_project` | Inspect saved project state with revision-scoped item references and bounded track, interval, and page selection |
 | `diagnose_color_workflow` | Report normalized media color facts and supported HDR workflow constraints |
 | `diagnose_missing_media` | Search bounded roots by Shotcut hash/basename and optionally render a visual candidate sheet |
+| `plan_silence_cuts` | Measure pauses in the timeline mix and preview the proposed ripple cuts before applying them. |
 | `plan_project_edit` | Validate stable-reference operations and preview their snapshot/XML diff without changing the project |
 | `create_project` | Create a Shotcut-compatible multitrack MLT project |
 | `edit_project` | Apply up to 500 timeline operations using stable item references and aliases in one validated transaction, then summarize and visually review relevant changes |
@@ -71,7 +72,15 @@ Successful create and edit calls normally include the updated project; restores 
 
 Set `include_metadata: true` to probe the current page for compact duration, dimensions, frame rate, and audio facts. A failed or timed-out probe remains a per-file `probe_error` so other candidates stay usable. Traversal applies path policy, skips directory symlinks and junctions, and is bounded by 20,000 entries and 16 levels. Traversal and metadata probing share a 30-second budget. Narrow the folder when a scan limit is reached; use `probe_media` when you need complete stream details for a selected file.
 
+The video fields `width` and `height` are coded dimensions. Choose a new profile using `display_width` and `display_height`, which account for pixel aspect ratio and quarter-turn rotation. An unsupported rotation leaves display dimensions unknown. Both discovery metadata and full probes include `rotation_degrees`.
+
 ## Visual and audio review
+
+Pass `review: {"frame": 12}` to `plan_project_edit` to see the saved frame on the left and proposed frame on the right. For motion and sound, pass `review: {"in_frame": 0, "out_frame": 24}` for the candidate timeline. Both are managed per-project artifacts, replaced by the next plan of the same kind.
+
+Use `plan_silence_cuts` on an inspected revision to analyze up to ten minutes of the timeline mix. By default it considers pauses of at least two seconds below −60 dB and keeps 0.15 seconds at each edge. It skips fully silent windows and cuts crossing recognized transitions. Ripple operations affect unlocked tracks; locked tracks, markers, and subtitles keep their timeline positions. Background music can keep the mix above threshold. The result includes cuts in original timeline order, edit operations in reverse order and an audiovisual preview around the largest cut. Review it and pass the returned operations and revision to `edit_project`.
+
+For a moved media folder, `diagnose_missing_media` returns up to 500 ready-to-review relink operations with the saved revision. The bounded search must finish and each proposed path must have one verified match; ties and incomplete searches remain available as ranked candidates. Each proposed edit checks the replacement hash again before relinking.
 
 Use `render_preview` for one exact frame, `render_preview_batch` for several separate PNGs, and `render_contact_sheet` for one comparison image. Omit the output path on a single preview or contact sheet to use managed storage; small images can be displayed directly by the client.
 
